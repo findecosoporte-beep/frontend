@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="FINDECO">
+  <path fill="#F58220" d="M4 8c2 0 4 2 5 4l2 3-1 2-3-1-2-3C4.5 10.5 4 9 4 8z"/>
+  <path fill="#F58220" d="M9 6c1.5 1 2.5 3 2 5l-1 4 2 1 2-5c.5-2.5 0-5-2-6.5S10 5 9 6z"/>
+  <path fill="#0054A6" d="M28 8c-2 0-4 2-5 4l-2 3 1 2 3-1 2-3C27.5 10.5 28 9 28 8z"/>
+  <path fill="#0054A6" d="M23 6c-1.5 1-2.5 3-2 5l1 4-2 1-2-5c-.5-2.5 0-5 2-6.5S22 5 23 6z"/>
+  <ellipse cx="16" cy="22" rx="10" ry="1.2" fill="#4CAF50"/>
+</svg>
