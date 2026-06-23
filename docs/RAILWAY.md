@@ -76,6 +76,7 @@ Proyecto Railway
 | Error CORS en navegador | API sin el dominio del front | Actualiza `CORS_ALLOWED_ORIGINS` en la API |
 | 404 al recargar una ruta (`/clientes`) | Servidor sin fallback SPA | Verifica que `scripts/start.sh` use `serve -s` |
 | Build falla en Node | Versión antigua | `nixpacks.toml` fija Node 22 |
+| `EBUSY ... node_modules/.cache` | Conflicto caché Nixpacks + npm | Ya corregido en `scripts/build.sh` (`NPM_CONFIG_CACHE=/tmp/npm-cache`) |
 | Pantalla en blanco | Build con API URL incorrecta | Revisa logs de build y variable `VITE_API_BASE_URL` |
 
 ## Desarrollo local
