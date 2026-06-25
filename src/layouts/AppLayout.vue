@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Button from 'primevue/button'
@@ -13,6 +13,8 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const { rol, needsVinculo } = usePermissions()
+
+const sidebarOpen = ref(false)
 
 interface SidebarItem {
   label: string
@@ -122,9 +124,27 @@ function isActiveLeaf(item: SidebarItem): boolean {
   return Boolean(item.routeName && item.routeName === route.name)
 }
 
+async function onMenuClick(item: SidebarItem) {
+  if (!item.routeName || item.routeName === route.name) {
+    closeSidebar()
+    return
+  }
+  await router.push({ name: item.routeName })
+  closeSidebar()
+}
+
+function closeSidebar() {
+  sidebarOpen.value = false
+}
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+}
+
 watch(
   () => route.name,
   (name) => {
+    closeSidebar()
     for (const section of menuSections) {
       for (const item of section.items) {
         if (!item.children?.length) continue
@@ -138,10 +158,13 @@ watch(
   { immediate: true },
 )
 
-async function onMenuClick(item: SidebarItem) {
-  if (!item.routeName || item.routeName === route.name) return
-  await router.push({ name: item.routeName })
-}
+watch(sidebarOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : ''
+})
+
+onBeforeUnmount(() => {
+  document.body.style.overflow = ''
+})
 
 const rolLabel = computed(() => {
   const r = rol.value
@@ -164,15 +187,30 @@ async function onLogout() {
 
 <template>
   <div class="layout-root">
-    <aside class="sidebar">
+    <div
+      v-if="sidebarOpen"
+      class="sidebar-backdrop"
+      aria-hidden="true"
+      @click="closeSidebar"
+    />
+
+    <aside class="sidebar" :class="{ 'sidebar--open': sidebarOpen }">
       <div class="brand">
         <img
-          src="/findeco-logo.png"
+          src="/findeco-logo-transparent.png"
           alt="FINDECO"
           class="brand-logo"
           width="200"
           height="52"
         />
+        <button
+          type="button"
+          class="sidebar-close"
+          aria-label="Cerrar menú"
+          @click="closeSidebar"
+        >
+          <i class="pi pi-times" aria-hidden="true" />
+        </button>
       </div>
       <div class="side-menu">
         <section v-for="section in menuSections" :key="section.title" class="menu-section">
@@ -230,13 +268,33 @@ async function onLogout() {
     </aside>
     <div class="layout-main">
       <header class="topbar">
-        <div class="user-block">
-          <span class="user-name">{{
-            auth.profile?.nombre_operativo ?? auth.profile?.username ?? 'Usuario'
-          }}</span>
-          <Tag :value="rolLabel" severity="secondary" />
+        <div class="topbar-start">
+          <Button
+            type="button"
+            class="menu-toggle"
+            icon="pi pi-bars"
+            severity="secondary"
+            text
+            rounded
+            aria-label="Abrir menú"
+            @click="toggleSidebar"
+          />
+          <div class="user-block">
+            <span class="user-name">{{
+              auth.profile?.nombre_operativo ?? auth.profile?.username ?? 'Usuario'
+            }}</span>
+            <Tag :value="rolLabel" severity="secondary" class="user-role" />
+          </div>
         </div>
-        <Button label="Salir" icon="pi pi-sign-out" severity="secondary" outlined @click="onLogout" />
+        <Button
+          class="logout-btn"
+          label="Salir"
+          icon="pi pi-sign-out"
+          severity="secondary"
+          outlined
+          aria-label="Salir"
+          @click="onLogout"
+        />
       </header>
       <div class="layout-content">
         <Message v-if="needsVinculo" severity="warn" class="mb-3" :closable="false">
@@ -253,6 +311,11 @@ async function onLogout() {
 .layout-root {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 .sidebar {
@@ -260,12 +323,17 @@ async function onLogout() {
   flex-shrink: 0;
   border-right: 1px solid #dbe2f0;
   padding: 0.9rem 0.65rem;
+  padding-top: max(0.9rem, env(safe-area-inset-top));
+  padding-bottom: max(0.9rem, env(safe-area-inset-bottom));
   background: #edf1fa;
   color: #37456b;
   overflow: hidden;
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.25rem 0.35rem 0.75rem;
 }
 
@@ -277,10 +345,27 @@ async function onLogout() {
   object-position: left center;
 }
 
+.sidebar-close {
+  display: none;
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: none;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #34456f;
+  cursor: pointer;
+}
+
+.sidebar-close:hover {
+  background: #e3eaf9;
+}
+
 .side-menu {
-  height: calc(100vh - 5.5rem);
+  height: calc(100dvh - 5.5rem);
   overflow-y: auto;
   padding-right: 0.3rem;
+  -webkit-overflow-scrolling: touch;
 }
 
 .side-menu::-webkit-scrollbar {
@@ -316,7 +401,8 @@ async function onLogout() {
   border: none;
   background: transparent;
   color: #34456f;
-  padding: 0.52rem 0.58rem;
+  padding: 0.62rem 0.65rem;
+  min-height: 2.75rem;
   border-radius: 999px;
   display: flex;
   align-items: center;
@@ -396,16 +482,37 @@ async function onLogout() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
   padding: 0.75rem 1.25rem;
+  padding-top: max(0.75rem, env(safe-area-inset-top));
   border-bottom: 1px solid var(--p-content-border-color, rgba(255, 255, 255, 0.08));
+  background: #ffffff;
+}
+
+.topbar-start {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.menu-toggle {
+  display: none;
+  flex-shrink: 0;
+}
+
+.menu-toggle :deep(.p-button) {
+  width: 2.75rem;
+  height: 2.75rem;
 }
 
 .user-block {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .user-name {
@@ -413,10 +520,99 @@ async function onLogout() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 12rem;
+}
+
+.user-role :deep(.p-tag-label) {
+  white-space: nowrap;
 }
 
 .layout-content {
-  padding: 1.25rem;
+  padding: var(--page-padding, 1.25rem);
+  padding-bottom: max(var(--page-padding, 1.25rem), env(safe-area-inset-bottom));
   flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .user-name {
+    max-width: 9rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1090;
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1100;
+    width: min(18rem, 88vw);
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 8px 0 24px rgba(15, 23, 42, 0.12);
+  }
+
+  .sidebar--open {
+    transform: translateX(0);
+  }
+
+  .sidebar-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .brand-logo {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .menu-toggle {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .user-name {
+    max-width: 7.5rem;
+    font-size: 0.9rem;
+  }
+
+  .user-role {
+    font-size: 0.72rem;
+  }
+
+  .logout-btn :deep(.p-button-label) {
+    display: none;
+  }
+
+  .logout-btn :deep(.p-button) {
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 380px) {
+  .user-role {
+    display: none;
+  }
+
+  .user-name {
+    max-width: 10rem;
+  }
 }
 </style>

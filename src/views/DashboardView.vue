@@ -562,4 +562,52 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 767px) {
+  .title {
+    font-size: 1.2rem;
+  }
+
+  .subtitle {
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+  }
+
+  .chart-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-wrap {
+    height: 12rem;
+  }
+
+  .chart-wrap-sm {
+    height: 11rem;
+  }
+
+  .table-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .table-actions {
+    width: 100%;
+  }
+
+  .table-search {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .chart-metrics,
+  .chart-metrics--two {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-value {
+    font-size: 1.05rem;
+  }
+}
 </style>

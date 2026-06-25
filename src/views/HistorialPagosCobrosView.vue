@@ -602,6 +602,37 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+@media (max-width: 767px) {
+  .historial-toolbar,
+  .historial-sheet {
+    padding: 1rem;
+  }
+
+  .historial-titulo-pantalla {
+    font-size: 1.15rem;
+  }
+
+  .historial-filtros {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filtro-field,
+  .filtro-select,
+  .filtro-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .filtro-acciones {
+    width: 100%;
+  }
+
+  .filtro-acciones :deep(.p-button) {
+    flex: 1;
+  }
+}
+
 @media print {
   .no-print {
     display: none !important;

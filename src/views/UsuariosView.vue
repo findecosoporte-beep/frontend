@@ -429,4 +429,21 @@ onMounted(async () => {
   font-size: 0.8rem;
   opacity: 0.75;
 }
+
+@media (max-width: 767px) {
+  .search-row {
+    width: 100%;
+  }
+
+  .search-input,
+  .rol-filter {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .toolbar {
+    width: 100%;
+  }
+}
 </style>
