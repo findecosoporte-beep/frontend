@@ -9,6 +9,8 @@ import FloatLabel from 'primevue/floatlabel'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
+import MultiSelect from 'primevue/multiselect'
+import Password from 'primevue/password'
 import Select from 'primevue/select'
 import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
@@ -31,7 +33,17 @@ import type {
 } from '@/types/api'
 
 const toast = useToast()
-const { canWritePrestamos } = usePermissions()
+const { canWritePrestamos, canWriteClientes, canManageUsuarios } = usePermissions()
+
+const rolEtiquetaCorto: Record<string, string> = {
+  cobrador: 'Cobrador',
+  cobranza_adm_jud: 'Cobranza',
+  supervisor: 'Supervisor',
+  administrador: 'Admin',
+  asesor: 'Asesor',
+}
+
+const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
 
 /** Opciones del Select: `label` para mostrar nombre y DNI juntos */
 const clienteOptions = ref<Array<{ id_cliente: number; nombre: string; dni: string; label: string }>>([])
@@ -47,6 +59,12 @@ const diasCobroLabel = Object.fromEntries(
 ) as Record<DiaCobroCartera, string>
 
 const dialogVisible = ref(false)
+const nuevoClienteDialogVisible = ref(false)
+const nuevoAsesorDialogVisible = ref(false)
+const nuevoCobradorDialogVisible = ref(false)
+const savingNuevoCliente = ref(false)
+const savingNuevoAsesor = ref(false)
+const savingNuevoCobrador = ref(false)
 const saving = ref(false)
 const simulating = ref(false)
 const simulacion = ref<SimulacionPrestamo | null>(null)
@@ -86,7 +104,6 @@ const form = ref({
   estado: 'pendiente_aprobacion',
   forma_pago: 'mensual',
   forma_desembolso: 'efectivo',
-  comision: 0,
   fecha_entrega: '',
   id_cartera: null as number | null,
   id_zona: null as number | null,
@@ -95,13 +112,33 @@ const form = ref({
   ciclos: 0,
 })
 
+const nuevoClienteForm = ref({
+  nombre: '',
+  dni: '',
+  telefono: '',
+  direccion_residencia: '',
+  dia_cobro_semanal: 'lunes' as DiaCobroCartera,
+})
+
+const nuevoCobradorForm = ref({
+  nombre: '',
+  correo: '',
+  password: '',
+  carteras: [] as number[],
+})
+
+const nuevoAsesorForm = ref({
+  nombre: '',
+  correo: '',
+  password: '',
+})
+
 const currentSimulationSignature = computed(() =>
   JSON.stringify({
     monto: form.value.monto,
     plazo: form.value.plazo,
     tasa_interes: form.value.tasa_interes,
     forma_pago: form.value.forma_pago,
-    comision: form.value.comision,
   }),
 )
 
@@ -207,6 +244,31 @@ const cobradorOptions = computed(() =>
   ),
 )
 
+const cobradorCarteraMultiOptions = computed(() =>
+  carteraOptions.value.map((c) => ({
+    label: c.label,
+    value: c.id_cartera,
+  })),
+)
+
+function mapUsuarioOption(u: UsuarioRow) {
+  return {
+    id_usuario: u.id_usuario,
+    nombre: u.nombre,
+    rol: u.rol,
+    label: `${u.nombre} (${rolEtiquetaCorto[u.rol] ?? u.rol})`,
+  }
+}
+
+function registrarUsuarioEnLista(usuario: UsuarioRow) {
+  const opt = mapUsuarioOption(usuario)
+  if (!usuarioOptions.value.some((u) => u.id_usuario === usuario.id_usuario)) {
+    usuarioOptions.value = [...usuarioOptions.value, opt].sort((a, b) =>
+      a.nombre.localeCompare(b.nombre, 'es'),
+    )
+  }
+}
+
 function nombreUsuarioPorId(idUsuario: number | null): string {
   if (idUsuario == null) return ''
   const row = usuarioOptions.value.find((u) => u.id_usuario === idUsuario)
@@ -230,6 +292,247 @@ const zonaAsignadaNombre = computed(() => {
   return zonaOptions.value.find((z) => z.id_zona === idZ)?.nombre ?? ''
 })
 
+function mapClienteOption(r: Cliente) {
+  return {
+    id_cliente: r.id_cliente,
+    nombre: r.nombre,
+    dni: r.dni,
+    label: `${r.nombre} (${r.dni})`,
+  }
+}
+
+function registrarClienteEnListas(cliente: Cliente) {
+  const opt = mapClienteOption(cliente)
+  if (!clienteOptions.value.some((c) => c.id_cliente === cliente.id_cliente)) {
+    clienteOptions.value = [...clienteOptions.value, opt].sort((a, b) =>
+      a.nombre.localeCompare(b.nombre, 'es'),
+    )
+  }
+  clientesById.value = { ...clientesById.value, [cliente.id_cliente]: cliente }
+}
+
+function emptyToNull(s: string): string | null {
+  const t = s.trim()
+  return t === '' ? null : t
+}
+
+function resetNuevoClienteForm() {
+  nuevoClienteForm.value = {
+    nombre: '',
+    dni: '',
+    telefono: '',
+    direccion_residencia: '',
+    dia_cobro_semanal: 'lunes',
+  }
+}
+
+function abrirNuevoClienteModal() {
+  resetNuevoClienteForm()
+  nuevoClienteDialogVisible.value = true
+}
+
+async function guardarNuevoCliente() {
+  const nombre = nuevoClienteForm.value.nombre.trim()
+  const dni = nuevoClienteForm.value.dni.trim()
+  if (!nombre || !dni) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Datos incompletos',
+      detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!nuevoClienteForm.value.dia_cobro_semanal) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Datos incompletos',
+      detail: 'Selecciona el día de cobro semanal del cliente.',
+      life: 4500,
+    })
+    return
+  }
+
+  savingNuevoCliente.value = true
+  try {
+    const payload = {
+      nombre,
+      dni,
+      telefono: emptyToNull(nuevoClienteForm.value.telefono),
+      direccion_residencia: emptyToNull(nuevoClienteForm.value.direccion_residencia),
+      direccion_negocio: null,
+      referencia_parentesco: null,
+      referencia_telefono: null,
+      referencia: null,
+      actividad_economica: null,
+      dia_cobro_semanal: nuevoClienteForm.value.dia_cobro_semanal,
+    }
+    const { data } = await api.post<Cliente>('/clientes/', payload)
+    registrarClienteEnListas(data)
+    form.value.id_cliente = data.id_cliente
+    sincronizarCarteraDesdeCliente(data.id_cliente)
+    nuevoClienteDialogVisible.value = false
+    toast.add({
+      severity: 'success',
+      summary: 'Cliente registrado',
+      detail: `${data.nombre} quedó seleccionado para este préstamo.`,
+      life: 4000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo registrar',
+      detail: getApiErrorMessage(e),
+      life: 7000,
+    })
+  } finally {
+    savingNuevoCliente.value = false
+  }
+}
+
+function resetNuevoAsesorForm() {
+  nuevoAsesorForm.value = {
+    nombre: '',
+    correo: '',
+    password: '',
+  }
+}
+
+function abrirNuevoAsesorModal() {
+  resetNuevoAsesorForm()
+  nuevoAsesorDialogVisible.value = true
+}
+
+async function guardarNuevoAsesor() {
+  const nombre = nuevoAsesorForm.value.nombre.trim()
+  const correo = nuevoAsesorForm.value.correo.trim().toLowerCase()
+  const password = nuevoAsesorForm.value.password
+
+  if (!nombre || !correo) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Asesor',
+      detail: 'Nombre y correo son obligatorios.',
+      life: 4000,
+    })
+    return
+  }
+  if (password.length < 8) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Asesor',
+      detail: 'La contraseña debe tener al menos 8 caracteres.',
+      life: 4000,
+    })
+    return
+  }
+
+  savingNuevoAsesor.value = true
+  try {
+    const { data } = await api.post<UsuarioRow>('/usuarios/', {
+      nombre,
+      correo,
+      password,
+    })
+    registrarUsuarioEnLista(data)
+    form.value.id_asesor = data.id_usuario
+    nuevoAsesorDialogVisible.value = false
+    toast.add({
+      severity: 'success',
+      summary: 'Asesor registrado',
+      detail: `${data.nombre} quedó seleccionado para este préstamo.`,
+      life: 4000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo registrar',
+      detail: getApiErrorMessage(e),
+      life: 7000,
+    })
+  } finally {
+    savingNuevoAsesor.value = false
+  }
+}
+
+function resetNuevoCobradorForm() {
+  nuevoCobradorForm.value = {
+    nombre: '',
+    correo: '',
+    password: '',
+    carteras: form.value.id_cartera != null ? [form.value.id_cartera] : [],
+  }
+}
+
+function abrirNuevoCobradorModal() {
+  resetNuevoCobradorForm()
+  nuevoCobradorDialogVisible.value = true
+}
+
+async function guardarNuevoCobrador() {
+  const nombre = nuevoCobradorForm.value.nombre.trim()
+  const correo = nuevoCobradorForm.value.correo.trim().toLowerCase()
+  const password = nuevoCobradorForm.value.password
+  const carteras = nuevoCobradorForm.value.carteras
+
+  if (!nombre || !correo) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cobrador',
+      detail: 'Nombre y correo son obligatorios.',
+      life: 4000,
+    })
+    return
+  }
+  if (!carteras.length) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cobrador',
+      detail: 'Asigna al menos una cartera.',
+      life: 4000,
+    })
+    return
+  }
+  if (password.length < 8) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cobrador',
+      detail: 'La contraseña debe tener al menos 8 caracteres.',
+      life: 4000,
+    })
+    return
+  }
+
+  savingNuevoCobrador.value = true
+  try {
+    const { data } = await api.post<UsuarioRow>('/usuarios/', {
+      rol: 'cobrador',
+      nombre,
+      correo,
+      password,
+      carteras,
+    })
+    registrarUsuarioEnLista(data)
+    form.value.id_cobrador = data.id_usuario
+    nuevoCobradorDialogVisible.value = false
+    toast.add({
+      severity: 'success',
+      summary: 'Cobrador registrado',
+      detail: `${data.nombre} quedó seleccionado para este préstamo.`,
+      life: 4000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo registrar',
+      detail: getApiErrorMessage(e),
+      life: 7000,
+    })
+  } finally {
+    savingNuevoCobrador.value = false
+  }
+}
+
 async function loadOptions() {
   const [clientes, usuarios, zonas, carteras] = await Promise.all([
     fetchAllPages<Cliente>('/clientes/?page_size=100'),
@@ -237,14 +540,13 @@ async function loadOptions() {
     fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
   ])
-  clienteOptions.value = clientes.map((r) => ({
-    id_cliente: r.id_cliente,
-    nombre: r.nombre,
-    dni: r.dni,
-    label: `${r.nombre} (${r.dni})`,
-  }))
+  clienteOptions.value = clientes
+    .map(mapClienteOption)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
   clientesById.value = Object.fromEntries(clientes.map((r) => [r.id_cliente, r]))
-  usuarioOptions.value = usuarios.map((r) => ({ id_usuario: r.id_usuario, nombre: r.nombre, rol: r.rol }))
+  usuarioOptions.value = usuarios
+    .map(mapUsuarioOption)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
   zonaOptions.value = zonas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
   carteraOptions.value = carteras
     .slice()
@@ -274,7 +576,6 @@ function openCreate() {
     estado: 'pendiente_aprobacion',
     forma_pago: 'mensual',
     forma_desembolso: 'efectivo',
-    comision: 0,
     fecha_entrega: '',
     id_cartera: carteraOptions.value[0]?.id_cartera ?? null,
     id_zona: carteraOptions.value[0]?.id_zona ?? null,
@@ -310,13 +611,12 @@ function goToPreviousStep() {
 
 function buildSimulationPayload() {
   const tasaInteres = form.value.tasa_interes == null ? null : Number(form.value.tasa_interes.toFixed(2))
-  const comision = form.value.comision == null ? 0 : Number(form.value.comision.toFixed(2))
   return {
     monto: form.value.monto,
     plazo: form.value.plazo,
     tasa_interes: tasaInteres,
     forma_pago: form.value.forma_pago,
-    comision,
+    comision: 0,
   }
 }
 
@@ -427,7 +727,6 @@ function printCalculo() {
         <div class="grid">
           <div class="card"><strong>Cuota:</strong> ${escapeHtml(formatMoney(simulacion.value.cuota_periodica))}</div>
           <div class="card"><strong>Interés total:</strong> ${escapeHtml(formatMoney(simulacion.value.total_interes))}</div>
-          <div class="card"><strong>Comisión:</strong> ${escapeHtml(formatMoney(simulacion.value.comision_monto))}</div>
           <div class="card"><strong>Total a pagar:</strong> ${escapeHtml(formatMoney(simulacion.value.total_pagar))}</div>
         </div>
         <table>
@@ -459,7 +758,6 @@ function buildPayload() {
   const asesorNombre = nombreUsuarioPorId(form.value.id_asesor)
   const cobradorNombre = nombreUsuarioPorId(form.value.id_cobrador)
   const tasaInteres = form.value.tasa_interes == null ? null : Number(form.value.tasa_interes.toFixed(2))
-  const comision = form.value.comision == null ? 0 : Number(form.value.comision.toFixed(2))
   return {
     numero_prestamo: form.value.numero_prestamo.trim(),
     id_cliente: form.value.id_cliente,
@@ -470,7 +768,7 @@ function buildPayload() {
     estado: form.value.estado,
     forma_pago: form.value.forma_pago,
     forma_desembolso: form.value.forma_desembolso,
-    comision,
+    comision: 0,
     fecha_entrega: form.value.fecha_entrega,
     fecha_vencimiento: fechaVencimientoCalculada.value || null,
     id_cartera: form.value.id_cartera,
@@ -570,41 +868,107 @@ watch(
             <InputText id="p-num" v-model="form.numero_prestamo" fluid />
             <label for="p-num">Número préstamo</label>
           </FloatLabel>
-          <div class="full">
-            <label class="lbl">Cliente</label>
-            <Select
-              v-model="form.id_cliente"
-              :options="clienteOptions"
-              option-label="label"
-              option-value="id_cliente"
-              placeholder="Cliente"
-              :show-clear="false"
-              fluid
-            />
+          <div class="full cliente-select-wrap">
+            <label class="lbl" for="p-cliente">Cliente</label>
+            <div class="cliente-select-row">
+              <Select
+                id="p-cliente"
+                v-model="form.id_cliente"
+                :options="clienteOptions"
+                option-label="label"
+                option-value="id_cliente"
+                placeholder="Buscar cliente por nombre o DNI"
+                filter
+                filter-placeholder="Buscar..."
+                empty-filter-message="No hay clientes con ese criterio."
+                empty-message="No hay clientes registrados."
+                :show-clear="true"
+                fluid
+                class="cliente-select"
+              />
+              <Button
+                v-if="canWriteClientes"
+                type="button"
+                icon="pi pi-user-plus"
+                label="Nuevo"
+                severity="secondary"
+                outlined
+                class="cliente-add-btn"
+                aria-label="Registrar nuevo cliente"
+                @click="abrirNuevoClienteModal"
+              />
+            </div>
+            <small v-if="canWriteClientes" class="hint-text">
+              Si no aparece en la lista, regístralo con el botón «Nuevo».
+            </small>
           </div>
-          <div class="full">
-            <label class="lbl">Asesor</label>
-            <Select
-              v-model="form.id_asesor"
-              :options="asesorOptions"
-              option-label="nombre"
-              option-value="id_usuario"
-              placeholder="Asesor"
-              :show-clear="false"
-              fluid
-            />
+          <div class="full asesor-select-wrap">
+            <label class="lbl" for="p-asesor">Asesor</label>
+            <div class="cliente-select-row">
+              <Select
+                id="p-asesor"
+                v-model="form.id_asesor"
+                :options="asesorOptions"
+                option-label="label"
+                option-value="id_usuario"
+                placeholder="Buscar asesor por nombre"
+                filter
+                filter-placeholder="Buscar..."
+                empty-filter-message="No hay asesores con ese criterio."
+                empty-message="No hay asesores registrados."
+                :show-clear="true"
+                fluid
+                class="cliente-select"
+              />
+              <Button
+                v-if="canManageUsuarios"
+                type="button"
+                icon="pi pi-user-plus"
+                label="Nuevo"
+                severity="secondary"
+                outlined
+                class="cliente-add-btn"
+                aria-label="Registrar nuevo asesor"
+                @click="abrirNuevoAsesorModal"
+              />
+            </div>
+            <small v-if="canManageUsuarios" class="hint-text">
+              Si no aparece en la lista, regístralo con el botón «Nuevo».
+            </small>
           </div>
-          <div class="full">
-            <label class="lbl">Cobrador</label>
-            <Select
-              v-model="form.id_cobrador"
-              :options="cobradorOptions"
-              option-label="nombre"
-              option-value="id_usuario"
-              placeholder="Cobrador"
-              :show-clear="false"
-              fluid
-            />
+          <div class="full cobrador-select-wrap">
+            <label class="lbl" for="p-cobrador">Cobrador</label>
+            <div class="cliente-select-row">
+              <Select
+                id="p-cobrador"
+                v-model="form.id_cobrador"
+                :options="cobradorOptions"
+                option-label="label"
+                option-value="id_usuario"
+                placeholder="Buscar cobrador por nombre"
+                filter
+                filter-placeholder="Buscar..."
+                empty-filter-message="No hay cobradores con ese criterio."
+                empty-message="No hay cobradores registrados."
+                :show-clear="true"
+                fluid
+                class="cliente-select"
+              />
+              <Button
+                v-if="canManageUsuarios"
+                type="button"
+                icon="pi pi-user-plus"
+                label="Nuevo"
+                severity="secondary"
+                outlined
+                class="cliente-add-btn"
+                aria-label="Registrar nuevo cobrador"
+                @click="abrirNuevoCobradorModal"
+              />
+            </div>
+            <small v-if="canManageUsuarios" class="hint-text">
+              Si no aparece en la lista, regístralo con el botón «Nuevo».
+            </small>
           </div>
         </template>
 
@@ -659,10 +1023,6 @@ watch(
               option-value="value"
               fluid
             />
-          </div>
-          <div class="field-block">
-            <label class="lbl" for="p-com">Comisión</label>
-            <InputNumber id="p-com" v-model="form.comision" mode="decimal" :min-fraction-digits="2" fluid />
           </div>
         </template>
 
@@ -780,7 +1140,6 @@ watch(
               <div><strong>Tasa anual efectiva:</strong> {{ simulacion.tasa_anual.toFixed(2) }}%</div>
               <div><strong>Cuota:</strong> {{ formatMoney(simulacion.cuota_periodica) }}</div>
               <div><strong>Interés total:</strong> {{ formatMoney(simulacion.total_interes) }}</div>
-              <div><strong>Comisión:</strong> {{ formatMoney(simulacion.comision_monto) }}</div>
               <div><strong>Total a pagar:</strong> {{ formatMoney(simulacion.total_pagar) }}</div>
             </div>
             <DataTable
@@ -833,6 +1192,172 @@ watch(
           :loading="saving"
           :disabled="!canSave"
           @click="save"
+        />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="nuevoClienteDialogVisible"
+      header="Registrar cliente"
+      modal
+      :style="{ width: 'min(32rem, 95vw)' }"
+      append-to="body"
+    >
+      <form class="nuevo-cliente-form" @submit.prevent="guardarNuevoCliente">
+        <div class="nuevo-cliente-field">
+          <label for="np-cli-nombre">Nombre</label>
+          <InputText id="np-cli-nombre" v-model="nuevoClienteForm.nombre" fluid autocomplete="name" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cli-dni">DNI</label>
+          <InputText id="np-cli-dni" v-model="nuevoClienteForm.dni" fluid autocomplete="off" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cli-tel">Teléfono</label>
+          <InputText id="np-cli-tel" v-model="nuevoClienteForm.telefono" fluid type="tel" autocomplete="tel" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cli-dia">Día de cobro semanal</label>
+          <Select
+            id="np-cli-dia"
+            v-model="nuevoClienteForm.dia_cobro_semanal"
+            :options="diasCobroOptions"
+            option-label="label"
+            option-value="value"
+            fluid
+          />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cli-dir">Dirección residencia</label>
+          <InputText
+            id="np-cli-dir"
+            v-model="nuevoClienteForm.direccion_residencia"
+            fluid
+            autocomplete="street-address"
+          />
+        </div>
+      </form>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          text
+          :disabled="savingNuevoCliente"
+          @click="nuevoClienteDialogVisible = false"
+        />
+        <Button
+          label="Guardar cliente"
+          icon="pi pi-check"
+          :loading="savingNuevoCliente"
+          @click="guardarNuevoCliente"
+        />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="nuevoAsesorDialogVisible"
+      header="Registrar asesor"
+      modal
+      :style="{ width: 'min(32rem, 95vw)' }"
+      append-to="body"
+    >
+      <form class="nuevo-cliente-form" @submit.prevent="guardarNuevoAsesor">
+        <div class="nuevo-cliente-field">
+          <label for="np-ase-nombre">Nombre</label>
+          <InputText id="np-ase-nombre" v-model="nuevoAsesorForm.nombre" fluid autocomplete="name" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-ase-correo">Correo (usuario de acceso)</label>
+          <InputText id="np-ase-correo" v-model="nuevoAsesorForm.correo" fluid type="email" autocomplete="email" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-ase-pass">Contraseña</label>
+          <Password
+            id="np-ase-pass"
+            v-model="nuevoAsesorForm.password"
+            fluid
+            toggle-mask
+            :feedback="false"
+            :input-props="{ autocomplete: 'new-password' }"
+          />
+          <small class="hint-text">Mínimo 8 caracteres.</small>
+        </div>
+      </form>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          text
+          :disabled="savingNuevoAsesor"
+          @click="nuevoAsesorDialogVisible = false"
+        />
+        <Button
+          label="Guardar asesor"
+          icon="pi pi-check"
+          :loading="savingNuevoAsesor"
+          @click="guardarNuevoAsesor"
+        />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="nuevoCobradorDialogVisible"
+      header="Registrar cobrador"
+      modal
+      :style="{ width: 'min(32rem, 95vw)' }"
+      append-to="body"
+    >
+      <form class="nuevo-cliente-form" @submit.prevent="guardarNuevoCobrador">
+        <div class="nuevo-cliente-field">
+          <label for="np-cob-nombre">Nombre</label>
+          <InputText id="np-cob-nombre" v-model="nuevoCobradorForm.nombre" fluid autocomplete="name" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cob-correo">Correo (usuario de acceso)</label>
+          <InputText id="np-cob-correo" v-model="nuevoCobradorForm.correo" fluid type="email" autocomplete="email" />
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cob-pass">Contraseña</label>
+          <Password
+            id="np-cob-pass"
+            v-model="nuevoCobradorForm.password"
+            fluid
+            toggle-mask
+            :feedback="false"
+            :input-props="{ autocomplete: 'new-password' }"
+          />
+          <small class="hint-text">Mínimo 8 caracteres.</small>
+        </div>
+        <div class="nuevo-cliente-field">
+          <label for="np-cob-carteras">Carteras a cobrar</label>
+          <MultiSelect
+            id="np-cob-carteras"
+            v-model="nuevoCobradorForm.carteras"
+            :options="cobradorCarteraMultiOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="Selecciona una o más carteras"
+            display="chip"
+            fluid
+            filter
+            filter-placeholder="Buscar cartera..."
+          />
+          <small class="hint-text">Cada cartera solo puede tener un cobrador asignado.</small>
+        </div>
+      </form>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          text
+          :disabled="savingNuevoCobrador"
+          @click="nuevoCobradorDialogVisible = false"
+        />
+        <Button
+          label="Guardar cobrador"
+          icon="pi pi-check"
+          :loading="savingNuevoCobrador"
+          @click="guardarNuevoCobrador"
         />
       </template>
     </Dialog>
@@ -901,6 +1426,35 @@ watch(
   font-weight: 600;
   margin-bottom: 0.4rem;
   color: var(--p-text-color);
+}
+
+.cliente-select-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.cliente-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.cliente-add-btn {
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.nuevo-cliente-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.nuevo-cliente-field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 .field-block {
@@ -1035,6 +1589,14 @@ watch(
 @media (max-width: 520px) {
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cliente-select-row {
+    flex-direction: column;
+  }
+
+  .cliente-add-btn {
+    width: 100%;
   }
 }
 </style>
