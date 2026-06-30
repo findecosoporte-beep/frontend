@@ -3,6 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Dependencies (including devDependencies) are installed by Nixpacks install phase.
-# See nixpacks.toml [phases.install] for the install command.
+export NPM_CONFIG_CACHE="/tmp/npm-cache"
+
+# Dependencias instaladas en la fase install de nixpacks.toml (npm ci).
 npm run build

@@ -7,25 +7,24 @@ import ProgressSpinner from 'primevue/progressspinner'
 import { useToast } from 'primevue/usetoast'
 
 import { getApiErrorMessage } from '@/api/errors'
-import { fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import {
-  compartirPdfPorWhatsApp,
-  mensajeEstadoCuentaPdf,
-} from '@/utils/whatsappCliente'
+  compartirEstadoCuentaPdf,
+  descargarEstadoCuentaPdf,
+  fetchEstadoCuentaPdfBlob,
+} from '@/utils/estadoCuentaPdf'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
 const props = defineProps<{
-  idPrestamo: number | null
-  tituloCliente?: string
-  telefono?: string
-  numeroPrestamo?: string
+  prestamoId: number | null
+  telefono?: string | null
+  nombreCliente?: string
+  numeroPrestamo?: string | null
 }>()
 
 const toast = useToast()
-
 const loading = ref(false)
-const enviandoWhatsApp = ref(false)
+const sharing = ref(false)
 const error = ref('')
 const pdfUrl = ref<string | null>(null)
 const pdfBlob = ref<Blob | null>(null)
@@ -40,22 +39,12 @@ function revokeUrl() {
   pdfBlob.value = null
 }
 
-function nombreArchivoPdf(): string {
-  const slug = (props.numeroPrestamo || String(props.idPrestamo ?? 'prestamo')).replace(/\s+/g, '-')
-  return `estado-cuenta-${slug}.pdf`
-}
-
-function mensajeWhatsApp(): string {
-  return mensajeEstadoCuentaPdf(props.tituloCliente ?? 'Cliente', props.numeroPrestamo)
-}
-
-async function cargarPdf() {
-  if (props.idPrestamo == null) return
+async function cargarPdf(prestamoId: number) {
   loading.value = true
   error.value = ''
   revokeUrl()
   try {
-    const blob = await fetchEstadoCuentaPdfBlob(props.idPrestamo)
+    const blob = await fetchEstadoCuentaPdfBlob(prestamoId)
     pdfBlob.value = blob
     pdfUrl.value = URL.createObjectURL(blob)
   } catch (e) {
@@ -65,55 +54,55 @@ async function cargarPdf() {
   }
 }
 
-async function enviarPorWhatsApp() {
-  const telefono = (props.telefono ?? '').trim()
-  if (!telefono || !pdfBlob.value) return
-  enviandoWhatsApp.value = true
-  try {
-    const resultado = await compartirPdfPorWhatsApp({
-      telefono,
-      pdfBlob: pdfBlob.value,
-      nombreArchivo: nombreArchivoPdf(),
-      mensaje: mensajeWhatsApp(),
+async function compartir() {
+  if (!pdfBlob.value) return
+  const telefono = props.telefono?.trim()
+  if (!telefono) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Compartir',
+      detail: 'El cliente no tiene teléfono registrado.',
+      life: 4000,
     })
-    if (!resultado.ok) {
-      if (resultado.razon === 'telefono_invalido') {
-        toast.add({
-          severity: 'warn',
-          summary: 'WhatsApp',
-          detail: 'Teléfono inválido. Use 8 dígitos (Honduras).',
-          life: 5000,
-        })
-      }
-      return
-    }
-    if (resultado.metodo === 'whatsapp-descarga') {
+    return
+  }
+  sharing.value = true
+  try {
+    const result = await compartirEstadoCuentaPdf({
+      telefono,
+      nombreCliente: props.nombreCliente || 'Cliente',
+      numeroPrestamo: props.numeroPrestamo,
+      pdfBlob: pdfBlob.value,
+    })
+    if (result === 'failed') {
+      toast.add({
+        severity: 'warn',
+        summary: 'Compartir',
+        detail: 'No se pudo compartir. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
+        life: 5000,
+      })
+    } else if (result === 'whatsapp') {
       toast.add({
         severity: 'info',
         summary: 'WhatsApp',
-        detail: 'Se descargó el PDF y se abrió el chat. Adjunte el archivo al mensaje.',
+        detail: 'Se abrió WhatsApp y se descargó el PDF. Adjúntelo al chat con el cliente.',
         life: 6000,
       })
     }
   } finally {
-    enviandoWhatsApp.value = false
+    sharing.value = false
   }
 }
 
-function descargarPdf() {
-  if (!pdfBlob.value || props.idPrestamo == null) return
-  const url = URL.createObjectURL(pdfBlob.value)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = nombreArchivoPdf()
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 5000)
+function descargar() {
+  if (!pdfBlob.value) return
+  descargarEstadoCuentaPdf(pdfBlob.value, props.numeroPrestamo)
 }
 
 watch(
-  () => [visible.value, props.idPrestamo] as const,
-  ([abierto, idPrestamo]) => {
-    if (abierto && idPrestamo != null) void cargarPdf()
+  () => [visible.value, props.prestamoId] as const,
+  ([abierto, prestamoId]) => {
+    if (abierto && prestamoId != null) void cargarPdf(prestamoId)
     if (!abierto) {
       revokeUrl()
       error.value = ''
@@ -123,16 +112,13 @@ watch(
 
 onBeforeUnmount(() => revokeUrl())
 
-defineExpose({
-  cargarPdf,
-  enviarPorWhatsApp,
-})
+defineExpose({ cargarPdf, compartir })
 </script>
 
 <template>
   <Dialog
     v-model:visible="visible"
-    :header="tituloCliente ? `Estado financiero — ${tituloCliente}` : 'Estado financiero'"
+    :header="nombreCliente ? `Estado financiero — ${nombreCliente}` : 'Estado financiero'"
     modal
     :style="{ width: 'min(58rem, 96vw)' }"
     :content-style="{ padding: 0, overflow: 'hidden' }"
@@ -157,9 +143,9 @@ defineExpose({
         icon="pi pi-whatsapp"
         severity="success"
         outlined
-        :loading="enviandoWhatsApp"
-        :disabled="enviandoWhatsApp"
-        @click="enviarPorWhatsApp"
+        :loading="sharing"
+        :disabled="sharing"
+        @click="compartir"
       />
       <Button
         v-if="pdfUrl"
@@ -167,7 +153,7 @@ defineExpose({
         icon="pi pi-download"
         severity="secondary"
         outlined
-        @click="descargarPdf"
+        @click="descargar"
       />
       <Button label="Cerrar" severity="secondary" text @click="visible = false" />
     </template>

@@ -17,10 +17,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { formatMoney } from '@/utils/format'
-import { calculateFechaVencimiento } from '@/utils/prestamoFechas'
-import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import type {
-  Cartera,
   Cliente,
   DiaCobroCartera,
   Paginated,
@@ -38,13 +35,6 @@ const clienteOptions = ref<Array<{ id_cliente: number; nombre: string; dni: stri
 const clientesById = ref<Record<number, Cliente>>({})
 const usuarioOptions = ref<Array<{ id_usuario: number; nombre: string; rol: string }>>([])
 const zonaOptions = ref<Zona[]>([])
-const carteraOptions = ref<
-  Array<{ id_cartera: number; id_zona: number | null; dia_cobro: DiaCobroCartera; label: string }>
->([])
-
-const diasCobroLabel = Object.fromEntries(
-  DIAS_COBRO_CARTERA_OPTIONS.map((o) => [o.value, o.label]),
-) as Record<DiaCobroCartera, string>
 
 const dialogVisible = ref(false)
 const saving = ref(false)
@@ -88,7 +78,6 @@ const form = ref({
   forma_desembolso: 'efectivo',
   comision: 0,
   fecha_entrega: '',
-  id_cartera: null as number | null,
   id_zona: null as number | null,
   producto: '',
   dias_mora: 0,
@@ -110,28 +99,23 @@ const tasaPeriodoLabel = computed(() => {
 })
 
 const frecuenciaEfectoLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 1 semana por cuota (semanal).'
+  if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 7 días por cuota (semanal).'
   if (form.value.forma_pago === 'quincenal') return 'Efecto aplicado: 15 días por cuota (quincenal).'
   return 'Efecto aplicado: 1 mes por cuota (mensual).'
-})
-
-const frecuenciaPlazoResumen = computed(() => {
-  const plazo = Number(form.value.plazo || 0)
-  if (plazo <= 0) return ''
-  if (form.value.forma_pago === 'semanal') {
-    const semanas = plazo * 4
-    return `Semanas totales estimadas para el plazo actual: ${semanas} (${plazo} mes${plazo === 1 ? '' : 'es'} × 4 cuotas/mes).`
-  }
-  if (form.value.forma_pago === 'quincenal') {
-    return `Quincenas totales estimadas para el plazo actual: ${plazo * 2}.`
-  }
-  return `Meses del plazo: ${plazo}.`
 })
 
 const tasaConversionLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') return 'Tasa por periodo aplicada: tasa mensual / 4.'
   if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
   return 'Tasa por periodo aplicada: tasa mensual.'
+})
+
+const frecuenciaDiasTotales = computed(() => {
+  const plazo = Number(form.value.plazo || 0)
+  if (plazo <= 0) return 0
+  if (form.value.forma_pago === 'semanal') return plazo * 4 * 7
+  if (form.value.forma_pago === 'quincenal') return plazo * 2 * 15
+  return 0
 })
 
 const canSave = computed(() => {
@@ -143,7 +127,7 @@ const canSave = computed(() => {
     form.value.monto != null &&
     form.value.tasa_interes != null &&
     !!form.value.fecha_entrega &&
-    form.value.id_cartera != null
+    form.value.id_zona != null
 
   const hasCurrentSimulation =
     simulacion.value != null &&
@@ -165,7 +149,7 @@ const canGoNext = computed(() => {
     return form.value.monto != null && form.value.tasa_interes != null && form.value.plazo > 0
   }
   if (wizardStep.value === 3) {
-    return !!form.value.fecha_entrega && form.value.id_cartera != null
+    return !!form.value.fecha_entrega && form.value.id_zona != null
   }
   return false
 })
@@ -179,13 +163,8 @@ const wizardStepTitle = computed(() => {
 
 const fechaVencimientoCalculada = computed(() => {
   if (!form.value.fecha_entrega || form.value.plazo <= 0) return ''
-  const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
-  return calculateFechaVencimiento(
-    form.value.fecha_entrega,
-    form.value.plazo,
-    form.value.forma_pago,
-    cartera?.dia_cobro ?? null,
-  )
+  const base = new Date(`${form.value.fecha_entrega}T00:00:00`)
+  return toISODate(addPeriod(base, form.value.forma_pago, form.value.plazo))
 })
 
 const clienteCalculoDetalle = computed(() => {
@@ -198,13 +177,7 @@ const asesorOptions = computed(() =>
 )
 
 const cobradorOptions = computed(() =>
-  usuarioOptions.value.filter(
-    (u) =>
-      u.rol === 'cobrador' ||
-      u.rol === 'cobranza_adm_jud' ||
-      u.rol === 'supervisor' ||
-      u.rol === 'administrador',
-  ),
+  usuarioOptions.value.filter((u) => u.rol === 'cobranza_adm_jud' || u.rol === 'supervisor' || u.rol === 'administrador'),
 )
 
 function nombreUsuarioPorId(idUsuario: number | null): string {
@@ -224,18 +197,11 @@ async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   return items
 }
 
-const zonaAsignadaNombre = computed(() => {
-  const idZ = form.value.id_zona
-  if (idZ == null) return ''
-  return zonaOptions.value.find((z) => z.id_zona === idZ)?.nombre ?? ''
-})
-
 async function loadOptions() {
-  const [clientes, usuarios, zonas, carteras] = await Promise.all([
+  const [clientes, usuarios, zonas] = await Promise.all([
     fetchAllPages<Cliente>('/clientes/?page_size=100'),
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
     fetchAllPages<Zona>('/zonas/?page_size=100'),
-    fetchAllPages<Cartera>('/carteras/?page_size=100'),
   ])
   clienteOptions.value = clientes.map((r) => ({
     id_cliente: r.id_cliente,
@@ -246,15 +212,6 @@ async function loadOptions() {
   clientesById.value = Object.fromEntries(clientes.map((r) => [r.id_cliente, r]))
   usuarioOptions.value = usuarios.map((r) => ({ id_usuario: r.id_usuario, nombre: r.nombre, rol: r.rol }))
   zonaOptions.value = zonas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-  carteraOptions.value = carteras
-    .slice()
-    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-    .map((c) => ({
-      id_cartera: c.id_cartera,
-      id_zona: c.id_zona ?? null,
-      dia_cobro: c.dia_cobro,
-      label: `${c.nombre} — ${diasCobroLabel[c.dia_cobro] ?? c.dia_cobro}`,
-    }))
 }
 
 function openCreate() {
@@ -276,26 +233,13 @@ function openCreate() {
     forma_desembolso: 'efectivo',
     comision: 0,
     fecha_entrega: '',
-    id_cartera: carteraOptions.value[0]?.id_cartera ?? null,
-    id_zona: carteraOptions.value[0]?.id_zona ?? null,
+    id_zona: zonaOptions.value[0]?.id_zona ?? null,
     producto: '',
     dias_mora: 0,
     ciclos: 0,
   }
-  sincronizarCarteraDesdeCliente(form.value.id_cliente)
   wizardStep.value = 1
   dialogVisible.value = true
-}
-
-function sincronizarCarteraDesdeCliente(idCliente: number | null) {
-  if (idCliente == null) return
-  const cliente = clientesById.value[idCliente]
-  const dia = cliente?.dia_cobro_semanal
-  if (!dia) return
-  const cartera = carteraOptions.value.find((c) => c.dia_cobro === dia)
-  if (!cartera) return
-  form.value.id_cartera = cartera.id_cartera
-  form.value.id_zona = cartera.id_zona
 }
 
 function goToNextStep() {
@@ -327,23 +271,58 @@ watch(
   },
 )
 
-watch(
-  () => form.value.id_cliente,
-  (idCliente) => {
-    sincronizarCarteraDesdeCliente(idCliente)
-  },
-)
+function addPeriod(baseDate: Date, formaPago: string, period: number): Date {
+  const next = new Date(baseDate)
+  if (formaPago === 'semanal') {
+    next.setDate(next.getDate() + period * 7)
+    return next
+  }
+  if (formaPago === 'quincenal') {
+    next.setDate(next.getDate() + period * 15)
+    return next
+  }
+  next.setMonth(next.getMonth() + period)
+  return next
+}
+
+function toISODate(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+/** Alineado con `getDay()` de JS: 0 = domingo … 6 = sábado. */
+const DIA_SEMANA_A_JS_DOW: Record<DiaCobroCartera, number> = {
+  domingo: 0,
+  lunes: 1,
+  martes: 2,
+  miercoles: 3,
+  jueves: 4,
+  viernes: 5,
+  sabado: 6,
+}
+
+/** Primera fecha (hoy o en los próximos 7 días) que coincide con el día de ruta de la zona. */
+function proximaFechaEntregaParaDiaSemana(dia: DiaCobroCartera | null | undefined): string {
+  if (!dia || !(dia in DIA_SEMANA_A_JS_DOW)) return ''
+  const targetDow = DIA_SEMANA_A_JS_DOW[dia]
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  for (let i = 0; i < 8; i++) {
+    if (d.getDay() === targetDow) return toISODate(d)
+    d.setDate(d.getDate() + 1)
+  }
+  return ''
+}
 
 watch(
-  () => form.value.id_cartera,
-  (idCartera) => {
-    if (idCartera == null) {
-      form.value.id_zona = null
-      return
-    }
-    const c = carteraOptions.value.find((x) => x.id_cartera === idCartera)
-    if (!c) return
-    form.value.id_zona = c.id_zona
+  () => form.value.id_zona,
+  (idZona) => {
+    if (idZona == null) return
+    const z = zonaOptions.value.find((x) => x.id_zona === idZona)
+    const siguiente = proximaFechaEntregaParaDiaSemana(z?.dia_semana ?? null)
+    if (siguiente) form.value.fecha_entrega = siguiente
   },
 )
 
@@ -473,7 +452,6 @@ function buildPayload() {
     comision,
     fecha_entrega: form.value.fecha_entrega,
     fecha_vencimiento: fechaVencimientoCalculada.value || null,
-    id_cartera: form.value.id_cartera,
     id_zona: form.value.id_zona,
     asesor: asesorNombre || null,
     supervisor: cobradorNombre || null,
@@ -648,7 +626,9 @@ watch(
               </div>
             </div>
             <small class="hint-text">{{ frecuenciaEfectoLabel }}</small>
-            <small v-if="frecuenciaPlazoResumen" class="hint-text">{{ frecuenciaPlazoResumen }}</small>
+            <small v-if="frecuenciaDiasTotales > 0" class="hint-text">
+              Días totales estimados para el plazo actual: {{ frecuenciaDiasTotales }}.
+            </small>
           </div>
           <div class="full">
             <label class="lbl">Desembolso</label>
@@ -668,36 +648,25 @@ watch(
 
         <template v-if="wizardStep === 3">
           <div class="field-block full">
-            <label class="lbl" for="p-cartera">Cartera</label>
+            <label class="lbl" for="p-zona">Zona</label>
             <Select
-              id="p-cartera"
-              v-model="form.id_cartera"
-              :options="carteraOptions"
-              option-label="label"
-              option-value="id_cartera"
-              placeholder="Selecciona cartera de cobro"
+              id="p-zona"
+              v-model="form.id_zona"
+              :options="zonaOptions"
+              option-label="nombre"
+              option-value="id_zona"
+              placeholder="Selecciona zona"
               fluid
               :show-clear="false"
             />
-            <small class="hint-text">
-              El préstamo queda asignado a esta cartera. La zona territorial se toma de la cartera cuando está
-              vinculada.
-            </small>
+            <small class="hint-text">Comayagua, Siguatepeque o La Paz (catálogo en base de datos).</small>
           </div>
-          <div v-if="zonaAsignadaNombre" class="field-block full">
-            <label class="lbl" for="p-zona-asig">Zona asignada</label>
-            <InputText id="p-zona-asig" :model-value="zonaAsignadaNombre" readonly fluid />
-          </div>
-          <Message v-else-if="form.id_cartera" severity="warn" class="full" :closable="false">
-            Esta cartera no tiene zona vinculada. Asigna día y zona en catálogo de zonas para que aparezca en la hoja
-            de cobros por territorio.
-          </Message>
           <div class="field-block">
             <label class="lbl" for="p-fe">Fecha inicio del préstamo</label>
             <InputText id="p-fe" v-model="form.fecha_entrega" type="date" fluid />
             <small class="hint-text">
-              Puedes desembolsar cualquier día. Las cuotas se programan siempre en el día de cobro de la cartera
-              (por ejemplo lunes en Comayagua, martes en Las Lajas).
+              Si la zona tiene día de ruta asignado, esta fecha se ajusta al próximo día coincidente (puedes
+              cambiarla manualmente).
             </small>
           </div>
           <div class="field-block">

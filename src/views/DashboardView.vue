@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
+import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Chart from 'primevue/chart'
 import Column from 'primevue/column'
@@ -11,42 +12,29 @@ import ProgressSpinner from 'primevue/progressspinner'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
-import type { DashboardPrestamoFila, DashboardResumen, DashboardTotales } from '@/types/api'
+import type { HistorialPrestamo, Paginated } from '@/types/api'
 import { formatMoney } from '@/utils/format'
 
-const ESTADO_LABELS: Record<string, string> = {
-  activo: 'Activo',
-  pendiente_aprobacion: 'Pendiente',
-  pagado: 'Pagado',
-  mora: 'Mora',
-  cancelado: 'Cancelado',
+interface DashboardStats {
+  clientes: number
+  prestamos: number
+  pagos: number
+  historial: number
+  usuarios: number
 }
 
 const loading = ref(true)
 const error = ref('')
-const stats = ref<DashboardTotales>({
+const stats = ref<DashboardStats>({
   clientes: 0,
   prestamos: 0,
   pagos: 0,
   historial: 0,
   usuarios: 0,
 })
-const prestamoRows = ref<DashboardPrestamoFila[]>([])
+const historialRows = ref<HistorialPrestamo[]>([])
 const historialSearch = ref('')
 let controller: AbortController | null = null
-
-const registrosMensuales = ref({
-  labels: [] as string[],
-  prestamos: [] as number[],
-  pagos: [] as number[],
-})
-const prestamosPorEstado = ref({ labels: [] as string[], valores: [] as number[] })
-const actividadSemanal = ref({ labels: [] as string[], cobros: [] as number[] })
-const tendenciaMensual = ref({
-  labels: [] as string[],
-  monto_cobrado: [] as number[],
-  monto_desembolsado: [] as number[],
-})
 
 const totalGeneral = computed(
   () =>
@@ -56,92 +44,97 @@ const totalGeneral = computed(
     stats.value.historial +
     stats.value.usuarios,
 )
-
-const prestamosFiltered = computed(() => {
+const historialFiltered = computed(() => {
   const term = historialSearch.value.trim().toLowerCase()
-  if (!term) return prestamoRows.value
+  if (!term) return historialRows.value
 
-  return prestamoRows.value.filter((item) => {
+  return historialRows.value.filter((item) => {
     const numero = item.numero_prestamo?.toLowerCase() ?? ''
-    const cliente = (item.cliente_nombre ?? String(item.id_cliente)).toLowerCase()
+    const cliente = String(item.id_cliente)
     const producto = item.producto?.toLowerCase() ?? ''
-    const estado = (item.estado ?? '').toLowerCase()
-    return (
-      numero.includes(term) ||
-      cliente.includes(term) ||
-      producto.includes(term) ||
-      estado.includes(term)
-    )
+    return numero.includes(term) || cliente.includes(term) || producto.includes(term)
   })
 })
 
 const salesBarsData = computed(() => ({
-  labels: registrosMensuales.value.labels,
+  labels: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'],
   datasets: [
     {
-      label: 'Préstamos',
+      label: 'Rendimiento',
       borderRadius: 6,
       backgroundColor: '#3b82f6',
-      data: registrosMensuales.value.prestamos,
-    },
-    {
-      label: 'Cobros',
-      borderRadius: 6,
-      backgroundColor: '#22c55e',
-      data: registrosMensuales.value.pagos,
+      data: [42, 67, 31, 59, 23, 62, 71, 48, 27, 64, 39, 53],
     },
   ],
 }))
 
 const inventoryData = computed(() => ({
-  labels: prestamosPorEstado.value.labels,
+  labels: ['500', '400', '300', '200', '100'],
   datasets: [
     {
-      label: 'Préstamos',
-      data: prestamosPorEstado.value.valores,
+      label: 'Estado del stock',
+      data: [180, 190, 130, 170, 120],
       backgroundColor: '#3b82f6',
+      borderRadius: 5,
+    },
+    {
+      label: 'Rotación',
+      data: [160, 170, 150, 140, 180],
+      backgroundColor: '#f97316',
+      borderRadius: 5,
+    },
+    {
+      label: 'Productos pedidos',
+      data: [120, 90, 180, 100, 60],
+      backgroundColor: '#eab308',
       borderRadius: 5,
     },
   ],
 }))
 
-const campaignHeatmapData = computed(() => ({
-  labels: actividadSemanal.value.labels,
-  datasets: [
-    {
-      label: 'Cobros',
-      data: actividadSemanal.value.cobros,
-      borderRadius: 4,
-      backgroundColor: actividadSemanal.value.cobros.map((value) => {
-        if (value > 10) return '#2563eb'
-        if (value > 5) return '#3b82f6'
-        if (value > 0) return '#60a5fa'
-        return '#bfdbfe'
-      }),
-    },
-  ],
-}))
+const campaignHeatmapData = computed(() => {
+  const labels = ['Jun 30', 'Jul 07', 'Jul 14', 'Jul 21', 'Jul 28', 'Ago 04', 'Ago 11', 'Ago 18']
+  const tiers = [220, 380, 610, 870, 1090, 1320, 760, 940]
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Intensidad',
+        data: tiers,
+        borderRadius: 4,
+        backgroundColor: labels.map((_, index) => {
+          const value = tiers[index] ?? 0
+          if (value > 1000) return '#2563eb'
+          if (value > 800) return '#3b82f6'
+          if (value > 500) return '#60a5fa'
+          return '#bfdbfe'
+        }),
+      },
+    ],
+  }
+})
 
 const emailTrendData = computed(() => ({
-  labels: tendenciaMensual.value.labels,
+  labels: ['2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023'],
   datasets: [
     {
-      label: 'Monto cobrado',
-      data: tendenciaMensual.value.monto_cobrado,
+      label: 'Tasa de clics',
+      data: [120, 320, 510, 430, 410, 300, 290, 110],
       borderColor: '#f59e0b',
       backgroundColor: 'rgba(245, 158, 11, 0.18)',
       tension: 0.45,
       fill: true,
-      pointRadius: 2,
+      pointRadius: 0,
     },
     {
-      label: 'Monto desembolsado',
-      data: tendenciaMensual.value.monto_desembolsado,
+      label: 'Tasa de apertura',
+      data: [40, 260, 350, 500, 420, 350, 390, 120],
       borderColor: '#3b82f6',
       backgroundColor: 'rgba(59, 130, 246, 0.12)',
       tension: 0.45,
       fill: true,
-      pointRadius: 2,
+      pointRadius: 0,
     },
   ],
 }))
@@ -149,15 +142,11 @@ const emailTrendData = computed(() => ({
 const verticalBarsOptions = {
   maintainAspectRatio: false,
   plugins: {
-    legend: { position: 'top' as const, align: 'end' as const },
+    legend: { display: false },
   },
   scales: {
     x: { grid: { display: false } },
-    y: {
-      grid: { color: 'rgba(148, 163, 184, 0.22)' },
-      beginAtZero: true,
-      ticks: { precision: 0 },
-    },
+    y: { grid: { color: 'rgba(148, 163, 184, 0.22)' }, beginAtZero: true },
   },
 }
 
@@ -165,15 +154,16 @@ const stackedHorizontalOptions = {
   maintainAspectRatio: false,
   indexAxis: 'y' as const,
   plugins: {
-    legend: { display: false },
+    legend: { position: 'top' as const, align: 'start' as const },
   },
   scales: {
     x: {
+      stacked: true,
       grid: { color: 'rgba(148, 163, 184, 0.22)' },
       beginAtZero: true,
-      ticks: { precision: 0 },
     },
     y: {
+      stacked: true,
       grid: { display: false },
     },
   },
@@ -209,11 +199,6 @@ const lineOptions = {
   },
 }
 
-function etiquetaEstado(estado: string | undefined): string {
-  if (!estado) return '—'
-  return ESTADO_LABELS[estado] ?? estado
-}
-
 async function load() {
   controller?.abort()
   const activeController = new AbortController()
@@ -223,24 +208,53 @@ async function load() {
   error.value = ''
 
   try {
-    const { data } = await api.get<DashboardResumen>('/dashboard/', {
-      signal: activeController.signal,
+    const results = await Promise.allSettled([
+      api.get<Paginated<unknown>>('/clientes/?page=1&page_size=1', { signal: activeController.signal }),
+      api.get<Paginated<unknown>>('/prestamos/?page=1&page_size=1', { signal: activeController.signal }),
+      api.get<Paginated<unknown>>('/pagos/?page=1&page_size=1', { signal: activeController.signal }),
+      api.get<Paginated<HistorialPrestamo>>('/historial-prestamos/?page=1&page_size=7', {
+        signal: activeController.signal,
+      }),
+      api.get<Paginated<unknown>>('/usuarios/?page=1&page_size=1', { signal: activeController.signal }),
+    ])
+
+    if (controller !== activeController) return
+
+    const nextStats: DashboardStats = { ...stats.value }
+    const statKeys: Array<keyof DashboardStats> = [
+      'clientes',
+      'prestamos',
+      'pagos',
+      'historial',
+      'usuarios',
+    ]
+
+    let failedRequests = 0
+    results.forEach((result, index) => {
+      const statKey = statKeys[index]
+      if (!statKey) return
+
+      if (result.status === 'fulfilled') {
+        nextStats[statKey] = result.value.data.count
+        if (statKey === 'historial') {
+          historialRows.value = (result.value.data as Paginated<HistorialPrestamo>).results
+        }
+        return
+      }
+      failedRequests++
     })
 
-    if (controller !== activeController) return
+    stats.value = nextStats
 
-    stats.value = data.totales
-    registrosMensuales.value = data.registros_mensuales
-    prestamosPorEstado.value = data.prestamos_por_estado
-    actividadSemanal.value = data.actividad_semanal
-    tendenciaMensual.value = data.tendencia_mensual
-
-    const filas =
-      data.historial_prestamos.length > 0 ? data.historial_prestamos : data.ultimos_prestamos
-    prestamoRows.value = filas
+    if (failedRequests > 0) {
+      error.value =
+        failedRequests === statKeys.length
+          ? 'No se pudieron cargar los totales.'
+          : 'Algunos totales no se pudieron cargar.'
+    }
   } catch (e) {
     if (controller !== activeController) return
-    error.value = getApiErrorMessage(e, 'No se pudo cargar el panel.')
+    error.value = getApiErrorMessage(e, 'No se pudieron cargar los totales.')
   } finally {
     if (controller === activeController) {
       loading.value = false
@@ -257,7 +271,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="dash" :aria-busy="loading">
     <h1 class="title">Resumen</h1>
-    <p class="subtitle">Panel de control con datos en tiempo real del sistema FINDECO.</p>
+    <p class="subtitle">Panel de control.</p>
 
     <div v-if="loading" class="loading">
       <ProgressSpinner style="width: 2.5rem; height: 2.5rem" stroke-width="4" />
@@ -287,7 +301,6 @@ onBeforeUnmount(() => {
                 <span class="metric-value">{{ stats.pagos }}</span>
               </div>
             </div>
-            <p class="chart-hint">Préstamos desembolsados y cobros registrados por mes (año actual).</p>
             <div class="chart-wrap">
               <Chart type="bar" :data="salesBarsData" :options="verticalBarsOptions" />
             </div>
@@ -297,7 +310,7 @@ onBeforeUnmount(() => {
         <Card class="chart-card">
           <template #title>Gestión por categorías</template>
           <template #content>
-            <div class="chart-metrics chart-metrics--two">
+            <div class="chart-metrics">
               <div class="metric-item">
                 <span class="metric-label">Historial</span>
                 <span class="metric-value">{{ stats.historial }}</span>
@@ -307,7 +320,6 @@ onBeforeUnmount(() => {
                 <span class="metric-value">{{ stats.usuarios }}</span>
               </div>
             </div>
-            <p class="chart-hint">Préstamos agrupados por estado operativo.</p>
             <div class="chart-wrap">
               <Chart type="bar" :data="inventoryData" :options="stackedHorizontalOptions" />
             </div>
@@ -317,7 +329,6 @@ onBeforeUnmount(() => {
         <Card class="chart-card">
           <template #title>Intensidad de actividad semanal</template>
           <template #content>
-            <p class="chart-hint">Cantidad de cobros registrados por día de la semana.</p>
             <div class="chart-wrap chart-wrap-sm">
               <Chart type="bar" :data="campaignHeatmapData" :options="heatmapOptions" />
             </div>
@@ -327,7 +338,6 @@ onBeforeUnmount(() => {
         <Card class="chart-card">
           <template #title>Tendencia de interacciones</template>
           <template #content>
-            <p class="chart-hint">Montos cobrados vs desembolsados en los últimos 8 meses.</p>
             <div class="chart-wrap chart-wrap-sm">
               <Chart type="line" :data="emailTrendData" :options="lineOptions" />
             </div>
@@ -339,63 +349,45 @@ onBeforeUnmount(() => {
         <template #title>Historial de préstamos</template>
         <template #content>
           <div class="table-head">
-            <p class="table-subtitle">
-              {{
-                stats.historial > 0
-                  ? 'Registros del historial operativo.'
-                  : 'Préstamos registrados en el sistema (tabla historial vacía).'
-              }}
-            </p>
+            <p class="table-subtitle">Últimos registros cargados desde la API.</p>
             <div class="table-actions">
               <InputText v-model="historialSearch" placeholder="Buscar..." class="table-search" />
+              <Button label="Filtrar" icon="pi pi-filter" severity="info" outlined />
+              <Button label="Exportar" icon="pi pi-download" severity="secondary" />
             </div>
           </div>
 
           <DataTable
-            :value="prestamosFiltered"
+            :value="historialFiltered"
             paginator
-            :rows="10"
-            :rows-per-page-options="[10, 20, 50]"
+            :rows="7"
+            :rows-per-page-options="[7, 10, 20]"
             responsive-layout="scroll"
             size="small"
-            :data-key="stats.historial > 0 ? 'id_historial' : 'id_prestamo'"
+            data-key="id_historial"
             class="history-table"
-            empty-message="No hay préstamos para mostrar."
           >
-            <Column field="numero_prestamo" header="N.º préstamo" />
-            <Column header="Cliente">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ data.cliente_nombre?.trim() || `#${data.id_cliente}` }}
-              </template>
-            </Column>
-            <Column header="Producto">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ data.producto?.trim() || '—' }}
-              </template>
-            </Column>
-            <Column v-if="stats.historial === 0" header="Estado">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ etiquetaEstado(data.estado) }}
-              </template>
+            <Column field="numero_prestamo" header="Identificación" />
+            <Column field="id_cliente" header="Cliente" />
+            <Column field="producto" header="Producto">
+              <template #body="{ data }">{{ data.producto || '-' }}</template>
             </Column>
             <Column header="Monto">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ formatMoney(data.monto) }}
-              </template>
+              <template #body="{ data }">{{ formatMoney(data.monto) }}</template>
             </Column>
             <Column header="Interés">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ formatMoney(data.interes) }}
-              </template>
+              <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
             </Column>
             <Column header="Saldo">
-              <template #body="{ data }: { data: DashboardPrestamoFila }">
-                {{ formatMoney(data.saldo ?? 0) }}
-              </template>
+              <template #body="{ data }">{{ formatMoney(data.saldo ?? 0) }}</template>
             </Column>
           </DataTable>
         </template>
       </Card>
+
+      <div class="actions">
+        <button class="retry-btn" type="button" @click="load">Actualizar panel</button>
+      </div>
     </div>
   </div>
 </template>
@@ -416,6 +408,10 @@ onBeforeUnmount(() => {
   margin: 0 0 1.25rem;
   opacity: 0.85;
   font-size: 0.9rem;
+}
+
+.subtitle code {
+  font-size: 0.85em;
 }
 
 .loading {
@@ -463,11 +459,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
-  margin-bottom: 0.35rem;
-}
-
-.chart-metrics--two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 0.5rem;
 }
 
 .metric-item {
@@ -485,12 +477,6 @@ onBeforeUnmount(() => {
   font-size: 1.2rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-}
-
-.chart-hint {
-  margin: 0 0 0.5rem;
-  font-size: 0.75rem;
-  color: #64748b;
 }
 
 .chart-wrap {
@@ -557,9 +543,15 @@ onBeforeUnmount(() => {
   background: #f3f4f6;
 }
 
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @media (max-width: 980px) {
   .chart-grid {
     grid-template-columns: 1fr;
   }
 }
+
 </style>

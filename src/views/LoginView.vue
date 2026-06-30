@@ -38,16 +38,7 @@ async function onSubmit() {
   <div class="login-page">
     <Card class="login-card">
       <template #title>
-        <div class="login-brand">
-          <img
-            src="/findeco-logo.png"
-            alt="FINDECO — Servicios Financieros Inmediatos"
-            class="login-logo"
-            width="280"
-            height="120"
-          />
-          <span class="login-title">Iniciar sesión</span>
-        </div>
+        <span class="login-title">Iniciar sesión</span>
       </template>
       <template #content>
         <form class="form-stack" @submit.prevent="onSubmit">
@@ -100,21 +91,6 @@ async function onSubmit() {
 .login-card {
   width: 100%;
   max-width: 28rem;
-}
-
-.login-brand {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-  text-align: center;
-}
-
-.login-logo {
-  display: block;
-  width: min(100%, 17.5rem);
-  height: auto;
-  object-fit: contain;
 }
 
 .login-title {

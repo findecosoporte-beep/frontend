@@ -7,12 +7,7 @@ export interface Paginated<T> {
   results: T[]
 }
 
-export type RolOperativo =
-  | 'administrador'
-  | 'asesor'
-  | 'supervisor'
-  | 'cobrador'
-  | 'cobranza_adm_jud'
+export type RolOperativo = 'administrador' | 'asesor' | 'supervisor' | 'cobranza_adm_jud'
 
 export interface MeProfile {
   username: string
@@ -21,13 +16,6 @@ export interface MeProfile {
   rol: RolOperativo | null
   nombre_operativo: string | null
   id_usuario?: number | null
-  carteras?: CarteraAsignada[]
-}
-
-export interface CarteraAsignada {
-  id_cartera: number
-  nombre: string
-  dia_cobro: DiaCobroCartera
 }
 
 export interface Cliente {
@@ -43,8 +31,6 @@ export interface Cliente {
   actividad_economica: string | null
   /** Día de la semana preferido para cobro/visita (mismas claves que zona/cartera). */
   dia_cobro_semanal: DiaCobroCartera | null
-  /** Cantidad de préstamos vinculados (solo en listado API). */
-  total_prestamos?: number
 }
 
 export interface UsuarioRow {
@@ -52,8 +38,43 @@ export interface UsuarioRow {
   nombre: string
   rol: RolOperativo
   correo: string | null
-  carteras?: number[]
-  carteras_detalle?: CarteraAsignada[]
+}
+
+/** Celda de la hoja semanal GET /pagos/hoja-semanal-cuotas/ */
+export interface HojaSemanalCuotaCelda {
+  id_cuota: number
+  numero_cuota: number
+  fecha_programada: string
+  capital_programado: string
+  interes_programado: string
+  total_programado: string
+  saldo_capital_programado: string
+  estado_cuota: string
+  pagado: boolean
+  fecha_pago: string | null
+  id_pago: number | null
+}
+
+export interface HojaSemanalColumna {
+  fecha_cuota: string
+  titulo: string
+}
+
+export interface HojaSemanalFila {
+  id_prestamo: number
+  numero_prestamo: string
+  id_cliente: number | null
+  nombre_cliente: string
+  dni_cliente: string
+  id_zona: number | null
+  nombre_zona: string
+  estado_prestamo: string
+  cuotas: Record<string, HojaSemanalCuotaCelda | null>
+}
+
+export interface HojaSemanalCuotasResponse {
+  columnas: HojaSemanalColumna[]
+  filas: HojaSemanalFila[]
 }
 
 /** Valores alineados con `Cartera.DIA_COBRO_CHOICES` y `Zona.dia_semana` en el API. */
@@ -87,9 +108,7 @@ export interface Prestamo {
   numero_prestamo: string
   sucursal: string | null
   id_zona?: number | null
-  id_cartera?: number | null
   zona?: Zona | null
-  cartera?: Cartera | null
   ciclos: number
   supervisor: string | null
   asesor: string | null
@@ -119,10 +138,8 @@ export interface ReporteIntegracionFila {
   fecha_entrega: string
   fecha_vencimiento: string
   dias_mora: number
-  /** Capital + intereses totales del plan (compromiso inicial). */
   saldo_inicial: string
   cuota: string
-  /** Capital + intereses aún no pagados. */
   saldo_actual: string
   ciclos: number
   asesor: string
@@ -137,14 +154,6 @@ export interface ReporteIntegracionFila {
   cuota_siguiente_capital?: string | null
   cuota_siguiente_interes?: string | null
   cuota_siguiente_saldo_capital?: string | null
-  /** Cuotas no pagadas cuya fecha programada ya venció (respecto a hoy). */
-  cuotas_atrasadas?: number
-  cuotas_atrasadas_numeros?: string | null
-  telefono?: string | null
-  id_cartera?: number | null
-  cartera_nombre?: string
-  cartera_dia_cobro?: DiaCobroCartera | ''
-  cliente_dia_cobro_semanal?: DiaCobroCartera | ''
 }
 
 export interface ReporteIntegracionResumen {
@@ -153,26 +162,12 @@ export interface ReporteIntegracionResumen {
   total_cuotas_plazo: number
   total_saldo_inicial: string
   total_saldo_actual: string
-  total_cuota: string
 }
 
 export interface ReporteIntegracionResponse {
   fecha_reporte: string
   filas: ReporteIntegracionFila[]
   resumen: ReporteIntegracionResumen
-  /** Presente cuando la respuesta está paginada (sin ``all=1``). */
-  count?: number
-  page?: number
-  next?: string | null
-  previous?: string | null
-}
-
-export interface PagoDistribucionLinea {
-  cuota: number
-  capital: string
-  interes: string
-  mora: string
-  total: string
 }
 
 export interface Pago {
@@ -184,39 +179,6 @@ export interface Pago {
   interes: string | number
   mora: string | number
   saldo: string | number
-  /** Presente cuando el cobro se repartió en varias cuotas (pago de más). */
-  distribucion?: PagoDistribucionLinea[]
-}
-
-export interface HistorialPagosCobrosFila {
-  id_pago: number
-  fecha_pago: string
-  documento: string | null
-  capital: string
-  interes: string
-  mora: string
-  total: string
-  id_prestamo: number | null
-  numero_prestamo: string
-  nombre_cliente: string
-  dni_cliente: string
-  cartera_nombre: string
-}
-
-export interface HistorialPagosCobrosResumen {
-  registros: number
-  total_capital: string
-  total_interes: string
-  total_mora: string
-  total_cobrado: string
-}
-
-export interface HistorialPagosCobrosResponse {
-  modo: 'dia' | 'mes' | 'anio' | string
-  fecha_inicio: string
-  fecha_fin: string
-  filas: HistorialPagosCobrosFila[]
-  resumen: HistorialPagosCobrosResumen
 }
 
 /** Fila del plan persistido GET /prestamo-cuotas/ */
@@ -256,52 +218,6 @@ export interface HistorialPrestamo {
   plazo: number | null
   tasa: string | number | null
   saldo: string | number | null
-}
-
-export interface DashboardTotales {
-  clientes: number
-  prestamos: number
-  pagos: number
-  historial: number
-  usuarios: number
-}
-
-export interface DashboardPrestamoFila {
-  id_prestamo?: number
-  id_historial?: number
-  numero_prestamo: string
-  id_cliente: number
-  cliente_nombre?: string
-  producto: string | null
-  estado?: string
-  monto: string | number
-  interes: string | number
-  saldo: string | number | null
-  fecha_entrega?: string | null
-}
-
-export interface DashboardResumen {
-  totales: DashboardTotales
-  registros_mensuales: {
-    labels: string[]
-    prestamos: number[]
-    pagos: number[]
-  }
-  prestamos_por_estado: {
-    labels: string[]
-    valores: number[]
-  }
-  actividad_semanal: {
-    labels: string[]
-    cobros: number[]
-  }
-  tendencia_mensual: {
-    labels: string[]
-    monto_cobrado: number[]
-    monto_desembolsado: number[]
-  }
-  ultimos_prestamos: DashboardPrestamoFila[]
-  historial_prestamos: DashboardPrestamoFila[]
 }
 
 export interface AmortizacionItem {

@@ -14,11 +14,7 @@ import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback } from '@/utils/facturaPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
-import { fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
-import {
-  compartirPdfPorWhatsApp,
-  mensajeEstadoCuentaPdf,
-} from '@/utils/whatsappCliente'
+import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
 
 const toast = useToast()
@@ -121,34 +117,31 @@ async function compartirEstadoFinanciero() {
   pdfCompartiendo.value = true
   try {
     const blob = await fetchEstadoCuentaPdfBlob(idPrestamo)
-    const resultado = await compartirPdfPorWhatsApp({
+    const result = await compartirEstadoCuentaPdf({
       telefono,
+      nombreCliente: campos.value.cliente || 'Cliente',
+      numeroPrestamo: campos.value.n || null,
       pdfBlob: blob,
-      nombreArchivo: `estado-cuenta-${(campos.value.n || String(idPrestamo)).replace(/\s+/g, '-')}.pdf`,
-      mensaje: mensajeEstadoCuentaPdf(campos.value.cliente || 'Cliente', campos.value.n),
     })
 
-    if (resultado.ok) {
-      if (resultado.metodo === 'whatsapp-descarga') {
+    if (result === 'shared' || result === 'whatsapp') {
+      if (result === 'whatsapp') {
         toast.add({
           severity: 'info',
           summary: 'WhatsApp',
-          detail: 'Se descargó el PDF y se abrió el chat. Adjunte el archivo al mensaje.',
+          detail: 'Se abrió WhatsApp y se descargó el PDF. Adjúntelo al chat con el cliente.',
           life: 6000,
         })
       }
       return
     }
 
-    if (resultado.razon === 'telefono_invalido') {
-      toast.add({
-        severity: 'warn',
-        summary: 'WhatsApp',
-        detail: 'Teléfono inválido. Se abrirá la vista previa del PDF.',
-        life: 5000,
-      })
-    }
-
+    toast.add({
+      severity: 'warn',
+      summary: 'WhatsApp',
+      detail: 'Teléfono inválido. Se abrirá la vista previa del PDF.',
+      life: 5000,
+    })
     pdfEstadoCuentaVisible.value = true
   } catch (e) {
     toast.add({
@@ -553,30 +546,29 @@ onMounted(() => {
               v-else
               :value="cuotasPendientes"
               data-key="numero_cuota"
-              class="tabla-plan tabla-ec-fin"
+              class="tabla-plan"
               size="small"
-              striped-rows
               :loading="loadingPlan"
             >
-              <Column field="numero_cuota" header="N" :style="{ width: '12%' }" />
-              <Column header="FECHA:" :style="{ width: '22%' }">
+              <Column field="numero_cuota" header="N" />
+              <Column header="FECHA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatDate(data.fecha_programada) }}
                 </template>
               </Column>
-              <Column header="CUOTA" :style="{ width: '22%' }">
+              <Column header="CUOTA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.total_programado) }}
                 </template>
               </Column>
-              <Column header="SALDO" :style="{ width: '22%' }">
+              <Column header="SALDO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.saldo_capital_programado) }}
                 </template>
               </Column>
-              <Column header="ESTADO" :style="{ width: '22%' }">
+              <Column header="ESTADO">
                 <template #body>
-                  <Tag severity="warn" value="Pendiente" />
+                  <span class="estado-cuota-texto">Pendiente</span>
                 </template>
               </Column>
             </DataTable>
@@ -589,28 +581,27 @@ onMounted(() => {
               v-else
               :value="cuotasPagadas"
               data-key="numero_cuota"
-              class="tabla-plan tabla-ec-fin"
+              class="tabla-plan"
               size="small"
-              striped-rows
               :loading="loadingPlan"
             >
-              <Column field="numero_cuota" header="N" :style="{ width: '10%' }" />
-              <Column header="FECHA PAGO:" :style="{ width: '18%' }">
+              <Column field="numero_cuota" header="N" />
+              <Column header="FECHA PAGO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
                 </template>
               </Column>
-              <Column header="CUOTA" :style="{ width: '18%' }">
+              <Column header="CUOTA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.total_programado) }}
                 </template>
               </Column>
-              <Column header="DOCUMENTO" :style="{ width: '22%' }">
+              <Column header="DOCUMENTO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.documento || `Cuota ${data.numero_cuota}` }}
                 </template>
               </Column>
-              <Column header="FACTURA" :style="{ width: '18%' }">
+              <Column header="FACTURA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   <Button
                     v-if="data.id_pago"
@@ -697,10 +688,10 @@ onMounted(() => {
 
   <EstadoCuentaPdfDialog
     v-model:visible="pdfEstadoCuentaVisible"
-    :id-prestamo="idPrestamoActivo"
-    :titulo-cliente="campos.cliente || undefined"
-    :telefono="campos.telefono || undefined"
-    :numero-prestamo="campos.n || undefined"
+    :prestamo-id="idPrestamoActivo"
+    :telefono="campos.telefono"
+    :nombre-cliente="campos.cliente || 'Cliente'"
+    :numero-prestamo="campos.n || null"
   />
 </template>
 
@@ -895,7 +886,61 @@ onMounted(() => {
   margin-top: 1.25rem;
 }
 
-.tabla-plan,
+.tabla-plan {
+  width: 100%;
+  display: block;
+}
+
+.tabla-plan :deep(.p-datatable) {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tabla-plan :deep(.p-datatable-table-container),
+.tabla-plan :deep(.p-datatable-table) {
+  width: 100%;
+}
+
+.tabla-plan :deep(.p-datatable-table) {
+  table-layout: fixed;
+}
+
+.tabla-plan :deep(.p-datatable-thead > tr > th) {
+  background: #fff;
+  color: #0f172a;
+  border-color: #e2e8f0;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.55rem 0.65rem;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr > td) {
+  background: #fff;
+  color: #334155;
+  border-color: #e2e8f0;
+  text-align: center;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.88rem;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr:hover > td) {
+  background: #fff;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr.p-row-odd > td),
+.tabla-plan :deep(.p-datatable-tbody > tr.p-row-even > td) {
+  background: #fff;
+}
+
+.estado-cuota-texto {
+  color: #334155;
+  font-size: 0.88rem;
+}
+
 .tabla-abonos {
   width: 100%;
 }

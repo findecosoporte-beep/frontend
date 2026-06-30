@@ -74,18 +74,7 @@ const menuSections: SidebarSection[] = [
           },
         ],
       },
-      {
-        label: 'Cobros',
-        icon: 'pi pi-money-bill',
-        children: [
-          { label: 'Cobros', icon: 'pi pi-wallet', routeName: 'cobros' },
-          {
-            label: 'Historial de pagos',
-            icon: 'pi pi-history',
-            routeName: 'historial-pagos-cobros',
-          },
-        ],
-      },
+      { label: 'Cobros', icon: 'pi pi-money-bill', routeName: 'cobros' },
       { label: 'Usuarios', icon: 'pi pi-id-card', routeName: 'usuarios' },
     ],
   },
@@ -150,7 +139,6 @@ const rolLabel = computed(() => {
     administrador: 'Administrador',
     supervisor: 'Supervisor',
     asesor: 'Asesor',
-    cobrador: 'Cobrador por cartera',
     cobranza_adm_jud: 'Cobranza administrativa / judicial (según mora)',
   }
   return map[r] ?? r
@@ -165,15 +153,7 @@ async function onLogout() {
 <template>
   <div class="layout-root">
     <aside class="sidebar">
-      <div class="brand">
-        <img
-          src="/findeco-logo.png"
-          alt="FINDECO"
-          class="brand-logo"
-          width="200"
-          height="52"
-        />
-      </div>
+      <div class="brand">Préstamos</div>
       <div class="side-menu">
         <section v-for="section in menuSections" :key="section.title" class="menu-section">
           <p class="section-title">{{ section.title }}</p>
@@ -266,19 +246,14 @@ async function onLogout() {
 }
 
 .brand {
-  padding: 0.25rem 0.35rem 0.75rem;
-}
-
-.brand-logo {
-  display: block;
-  width: 100%;
-  max-height: 3.25rem;
-  object-fit: contain;
-  object-position: left center;
+  font-weight: 700;
+  font-size: 1.05rem;
+  padding: 0.4rem 0.6rem 0.8rem;
+  letter-spacing: 0.02em;
 }
 
 .side-menu {
-  height: calc(100vh - 5.5rem);
+  height: calc(100vh - 4.5rem);
   overflow-y: auto;
   padding-right: 0.3rem;
 }

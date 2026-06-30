@@ -13,7 +13,7 @@ export function usePermissions() {
     ['administrador', 'supervisor'].includes(rol.value ?? ''),
   )
   const canWritePagos = computed(() =>
-    ['administrador', 'supervisor', 'asesor', 'cobrador', 'cobranza_adm_jud'].includes(rol.value ?? ''),
+    ['administrador', 'supervisor', 'asesor', 'cobranza_adm_jud'].includes(rol.value ?? ''),
   )
   const canWriteServicios = computed(() =>
     ['administrador', 'supervisor'].includes(rol.value ?? ''),
@@ -23,10 +23,6 @@ export function usePermissions() {
   )
 
   const canConfigureRutaCobranza = computed(() =>
-    ['administrador', 'supervisor'].includes(rol.value ?? ''),
-  )
-
-  const canManageUsuarios = computed(() =>
     ['administrador', 'supervisor'].includes(rol.value ?? ''),
   )
 
@@ -41,6 +37,5 @@ export function usePermissions() {
     canWriteServicios,
     canWriteCobranza,
     canConfigureRutaCobranza,
-    canManageUsuarios,
   }
 }
