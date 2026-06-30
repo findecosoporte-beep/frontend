@@ -83,8 +83,6 @@ const hojaCobrosEstadoFiltro = ref<
 const hojaCobrosLoading = ref(false)
 const hojaCobrosCargada = ref(false)
 const HOJA_COBROS_PAGE_SIZE = 10
-const prestamosCatalogoCargado = ref(false)
-let prestamosCargaPromise: Promise<void> | null = null
 const hojaCobrosPage = ref(1)
 const hojaCobrosPageSize = ref(HOJA_COBROS_PAGE_SIZE)
 const hojaCobrosTotal = ref(0)
@@ -329,6 +327,20 @@ function formatNumeroHoja(value: string | number | null | undefined): string {
   return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
 }
 
+function cuotasAtrasadasDesdePlan(
+  cuotas: PrestamoCuotaRow[],
+  paid: Set<number>,
+  hoyIso = getTodayISO(),
+): { count: number; numeros: string } {
+  const nums = cuotas
+    .filter((row) => !paid.has(row.numero_cuota) && row.fecha_programada < hoyIso)
+    .map((row) => row.numero_cuota)
+  return {
+    count: nums.length,
+    numeros: nums.join(', '),
+  }
+}
+
 function textoCuotasAtrasadas(fila: ReporteIntegracionFila): string {
   const n = fila.cuotas_atrasadas ?? 0
   if (n <= 0) return ''
@@ -483,31 +495,11 @@ function onHojaCobrosPage(e: { first: number; rows: number }) {
 
 watch([hojaCobrosCarteraFiltro, hojaCobrosEstadoFiltro], () => {
   hojaCobrosPage.value = 1
-  if (hojaCobrosCarteraFiltro.value === '' || hojaCobrosCarteraFiltro.value == null) {
-    hojaCobrosFilas.value = []
-    hojaCobrosTotal.value = 0
-    hojaCobrosResumen.value = null
-    hojaCobrosCargada.value = false
-    return
-  }
   void cargarHojaCobrosFindeco({ silentEmpty: true })
 })
 
-function aplicarCarteraPorDefectoHoja() {
-  if (hojaCarteras.value.length === 0) return
-  if (hojaCobrosCarteraFiltro.value === '' || hojaCobrosCarteraFiltro.value == null) {
-    hojaCobrosCarteraFiltro.value = hojaCarteras.value[0]!.id_cartera
-  }
-}
-
 async function cargarCatalogoCarterasHoja() {
   try {
-    if (esCobrador.value && auth.profile?.carteras?.length) {
-      hojaCarteras.value = [...auth.profile.carteras]
-        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-      aplicarCarteraPorDefectoHoja()
-      return
-    }
     const todos: Cartera[] = []
     let nextUrl: string | null = '/carteras/?page_size=100'
     while (nextUrl) {
@@ -516,8 +508,18 @@ async function cargarCatalogoCarterasHoja() {
       todos.push(...pg.results)
       nextUrl = pg.next
     }
+    const asignadas = auth.profile?.carteras ?? []
+    if (esCobrador.value && asignadas.length > 0) {
+      const ids = new Set(asignadas.map((c) => c.id_cartera))
+      hojaCarteras.value = todos
+        .filter((c) => ids.has(c.id_cartera))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+      if (hojaCarteras.value.length === 1) {
+        hojaCobrosCarteraFiltro.value = hojaCarteras.value[0].id_cartera
+      }
+      return
+    }
     hojaCarteras.value = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-    aplicarCarteraPorDefectoHoja()
   } catch {
     hojaCarteras.value = []
   }
@@ -910,7 +912,6 @@ async function buscarCliente() {
   proximaCuotaSemanalMensaje.value = ''
   proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
   try {
-    await ensurePrestamosCargados()
     let cliente = clienteMeta.value.find((c) => c.dni === q)
     if (!cliente) {
       cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
@@ -1217,7 +1218,6 @@ async function loadPrestamos() {
     fetchAllPages<Cliente>('/clientes/?page_size=200'),
     fetchAllPages<{ id_usuario: number; nombre: string }>('/usuarios/?page_size=200'),
   ])
-  prestamosCatalogoCargado.value = true
   const clientesById = new Map(
     clientes.map((cliente) => [cliente.id_cliente, cliente] as const),
   )
@@ -1258,16 +1258,6 @@ async function loadPrestamos() {
       label: `${prestamo.numero_prestamo} (#${prestamo.id_prestamo}) - ${nombre} [DNI: ${dni}]`,
     }
   })
-}
-
-async function ensurePrestamosCargados() {
-  if (prestamosCatalogoCargado.value) return
-  if (!prestamosCargaPromise) {
-    prestamosCargaPromise = loadPrestamos().finally(() => {
-      prestamosCargaPromise = null
-    })
-  }
-  await prestamosCargaPromise
 }
 
 function resetClienteForm() {
@@ -1554,11 +1544,17 @@ onMounted(async () => {
   await cargarCatalogoCarterasHoja()
   resetClienteForm()
   resetPrestamoForm()
+  try {
+    await loadPrestamos()
+  } catch (e) {
+    toast.add({ severity: 'warn', summary: 'Préstamos', detail: getApiErrorMessage(e), life: 5000 })
+  }
+
+  await cargarHojaCobrosFindeco()
 
   await consumirDeepLinkIntegracionEnQuery()
 
   if (route.query.fromPrestamo === '1' && canWritePagos.value) {
-    await ensurePrestamosCargados()
     openCreateFromQuery()
     const cleanedQuery = { ...route.query }
     delete cleanedQuery.fromPrestamo
@@ -1615,11 +1611,6 @@ onMounted(async () => {
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
         </span>
       </div>
-
-      <p v-if="hojaCobrosCarteraFiltro === ''" class="hoja-sin-cartera-hint no-print">
-        Selecciona una cartera para cargar los cobros pendientes, o elige «Todas las carteras» y pulsa
-        <strong>Actualizar hoja</strong>.
-      </p>
 
       <article v-if="hojaCobrosCargada || hojaCobrosLoading" class="hoja-findeco-sheet">
         <header class="hoja-findeco-header">
@@ -2816,16 +2807,6 @@ onMounted(async () => {
   font-size: 0.85rem;
   color: #64748b;
   margin-left: auto;
-}
-
-.hoja-sin-cartera-hint {
-  margin: 0 0 0.75rem;
-  padding: 0.65rem 0.85rem;
-  border: 1px dashed #cbd5e1;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 0.88rem;
 }
 
 .hoja-findeco-estado {

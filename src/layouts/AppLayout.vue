@@ -74,7 +74,18 @@ const menuSections: SidebarSection[] = [
           },
         ],
       },
-      { label: 'Cobros', icon: 'pi pi-money-bill', routeName: 'cobros' },
+      {
+        label: 'Cobros',
+        icon: 'pi pi-money-bill',
+        children: [
+          { label: 'Cobros', icon: 'pi pi-wallet', routeName: 'cobros' },
+          {
+            label: 'Historial de pagos',
+            icon: 'pi pi-history',
+            routeName: 'historial-pagos-cobros',
+          },
+        ],
+      },
       { label: 'Usuarios', icon: 'pi pi-id-card', routeName: 'usuarios' },
     ],
   },
