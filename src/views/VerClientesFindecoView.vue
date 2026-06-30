@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import Button from 'primevue/button'
 import Column from 'primevue/column'
@@ -25,9 +25,13 @@ const { canWriteClientes } = usePermissions()
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
 
 const rows = ref<Cliente[]>([])
-const PAGE_SIZE_FETCH = 100
+const pageSize = ref(10)
+const page = ref(1)
+const total = ref(0)
 const loading = ref(false)
 const error = ref('')
+
+const first = computed(() => (page.value - 1) * pageSize.value)
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
@@ -48,6 +52,17 @@ const editForm = ref({
 function etiquetaDiaCobro(v: DiaCobroCartera | null): string {
   if (!v) return '—'
   return diasCobroOptions.find((o) => o.value === v)?.label ?? v
+}
+
+function totalPrestamosCliente(data: Cliente): number {
+  const n = data.total_prestamos
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0
+}
+
+function etiquetaPrestamos(data: Cliente): string {
+  const n = totalPrestamosCliente(data)
+  if (n <= 0) return '—'
+  return n === 1 ? '1 préstamo' : `${n} préstamos`
 }
 
 function textoCampo(data: Cliente, key: keyof Cliente): string {
@@ -147,28 +162,18 @@ async function guardarEdicion() {
   }
 }
 
-async function loadAll() {
+async function load() {
   loading.value = true
   error.value = ''
-  rows.value = []
   try {
-    const allRows: Cliente[] = []
-    let page = 1
-    let total = Number.POSITIVE_INFINITY
-
-    while (allRows.length < total) {
-      const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(PAGE_SIZE_FETCH),
-      })
-      const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
-      total = data.count
-      allRows.push(...data.results)
-      if (data.results.length === 0) break
-      page += 1
-    }
-
-    rows.value = allRows
+    const params = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+    })
+    const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
+    total.value = data.count
+    rows.value = data.results.slice(0, pageSize.value)
+    if (typeof data.page === 'number') page.value = data.page
   } catch (e) {
     error.value = getApiErrorMessage(e)
   } finally {
@@ -176,8 +181,15 @@ async function loadAll() {
   }
 }
 
+function onPage(e: { first: number; rows: number }) {
+  if (loading.value) return
+  pageSize.value = 10
+  page.value = Math.floor(e.first / pageSize.value) + 1
+  void load()
+}
+
 onMounted(() => {
-  void loadAll()
+  void load()
 })
 </script>
 
@@ -185,78 +197,107 @@ onMounted(() => {
   <div class="page page-twelve-col">
     <h1 class="title span-full">Ver Clientes Findeco</h1>
     <div class="span-full acciones">
-      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="loadAll" />
+      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="load" />
     </div>
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
 
-    <p v-if="loading && rows.length === 0" class="estado span-full">Cargando clientes…</p>
-    <p v-else-if="!loading && rows.length === 0" class="estado span-full">No hay clientes para mostrar.</p>
+    <p v-if="loading && total === 0" class="estado span-full">Cargando clientes…</p>
+    <p v-else-if="!loading && total === 0" class="estado span-full">No hay clientes para mostrar.</p>
 
     <div v-else class="panel-tabla tabla-width-full">
-      <DataTable class="datatable-clientes" :value="rows" responsive-layout="scroll" striped-rows :loading="loading" data-key="id_cliente">
-        <Column field="id_cliente" header="ID" :style="{ width: '6rem' }" />
-        <Column header="Nombre" :style="{ minWidth: '18rem' }">
+      <DataTable
+        class="datatable-clientes"
+        :value="rows"
+        size="small"
+        lazy
+        paginator
+        :first="first"
+        :rows="pageSize"
+        :rows-per-page-options="[10]"
+        paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
+        current-page-report-template="{first} - {last} de {totalRecords} clientes"
+        :total-records="total"
+        responsive-layout="scroll"
+        striped-rows
+        :loading="loading"
+        data-key="id_cliente"
+        @page="onPage"
+      >
+        <Column field="id_cliente" header="ID" :style="{ width: '3.25rem' }" />
+        <Column header="Nombre" :style="{ minWidth: '9rem', maxWidth: '12rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'nombre') }}
+            <span class="celda-texto" :title="textoCampo(data, 'nombre')">{{ textoCampo(data, 'nombre') }}</span>
           </template>
         </Column>
-        <Column header="DNI" :style="{ minWidth: '11rem' }">
+        <Column header="DNI" :style="{ minWidth: '7rem', maxWidth: '9rem' }">
           <template #body="{ data }: { data: Cliente }">
             {{ textoCampo(data, 'dni') }}
           </template>
         </Column>
-        <Column header="Día cobro" :style="{ minWidth: '9rem' }">
+        <Column header="Préstamos" :style="{ minWidth: '5.5rem', maxWidth: '6.5rem' }">
+          <template #body="{ data }: { data: Cliente }">
+            <span
+              class="celda-prestamos"
+              :class="{ 'celda-prestamos--si': totalPrestamosCliente(data) > 0 }"
+              :title="etiquetaPrestamos(data)"
+            >
+              {{ totalPrestamosCliente(data) > 0 ? totalPrestamosCliente(data) : '—' }}
+            </span>
+          </template>
+        </Column>
+        <Column header="Día cobro" :style="{ minWidth: '5.5rem', maxWidth: '6.5rem' }">
           <template #body="{ data }: { data: Cliente }">
             {{ etiquetaDiaCobro(data.dia_cobro_semanal) }}
           </template>
         </Column>
-        <Column header="Teléfono" :style="{ minWidth: '10rem' }">
+        <Column header="Teléfono" :style="{ minWidth: '6.5rem', maxWidth: '8rem' }">
           <template #body="{ data }: { data: Cliente }">
             {{ textoCampo(data, 'telefono') }}
           </template>
         </Column>
-        <Column header="Dirección residencia" :style="{ minWidth: '16rem' }">
+        <Column header="Dir. residencia" :style="{ minWidth: '9rem', maxWidth: '11rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'direccion_residencia') }}
+            <span class="celda-texto" :title="textoCampo(data, 'direccion_residencia')">{{ textoCampo(data, 'direccion_residencia') }}</span>
           </template>
         </Column>
-        <Column header="Dirección negocio" :style="{ minWidth: '16rem' }">
+        <Column header="Dir. negocio" :style="{ minWidth: '9rem', maxWidth: '11rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'direccion_negocio') }}
+            <span class="celda-texto" :title="textoCampo(data, 'direccion_negocio')">{{ textoCampo(data, 'direccion_negocio') }}</span>
           </template>
         </Column>
-        <Column header="Parentesco referencia" :style="{ minWidth: '13rem' }">
+        <Column header="Parentesco" :style="{ minWidth: '6.5rem', maxWidth: '8rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'referencia_parentesco') }}
+            <span class="celda-texto" :title="textoCampo(data, 'referencia_parentesco')">{{ textoCampo(data, 'referencia_parentesco') }}</span>
           </template>
         </Column>
-        <Column header="Tel. referencia" :style="{ minWidth: '11rem' }">
+        <Column header="Tel. ref." :style="{ minWidth: '6.5rem', maxWidth: '8rem' }">
           <template #body="{ data }: { data: Cliente }">
             {{ textoCampo(data, 'referencia_telefono') }}
           </template>
         </Column>
-        <Column header="Notas referencia" :style="{ minWidth: '18rem' }">
+        <Column header="Notas ref." :style="{ minWidth: '9rem', maxWidth: '12rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'referencia') }}
+            <span class="celda-texto" :title="textoCampo(data, 'referencia')">{{ textoCampo(data, 'referencia') }}</span>
           </template>
         </Column>
-        <Column header="Actividad económica" :style="{ minWidth: '16rem' }">
+        <Column header="Actividad" :style="{ minWidth: '9rem', maxWidth: '12rem' }">
           <template #body="{ data }: { data: Cliente }">
-            {{ textoCampo(data, 'actividad_economica') }}
+            <span class="celda-texto" :title="textoCampo(data, 'actividad_economica')">{{ textoCampo(data, 'actividad_economica') }}</span>
           </template>
         </Column>
         <Column
           v-if="canWriteClientes"
-          header="Acciones"
+          header=""
           :exportable="false"
-          :style="{ width: '5.5rem' }"
+          :style="{ width: '2.75rem' }"
         >
           <template #body="{ data }: { data: Cliente }">
             <Button
               icon="pi pi-pencil"
               rounded
               text
+              size="small"
               severity="secondary"
               title="Editar cliente"
               :aria-label="`Editar cliente ${data.nombre}`"
@@ -401,12 +442,64 @@ onMounted(() => {
 
 .datatable-clientes :deep(table) {
   width: 100%;
+  table-layout: fixed;
 }
 
-.datatable-clientes :deep(thead > tr > th),
-.datatable-clientes :deep(tbody > tr > td) {
+.datatable-clientes :deep(.p-datatable-thead > tr > th),
+.datatable-clientes :deep(.p-datatable-tbody > tr > td) {
+  padding: 0.3rem 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  vertical-align: middle;
+}
+
+.datatable-clientes :deep(.p-datatable-thead > tr > th) {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
   white-space: nowrap;
-  vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.datatable-clientes :deep(.p-datatable-tbody > tr > td) {
+  overflow: hidden;
+}
+
+.datatable-clientes :deep(.p-datatable-paginator-bottom) {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.datatable-clientes :deep(.p-paginator .p-paginator-pages .p-paginator-page),
+.datatable-clientes :deep(.p-paginator .p-paginator-first),
+.datatable-clientes :deep(.p-paginator .p-paginator-prev),
+.datatable-clientes :deep(.p-paginator .p-paginator-next),
+.datatable-clientes :deep(.p-paginator .p-paginator-last) {
+  min-width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+.celda-texto {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.celda-prestamos {
+  display: inline-block;
+  min-width: 1.25rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #94a3b8;
+}
+
+.celda-prestamos--si {
+  font-weight: 600;
+  color: #0f766e;
 }
 
 .datatable-clientes :deep(.p-datatable-wrapper) {

@@ -264,15 +264,27 @@ function getTodayISO(): string {
 
 const hojaCarteras = ref<Cartera[]>([])
 
-const carteraHojaOpciones = computed(() => {
-  const opciones = hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number }))
-  if (esCobrador.value) {
-    return opciones.length > 1
-      ? [{ label: 'Todas mis carteras', value: '' as const }, ...opciones]
-      : opciones
-  }
-  return [{ label: 'Todas las carteras', value: '' as const }, ...opciones]
-})
+const carteraHojaOpciones = computed(() =>
+  hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number })),
+)
+
+function carteraHojaRequerida(): boolean {
+  return hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null
+}
+
+function limpiarResultadosHojaCobros() {
+  hojaCobrosFilas.value = []
+  hojaCobrosFilasPrint.value = []
+  hojaCobrosResumen.value = null
+  hojaCobrosTotal.value = 0
+  hojaCobrosCargada.value = false
+  hojaCobrosPage.value = 1
+  hojaCobrosLoading.value = false
+}
+
+function reiniciarHojaCobrosSinCartera() {
+  limpiarResultadosHojaCobros()
+}
 
 const estadoHojaOpciones = computed(() => [
   { label: 'Para cobro (activos, pendientes y mora)', value: 'activo,pendiente_aprobacion,mora' as const },
@@ -392,6 +404,18 @@ function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
 }
 
 async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: boolean }) {
+  if (!carteraHojaRequerida()) {
+    reiniciarHojaCobrosSinCartera()
+    if (!options?.silentEmpty && !options?.all) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Hoja de cobros',
+        detail: 'Seleccione una cartera para consultar la hoja.',
+        life: 4000,
+      })
+    }
+    return []
+  }
   if (!options?.all) hojaCobrosLoading.value = true
   try {
     const qs = buildHojaCobrosQuery(
@@ -487,13 +511,18 @@ function ejecutarImpresionDesdePreview() {
 }
 
 function onHojaCobrosPage(e: { first: number; rows: number }) {
-  if (hojaCobrosLoading.value) return
+  if (hojaCobrosLoading.value || !carteraHojaRequerida()) return
   hojaCobrosPageSize.value = e.rows
   hojaCobrosPage.value = Math.floor(e.first / e.rows) + 1
   void cargarHojaCobrosFindeco({ silentEmpty: true })
 }
 
-watch([hojaCobrosCarteraFiltro, hojaCobrosEstadoFiltro], () => {
+watch(hojaCobrosCarteraFiltro, () => {
+  limpiarResultadosHojaCobros()
+})
+
+watch(hojaCobrosEstadoFiltro, () => {
+  if (!carteraHojaRequerida() || !hojaCobrosCargada.value) return
   hojaCobrosPage.value = 1
   void cargarHojaCobrosFindeco({ silentEmpty: true })
 })
@@ -514,9 +543,6 @@ async function cargarCatalogoCarterasHoja() {
       hojaCarteras.value = todos
         .filter((c) => ids.has(c.id_cartera))
         .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-      if (hojaCarteras.value.length === 1) {
-        hojaCobrosCarteraFiltro.value = hojaCarteras.value[0].id_cartera
-      }
       return
     }
     hojaCarteras.value = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
@@ -1544,17 +1570,15 @@ onMounted(async () => {
   await cargarCatalogoCarterasHoja()
   resetClienteForm()
   resetPrestamoForm()
-  try {
-    await loadPrestamos()
-  } catch (e) {
-    toast.add({ severity: 'warn', summary: 'Préstamos', detail: getApiErrorMessage(e), life: 5000 })
-  }
 
-  await cargarHojaCobrosFindeco()
+  const prestamosTask = loadPrestamos().catch((e) => {
+    toast.add({ severity: 'warn', summary: 'Préstamos', detail: getApiErrorMessage(e), life: 5000 })
+  })
 
   await consumirDeepLinkIntegracionEnQuery()
 
   if (route.query.fromPrestamo === '1' && canWritePagos.value) {
+    await prestamosTask
     openCreateFromQuery()
     const cleanedQuery = { ...route.query }
     delete cleanedQuery.fromPrestamo
@@ -1577,9 +1601,8 @@ onMounted(async () => {
           :options="carteraHojaOpciones"
           option-label="label"
           option-value="value"
-          placeholder="Cartera"
+          placeholder="Seleccione cartera"
           class="hoja-cartera-select filtro-hoja-select"
-          show-clear
         />
         <Select
           v-model="hojaCobrosEstadoFiltro"
@@ -1588,6 +1611,7 @@ onMounted(async () => {
           option-value="value"
           placeholder="Estado préstamo"
           class="hoja-estado-select filtro-hoja-select"
+          :disabled="!carteraHojaRequerida()"
         />
         <Button
           label="Actualizar hoja"
@@ -1595,6 +1619,7 @@ onMounted(async () => {
           type="button"
           severity="secondary"
           :loading="hojaCobrosLoading"
+          :disabled="!carteraHojaRequerida()"
           @click="() => void cargarHojaCobrosFindeco()"
         />
         <Button
@@ -1612,7 +1637,17 @@ onMounted(async () => {
         </span>
       </div>
 
-      <article v-if="hojaCobrosCargada || hojaCobrosLoading" class="hoja-findeco-sheet">
+      <p v-if="!carteraHojaRequerida()" class="hoja-findeco-aviso no-print">
+        Seleccione una cartera y pulse «Actualizar hoja» para consultar los préstamos.
+      </p>
+      <p
+        v-else-if="!hojaCobrosCargada && !hojaCobrosLoading"
+        class="hoja-findeco-aviso no-print"
+      >
+        Pulse «Actualizar hoja» para cargar los préstamos de la cartera seleccionada.
+      </p>
+
+      <article v-else-if="hojaCobrosCargada || hojaCobrosLoading" class="hoja-findeco-sheet">
         <header class="hoja-findeco-header">
           <h1 class="hoja-findeco-marca">FINDECO</h1>
           <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
@@ -2792,6 +2827,15 @@ onMounted(async () => {
   gap: 0.55rem;
   align-items: center;
   margin-bottom: 1rem;
+}
+
+.hoja-findeco-aviso {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.5rem;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.9rem;
 }
 
 .filtro-hoja-select {
