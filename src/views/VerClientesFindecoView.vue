@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import Button from 'primevue/button'
 import Column from 'primevue/column'
@@ -25,9 +25,15 @@ const { canWriteClientes } = usePermissions()
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
 
 const rows = ref<Cliente[]>([])
-const PAGE_SIZE_FETCH = 100
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
+/** Alineado con MAX_PAGE_SIZE del API */
+const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const loading = ref(false)
 const error = ref('')
+
+const first = computed(() => (page.value - 1) * pageSize.value)
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
@@ -147,28 +153,18 @@ async function guardarEdicion() {
   }
 }
 
-async function loadAll() {
+async function load() {
   loading.value = true
   error.value = ''
-  rows.value = []
   try {
-    const allRows: Cliente[] = []
-    let page = 1
-    let total = Number.POSITIVE_INFINITY
-
-    while (allRows.length < total) {
-      const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(PAGE_SIZE_FETCH),
-      })
-      const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
-      total = data.count
-      allRows.push(...data.results)
-      if (data.results.length === 0) break
-      page += 1
-    }
-
-    rows.value = allRows
+    const params = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+    })
+    const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
+    total.value = data.count
+    rows.value = data.results
+    if (typeof data.page === 'number') page.value = data.page
   } catch (e) {
     error.value = getApiErrorMessage(e)
   } finally {
@@ -176,8 +172,15 @@ async function loadAll() {
   }
 }
 
+function onPage(e: { page: number; first: number; rows: number }) {
+  if (loading.value) return
+  pageSize.value = e.rows
+  page.value = Math.floor(e.first / e.rows) + 1
+  void load()
+}
+
 onMounted(() => {
-  void loadAll()
+  void load()
 })
 </script>
 
@@ -185,16 +188,27 @@ onMounted(() => {
   <div class="page page-twelve-col">
     <h1 class="title span-full">Ver Clientes Findeco</h1>
     <div class="span-full acciones">
-      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="loadAll" />
+      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="load" />
     </div>
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
 
-    <p v-if="loading && rows.length === 0" class="estado span-full">Cargando clientes…</p>
-    <p v-else-if="!loading && rows.length === 0" class="estado span-full">No hay clientes para mostrar.</p>
-
-    <div v-else class="panel-tabla tabla-width-full">
-      <DataTable class="datatable-clientes" :value="rows" responsive-layout="scroll" striped-rows :loading="loading" data-key="id_cliente">
+    <div class="panel-tabla tabla-width-full">
+      <DataTable
+        class="datatable-clientes"
+        :value="rows"
+        lazy
+        paginator
+        :first="first"
+        :rows="pageSize"
+        :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
+        :total-records="total"
+        responsive-layout="scroll"
+        striped-rows
+        :loading="loading"
+        data-key="id_cliente"
+        @page="onPage"
+      >
         <Column field="id_cliente" header="ID" :style="{ width: '6rem' }" />
         <Column header="Nombre" :style="{ minWidth: '18rem' }">
           <template #body="{ data }: { data: Cliente }">
