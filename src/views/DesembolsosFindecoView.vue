@@ -10,20 +10,21 @@ import Select from 'primevue/select'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
-import type { Cartera, Cliente, Paginated, Prestamo } from '@/types/api'
+import type { Cliente, Paginated, Prestamo, Zona } from '@/types/api'
 
 const PAGE_SIZE_FETCH = 100
 
 /** ID único en cada visita a la pantalla: el navegador no reutiliza sugerencias ligadas a un `id`/`name` fijo. */
-const carteraFieldDomId = `cartera-findeco-${crypto.randomUUID()}`
+const zonaFieldDomId = `zona-findeco-${crypto.randomUUID()}`
 
 const loading = ref(false)
 const error = ref('')
 const prestamos = ref<Prestamo[]>([])
-const carteraFiltroId = ref<number | null>(null)
-/** Catálogo de carteras (API); el listado solo se pide por `id_cartera` al consultar. */
-const carterasCatalogo = ref<Cartera[]>([])
-/** True después de ejecutar una búsqueda por cartera (aunque el resultado sea vacío). */
+/** Clave de grupo (`z{id}`) alineada con `claveGrupoZona`; coincide con `option-value` del Select. */
+const zonaFiltroClave = ref('')
+/** Catálogo de zonas (API); el listado de préstamos solo se pide por `id_zona` al consultar. */
+const zonasCatalogo = ref<Zona[]>([])
+/** True después de ejecutar una búsqueda por zona (aunque el resultado sea vacío). */
 const consultaHecha = ref(false)
 const clientesNombrePorId = ref<Record<number, string>>({})
 
@@ -87,48 +88,105 @@ function nombreCliente(id: number): string {
   return clientesNombrePorId.value[id]?.trim() || '—'
 }
 
-const prestamosOrdenados = computed(() =>
-  [...prestamos.value].sort((a, b) =>
-    a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true }),
-  ),
-)
+/** Etiqueta de zona para agrupar y mostrar (API anidada o sin zona). */
+function etiquetaZona(p: Prestamo): string {
+  const n = p.zona?.nombre?.trim()
+  if (n) return n
+  return 'Sin zona'
+}
 
-const nombreCarteraSeleccionada = computed(() => {
-  if (carteraFiltroId.value == null) return ''
-  const c = carterasCatalogo.value.find((x) => x.id_cartera === carteraFiltroId.value)
-  return c?.nombre?.trim() ?? ''
+/** Clave estable para agrupar: id de zona o un valor único para “sin zona”. */
+function claveGrupoZona(p: Prestamo): string {
+  const id = p.id_zona ?? p.zona?.id_zona
+  if (id != null && id !== 0) return `z${id}`
+  return '__sin_zona__'
+}
+
+interface GrupoPrestamosPorZona {
+  clave: string
+  nombreZona: string
+  prestamos: Prestamo[]
+  cantidad: number
+  montoTotal: number
+}
+
+const gruposPorZonaTodos = computed((): GrupoPrestamosPorZona[] => {
+  const map = new Map<string, Prestamo[]>()
+  for (const p of prestamos.value) {
+    const k = claveGrupoZona(p)
+    const list = map.get(k)
+    if (list) list.push(p)
+    else map.set(k, [p])
+  }
+
+  const out: GrupoPrestamosPorZona[] = []
+  for (const [clave, lista] of map) {
+    const nombreZona = etiquetaZona(lista[0]!)
+    let montoTotal = 0
+    for (const p of lista) {
+      const m = typeof p.monto === 'string' ? Number.parseFloat(p.monto) : Number(p.monto)
+      if (!Number.isNaN(m)) montoTotal += m
+    }
+    out.push({
+      clave,
+      nombreZona,
+      prestamos: [...lista].sort((a, b) =>
+        a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true }),
+      ),
+      cantidad: lista.length,
+      montoTotal,
+    })
+  }
+
+  out.sort((a, b) => {
+    if (a.nombreZona === 'Sin zona') return 1
+    if (b.nombreZona === 'Sin zona') return -1
+    return a.nombreZona.localeCompare(b.nombreZona, 'es', { sensitivity: 'base' })
+  })
+  return out
 })
 
-const opcionesCarteraFiltro = computed(() =>
-  carterasCatalogo.value
+/** Solo la zona elegida; las opciones son únicamente grupos con préstamos cargados. */
+const gruposPorZona = computed((): GrupoPrestamosPorZona[] => {
+  const filtro = zonaFiltroClave.value.trim()
+  const todos = gruposPorZonaTodos.value
+  if (todos.length === 0 || !filtro) return []
+  return todos.filter((g) => g.clave === filtro)
+})
+
+const opcionesZonaFiltro = computed(() =>
+  zonasCatalogo.value
     .slice()
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-    .map((c) => ({
-      label: c.nombre,
-      value: c.id_cartera,
+    .map((z) => ({
+      label: z.nombre,
+      value: `z${z.id_zona}`,
     })),
 )
 
 const totalesGenerales = computed(() => {
   let monto = 0
-  for (const p of prestamosOrdenados.value) {
-    const m = typeof p.monto === 'string' ? Number.parseFloat(p.monto) : Number(p.monto)
-    if (!Number.isNaN(m)) monto += m
+  let cantidad = 0
+  for (const g of gruposPorZona.value) {
+    monto += g.montoTotal
+    cantidad += g.cantidad
   }
-  return { cantidad: prestamosOrdenados.value.length, montoTotal: monto }
+  return { cantidad, montoTotal: monto }
 })
 
 /** Suma de interés total (columna Interés) de todos los préstamos en el listado filtrado. */
 const totalesInteresListado = computed(() => {
   let s = 0
-  for (const p of prestamosOrdenados.value) {
-    s += totalInteresDesdePrestamo(p)
+  for (const g of gruposPorZona.value) {
+    for (const p of g.prestamos) {
+      s += totalInteresDesdePrestamo(p)
+    }
   }
   return roundMoney2(s)
 })
 
-watch(carteraFiltroId, (v) => {
-  if (v == null) carteraFiltroId.value = null
+watch(zonaFiltroClave, (v) => {
+  if (v == null) zonaFiltroClave.value = ''
   prestamos.value = []
   consultaHecha.value = false
   error.value = ''
@@ -173,24 +231,30 @@ async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   return items
 }
 
-async function cargarCarterasCatalogo() {
+async function cargarZonasCatalogo() {
   try {
-    carterasCatalogo.value = await fetchAllPages<Cartera>('/carteras/?page_size=100')
+    zonasCatalogo.value = await fetchAllPages<Zona>('/zonas/?page_size=100')
   } catch {
-    carterasCatalogo.value = []
+    zonasCatalogo.value = []
   }
 }
 
 async function actualizarCatalogoYListado() {
-  await cargarCarterasCatalogo()
-  if (carteraFiltroId.value != null) await buscarPrestamosPorCartera()
+  await cargarZonasCatalogo()
+  if (zonaFiltroClave.value.trim()) await buscarPrestamosPorZona()
 }
 
-/** Trae préstamos de la cartera elegida (`GET /prestamos/?id_cartera=…`). */
-async function buscarPrestamosPorCartera() {
-  const idCartera = carteraFiltroId.value
-  if (idCartera == null || idCartera <= 0) {
-    error.value = 'Selecciona una cartera para consultar.'
+/** Solo trae préstamos de la zona elegida (`GET /prestamos/?id_zona=…`). */
+async function buscarPrestamosPorZona() {
+  const clave = zonaFiltroClave.value.trim()
+  if (!clave) {
+    error.value = 'Selecciona una zona para consultar.'
+    return
+  }
+  const m = /^z(\d+)$/.exec(clave)
+  const idZona = m ? Number(m[1]) : NaN
+  if (!Number.isFinite(idZona) || idZona <= 0) {
+    error.value = 'Zona no válida.'
     return
   }
 
@@ -207,7 +271,7 @@ async function buscarPrestamosPorCartera() {
       const params = new URLSearchParams({
         page: String(page),
         page_size: String(PAGE_SIZE_FETCH),
-        id_cartera: String(idCartera),
+        id_zona: String(idZona),
       })
       const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
       total = data.count
@@ -244,25 +308,55 @@ function fechaReporteEncabezado(): string {
 }
 
 function imprimirReporte() {
-  const lista = prestamosOrdenados.value
-  if (lista.length === 0) return
-  const tituloCartera = nombreCarteraSeleccionada.value || 'Cartera'
+  const grupos = gruposPorZona.value
+  if (grupos.length === 0) return
+  const tituloZona =
+    opcionesZonaFiltro.value.find((o) => o.value === zonaFiltroClave.value)?.label ?? 'Zona'
   const { montoTotal } = totalesGenerales.value
+  const filasResumen = grupos
+    .map(
+      (g) =>
+        `<tr>
+          <td>${escapeHtml(g.nombreZona)}</td>
+          <td style="text-align:right">${escapeHtml(formatMoney(g.montoTotal))}</td>
+        </tr>`,
+    )
+    .join('')
 
-  const filas = lista
-    .map((p, i) => {
-      const n = i + 1
-      const nombre = nombreCliente(p.id_cliente)
-      const interes = totalInteresDesdePrestamo(p)
-      return `<tr>
-          <td style="text-align:right">${n}</td>
-          <td>${escapeHtml(nombre)}</td>
-          <td>${escapeHtml(formatDate(p.fecha_entrega))}</td>
-          <td style="text-align:right">${escapeHtml(formatMoney(p.monto))}</td>
-          <td style="text-align:right">${escapeHtml(formatTasaPct(p.tasa_interes))}</td>
-          <td style="text-align:right">${p.plazo}</td>
-          <td style="text-align:right">${escapeHtml(formatMoney(interes))}</td>
-        </tr>`
+  const bloquesDetalle = grupos
+    .map((g) => {
+      const filas = g.prestamos
+        .map((p, i) => {
+          const n = i + 1
+          const nombre = nombreCliente(p.id_cliente)
+          const interes = totalInteresDesdePrestamo(p)
+          return `<tr>
+              <td style="text-align:right">${n}</td>
+              <td>${escapeHtml(nombre)}</td>
+              <td>${escapeHtml(formatDate(p.fecha_entrega))}</td>
+              <td style="text-align:right">${escapeHtml(formatMoney(p.monto))}</td>
+              <td style="text-align:right">${escapeHtml(formatTasaPct(p.tasa_interes))}</td>
+              <td style="text-align:right">${p.plazo}</td>
+              <td style="text-align:right">${escapeHtml(formatMoney(interes))}</td>
+            </tr>`
+        })
+        .join('')
+      return `
+        <h2>${escapeHtml(g.nombreZona)}</h2>
+        <table class="t">
+          <thead>
+            <tr>
+              <th>N</th>
+              <th>NOMBRE</th>
+              <th>ENTREGA</th>
+              <th>MONTO</th>
+              <th>TASA</th>
+              <th>PLAZO</th>
+              <th>INTERES</th>
+            </tr>
+          </thead>
+          <tbody>${filas}</tbody>
+        </table>`
     })
     .join('')
 
@@ -304,36 +398,23 @@ function imprimirReporte() {
   <header class="print-encabezado" role="banner">
     <h1>${escapeHtml(tituloImpresion)}</h1>
   </header>
-  <p class="meta">Cartera: ${escapeHtml(tituloCartera)} · Monto desembolsado (suma): ${escapeHtml(formatMoney(montoTotal))}</p>
+  <p class="meta">Filtro: ${escapeHtml(tituloZona)} · Monto desembolsado (suma): ${escapeHtml(formatMoney(montoTotal))}</p>
   <table class="t">
     <thead>
       <tr>
-        <th>Cartera</th>
-        <th style="text-align:right">Monto total</th>
+        <th>Zona</th>
+        <th style="text-align:right">Monto total zona</th>
       </tr>
     </thead>
     <tbody>
-      <tr>
-        <td>${escapeHtml(tituloCartera)}</td>
+      ${filasResumen}
+      <tr style="font-weight:bold;background:#f8fafc">
+        <td>Total</td>
         <td style="text-align:right">${escapeHtml(formatMoney(montoTotal))}</td>
       </tr>
     </tbody>
   </table>
-  <h2>${escapeHtml(tituloCartera)}</h2>
-  <table class="t">
-    <thead>
-      <tr>
-        <th>N</th>
-        <th>NOMBRE</th>
-        <th>ENTREGA</th>
-        <th>MONTO</th>
-        <th>TASA</th>
-        <th>PLAZO</th>
-        <th>INTERES</th>
-      </tr>
-    </thead>
-    <tbody>${filas}</tbody>
-  </table>
+  ${bloquesDetalle}
 </body>
 </html>`
 
@@ -347,13 +428,13 @@ function imprimirReporte() {
 }
 
 onMounted(() => {
-  void Promise.all([cargarClientes(), cargarCarterasCatalogo()])
+  void Promise.all([cargarClientes(), cargarZonasCatalogo()])
 })
 
 onBeforeUnmount(() => {
-  carteraFiltroId.value = null
+  zonaFiltroClave.value = ''
   prestamos.value = []
-  carterasCatalogo.value = []
+  zonasCatalogo.value = []
   consultaHecha.value = false
   clientesNombrePorId.value = {}
 })
@@ -379,21 +460,21 @@ onBeforeUnmount(() => {
       @submit.prevent
     >
       <div
-        class="cartera-select-wrap"
+        class="zona-select-wrap"
         data-lpignore="true"
         data-1p-ignore
       >
-        <label class="cartera-select-label" :for="carteraFieldDomId">Cartera</label>
+        <label class="zona-select-label" :for="zonaFieldDomId">Zona</label>
         <Select
-          :input-id="carteraFieldDomId"
-          :name="carteraFieldDomId"
-          v-model="carteraFiltroId"
-          :options="opcionesCarteraFiltro"
+          :input-id="zonaFieldDomId"
+          :name="zonaFieldDomId"
+          v-model="zonaFiltroClave"
+          :options="opcionesZonaFiltro"
           option-label="label"
           option-value="value"
-          placeholder="Elige cartera y luego Consultar"
+          placeholder="Elige zona y luego Consultar"
           show-clear
-          :disabled="opcionesCarteraFiltro.length === 0"
+          :disabled="opcionesZonaFiltro.length === 0"
           fluid
         />
       </div>
@@ -403,8 +484,8 @@ onBeforeUnmount(() => {
           icon="pi pi-search"
           type="button"
           :loading="loading"
-          :disabled="carteraFiltroId == null"
-          @click="buscarPrestamosPorCartera"
+          :disabled="!zonaFiltroClave.trim()"
+          @click="buscarPrestamosPorZona"
         />
         <Button
           label="Actualizar datos"
@@ -420,7 +501,7 @@ onBeforeUnmount(() => {
           icon="pi pi-print"
           severity="secondary"
           type="button"
-          :disabled="loading || prestamos.length === 0"
+          :disabled="loading || prestamos.length === 0 || gruposPorZona.length === 0"
           @click="imprimirReporte"
         />
       </div>
@@ -428,31 +509,35 @@ onBeforeUnmount(() => {
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
 
-    <p v-if="loading && carteraFiltroId != null" class="estado span-full">Cargando préstamos de la cartera…</p>
-    <p v-else-if="!loading && opcionesCarteraFiltro.length === 0" class="estado span-full">
-      No hay carteras en el catálogo. Revisa permisos o el endpoint de carteras.
+    <p v-if="loading && zonaFiltroClave.trim()" class="estado span-full">Cargando préstamos de la zona…</p>
+    <p v-else-if="!loading && opcionesZonaFiltro.length === 0" class="estado span-full">
+      No hay zonas en el catálogo. Revisa permisos o el endpoint de zonas.
     </p>
-    <p v-else-if="!loading && carteraFiltroId == null" class="estado span-full">
-      Selecciona una cartera y pulsa <strong>Consultar</strong> para cargar los préstamos de esa cartera.
+    <p v-else-if="!loading && !zonaFiltroClave.trim()" class="estado span-full">
+      Selecciona una zona y pulsa <strong>Consultar</strong> para cargar solo los préstamos de esa zona.
     </p>
-    <p v-else-if="!loading && carteraFiltroId != null && !consultaHecha" class="estado span-full">
-      Pulsa <strong>Consultar</strong> para traer los préstamos desde el servidor (filtrado por cartera).
+    <p v-else-if="!loading && zonaFiltroClave.trim() && !consultaHecha" class="estado span-full">
+      Pulsa <strong>Consultar</strong> para traer los préstamos desde el servidor (filtrado por zona).
     </p>
     <p v-else-if="!loading && consultaHecha && prestamos.length === 0 && !error" class="estado span-full">
-      No hay préstamos en la cartera seleccionada.
+      No hay préstamos en la zona seleccionada.
     </p>
 
-    <template v-else-if="prestamosOrdenados.length > 0">
+    <template v-else-if="gruposPorZona.length > 0">
       <div class="span-full panel-tabla">
-        <h2 class="subtitulo">Detalle por cartera</h2>
-        <div class="bloque-cartera-tabla">
-          <h3 class="bloque-cartera-titulo">
-            <span class="bloque-cartera-nombre">{{ nombreCarteraSeleccionada }}</span>
-            <span class="bloque-cartera-meta"> · {{ formatMoney(totalesGenerales.montoTotal) }}</span>
+        <h2 class="subtitulo">Detalle por zona</h2>
+        <div
+          v-for="g in gruposPorZona"
+          :key="g.clave"
+          class="bloque-zona-tabla"
+        >
+          <h3 class="bloque-zona-titulo">
+            <span class="bloque-zona-nombre">{{ g.nombreZona }}</span>
+            <span class="bloque-zona-meta"> · {{ formatMoney(g.montoTotal) }}</span>
           </h3>
           <DataTable
             class="datatable-reporte datatable-desembolso"
-            :value="prestamosOrdenados"
+            :value="g.prestamos"
             responsive-layout="scroll"
             striped-rows
             size="small"
@@ -496,9 +581,9 @@ onBeforeUnmount(() => {
           </DataTable>
         </div>
         <div
-          v-if="carteraFiltroId != null"
+          v-if="zonaFiltroClave"
           class="fila-totales fila-total-detalle-pie"
-          aria-label="Totales del listado (cartera filtrada)"
+          aria-label="Totales del listado (zona filtrada)"
         >
           <span>Total</span>
           <span>Monto {{ formatMoney(totalesGenerales.montoTotal) }}</span>
@@ -575,7 +660,7 @@ onBeforeUnmount(() => {
   margin-bottom: 0.35rem;
 }
 
-.cartera-select-wrap {
+.zona-select-wrap {
   flex: 1 1 16rem;
   min-width: min(100%, 18rem);
   display: flex;
@@ -583,7 +668,7 @@ onBeforeUnmount(() => {
   gap: 0.35rem;
 }
 
-.cartera-select-label {
+.zona-select-label {
   font-size: 0.8rem;
   font-weight: 600;
   color: #475569;
@@ -623,11 +708,15 @@ onBeforeUnmount(() => {
   box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }
 
-.bloque-cartera-tabla {
+.bloque-zona-tabla {
+  margin-top: 1rem;
+}
+
+.bloque-zona-tabla:first-of-type {
   margin-top: 0;
 }
 
-.bloque-cartera-titulo {
+.bloque-zona-titulo {
   margin: 0 0 0.5rem;
   font-size: 0.95rem;
   font-weight: 600;
@@ -635,11 +724,11 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-.bloque-cartera-nombre {
+.bloque-zona-nombre {
   font-weight: 600;
 }
 
-.bloque-cartera-meta {
+.bloque-zona-meta {
   font-weight: 400;
   color: #64748b;
   font-size: 0.9rem;

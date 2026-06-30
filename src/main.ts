@@ -22,10 +22,7 @@ app.use(router)
 app.use(PrimeVue, {
   theme: {
     preset: poseidonPreset,
-    options: {
-      // FINDECO usa fondo claro; evita tarjeta oscura en móviles con dark mode del sistema.
-      darkModeSelector: false,
-    },
+    options: {},
   },
 })
 app.use(ToastService)

@@ -13,7 +13,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback } from '@/utils/facturaPago'
-import { abrirWhatsAppConMensaje, mensajeEstadoCuentaFindeco } from '@/utils/whatsappCliente'
+import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
 
 const toast = useToast()
@@ -41,6 +41,7 @@ const historialPrestamos = ref<Prestamo[]>([])
 const loadingPlan = ref(false)
 const loadingHistorialPrestamos = ref(false)
 const facturaAbriendoId = ref<number | null>(null)
+const estadoCuentaPdfVisible = ref(false)
 
 const ETIQUETAS_ESTADO_PRESTAMO: Record<string, string> = {
   pendiente_aprobacion: 'Pendiente aprobación',
@@ -141,40 +142,9 @@ const totalAbonado = computed(() =>
   ),
 )
 
-function enviarWhatsAppEstadoCuenta() {
-  const telefono = campos.value.telefono.trim()
-  if (!telefono) {
-    toast.add({
-      severity: 'warn',
-      summary: 'WhatsApp',
-      detail: 'El cliente no tiene teléfono registrado.',
-      life: 4000,
-    })
-    return
-  }
-  const mensaje = mensajeEstadoCuentaFindeco({
-    nombre: campos.value.cliente.trim() || 'Cliente',
-    dni: campos.value.identidad.trim() || '—',
-    numeroPrestamo: campos.value.n.trim(),
-    cartera: campos.value.cartera.trim(),
-    pendientes: cuotasPendientes.value.slice(0, 6).map((c) => ({
-      numero: c.numero_cuota,
-      fecha: formatDate(c.fecha_programada),
-      total: formatMoney(c.total_programado),
-    })),
-    totalPendientes: cuotasPendientes.value.length,
-    cuotasPagadas: cuotasPagadas.value.length,
-    totalAbonado: formatMoney(totalAbonado.value),
-  })
-  const ok = abrirWhatsAppConMensaje(telefono, mensaje)
-  if (!ok) {
-    toast.add({
-      severity: 'warn',
-      summary: 'WhatsApp',
-      detail: 'No se pudo abrir WhatsApp. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
-      life: 5000,
-    })
-  }
+function abrirEstadoCuentaPdf() {
+  if (idPrestamoActivo.value == null) return
+  estadoCuentaPdfVisible.value = true
 }
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
@@ -515,14 +485,14 @@ onMounted(() => {
               <span v-else class="cliente-sin-tel"> · Sin teléfono</span>
             </div>
             <Button
-              label="Enviar por WhatsApp"
-              icon="pi pi-whatsapp"
+              label="Estado de cuenta PDF"
+              icon="pi pi-file-pdf"
               type="button"
               severity="success"
               outlined
               size="small"
-              :disabled="!campos.telefono.trim() || loadingPlan"
-              @click="enviarWhatsAppEstadoCuenta"
+              :disabled="loadingPlan"
+              @click="abrirEstadoCuentaPdf"
             />
           </div>
           <div class="seccion-tablas">
@@ -534,30 +504,29 @@ onMounted(() => {
               v-else
               :value="cuotasPendientes"
               data-key="numero_cuota"
-              class="tabla-plan tabla-ec-fin"
+              class="tabla-plan"
               size="small"
-              striped-rows
               :loading="loadingPlan"
             >
-              <Column field="numero_cuota" header="N" :style="{ width: '12%' }" />
-              <Column header="FECHA:" :style="{ width: '22%' }">
+              <Column field="numero_cuota" header="N" />
+              <Column header="FECHA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatDate(data.fecha_programada) }}
                 </template>
               </Column>
-              <Column header="CUOTA" :style="{ width: '22%' }">
+              <Column header="CUOTA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.total_programado) }}
                 </template>
               </Column>
-              <Column header="SALDO" :style="{ width: '22%' }">
+              <Column header="SALDO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.saldo_capital_programado) }}
                 </template>
               </Column>
-              <Column header="ESTADO" :style="{ width: '22%' }">
+              <Column header="ESTADO">
                 <template #body>
-                  <Tag severity="warn" value="Pendiente" />
+                  <span class="estado-cuota-texto">Pendiente</span>
                 </template>
               </Column>
             </DataTable>
@@ -570,28 +539,27 @@ onMounted(() => {
               v-else
               :value="cuotasPagadas"
               data-key="numero_cuota"
-              class="tabla-plan tabla-ec-fin"
+              class="tabla-plan"
               size="small"
-              striped-rows
               :loading="loadingPlan"
             >
-              <Column field="numero_cuota" header="N" :style="{ width: '10%' }" />
-              <Column header="FECHA PAGO:" :style="{ width: '18%' }">
+              <Column field="numero_cuota" header="N" />
+              <Column header="FECHA PAGO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
                 </template>
               </Column>
-              <Column header="CUOTA" :style="{ width: '18%' }">
+              <Column header="CUOTA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.total_programado) }}
                 </template>
               </Column>
-              <Column header="DOCUMENTO" :style="{ width: '22%' }">
+              <Column header="DOCUMENTO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.documento || `Cuota ${data.numero_cuota}` }}
                 </template>
               </Column>
-              <Column header="FACTURA" :style="{ width: '18%' }">
+              <Column header="FACTURA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   <Button
                     v-if="data.id_pago"
@@ -674,6 +642,14 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <EstadoCuentaPdfDialog
+      v-model:visible="estadoCuentaPdfVisible"
+      :prestamo-id="idPrestamoActivo"
+      :telefono="campos.telefono"
+      :nombre-cliente="campos.cliente || 'Cliente'"
+      :numero-prestamo="campos.n || null"
+    />
   </div>
 </template>
 
@@ -868,7 +844,61 @@ onMounted(() => {
   margin-top: 1.25rem;
 }
 
-.tabla-plan,
+.tabla-plan {
+  width: 100%;
+  display: block;
+}
+
+.tabla-plan :deep(.p-datatable) {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tabla-plan :deep(.p-datatable-table-container),
+.tabla-plan :deep(.p-datatable-table) {
+  width: 100%;
+}
+
+.tabla-plan :deep(.p-datatable-table) {
+  table-layout: fixed;
+}
+
+.tabla-plan :deep(.p-datatable-thead > tr > th) {
+  background: #fff;
+  color: #0f172a;
+  border-color: #e2e8f0;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.55rem 0.65rem;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr > td) {
+  background: #fff;
+  color: #334155;
+  border-color: #e2e8f0;
+  text-align: center;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.88rem;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr:hover > td) {
+  background: #fff;
+}
+
+.tabla-plan :deep(.p-datatable-tbody > tr.p-row-odd > td),
+.tabla-plan :deep(.p-datatable-tbody > tr.p-row-even > td) {
+  background: #fff;
+}
+
+.estado-cuota-texto {
+  color: #334155;
+  font-size: 0.88rem;
+}
+
 .tabla-abonos {
   width: 100%;
 }

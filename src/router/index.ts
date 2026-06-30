@@ -58,11 +58,6 @@ const router = createRouter({
           component: () => import('@/views/CobrosView.vue'),
         },
         {
-          path: 'cobros/historial-pagos',
-          name: 'historial-pagos-cobros',
-          component: () => import('@/views/HistorialPagosCobrosView.vue'),
-        },
-        {
           path: 'pagos',
           redirect: { name: 'cobros' },
         },
