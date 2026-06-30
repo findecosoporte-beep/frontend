@@ -80,18 +80,16 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach(async (to) => {
+router.beforeEach((to) => {
   const auth = useAuthStore()
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: 'login' }
   }
   if (to.meta.requiresAuth && auth.isAuthenticated && !auth.profile) {
-    try {
-      await auth.fetchProfile()
-    } catch {
+    void auth.fetchProfile().catch(() => {
       auth.logout()
-      return { name: 'login' }
-    }
+      void router.replace({ name: 'login' })
+    })
   }
   if (to.name === 'login' && auth.isAuthenticated) {
     return { name: 'dashboard' }

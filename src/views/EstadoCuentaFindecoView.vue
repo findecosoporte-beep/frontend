@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import Button from 'primevue/button'
 import Column from 'primevue/column'
@@ -33,6 +33,8 @@ const campos = ref({
 })
 
 const carteraNombrePorZonaId = ref<Record<number, string>>({})
+let carterasCargadas = false
+let carterasCargaPromise: Promise<void> | null = null
 
 const idPrestamoActivo = ref<number | null>(null)
 const idClienteActivo = ref<number | null>(null)
@@ -214,6 +216,17 @@ async function cargarCarterasPorZona() {
   }
 }
 
+/** Solo pide carteras cuando hay resultados que mostrar (no al abrir la página). */
+async function ensureCarterasCargadas() {
+  if (carterasCargadas) return
+  if (!carterasCargaPromise) {
+    carterasCargaPromise = cargarCarterasPorZona().finally(() => {
+      carterasCargadas = true
+    })
+  }
+  await carterasCargaPromise
+}
+
 function textoCarteraDesdePrestamo(p: Prestamo): string {
   const idZ = p.id_zona ?? p.zona?.id_zona
   if (idZ != null && idZ > 0) {
@@ -240,6 +253,7 @@ async function cargarHistorialPrestamos(idCliente: number) {
 
 async function seleccionarPrestamoHistorial(p: Prestamo) {
   if (p.id_prestamo === idPrestamoActivo.value) return
+  await ensureCarterasCargadas()
   idPrestamoActivo.value = p.id_prestamo
   campos.value.n = p.numero_prestamo?.trim() ?? campos.value.n
   const cartera = textoCarteraDesdePrestamo(p)
@@ -273,7 +287,8 @@ async function cargarCliente(idCliente: number): Promise<Cliente> {
   return data
 }
 
-function aplicarPrestamoYCliente(p: Prestamo, c: Cliente, avisoVarios?: string) {
+async function aplicarPrestamoYCliente(p: Prestamo, c: Cliente, avisoVarios?: string) {
+  await ensureCarterasCargadas()
   campos.value = {
     n: p.numero_prestamo?.trim() ?? '',
     cartera: textoCarteraDesdePrestamo(p),
@@ -315,7 +330,7 @@ async function buscarPorNumeroPrestamo() {
     return
   }
   const c = await cargarCliente(p.id_cliente)
-  aplicarPrestamoYCliente(p, c)
+  await aplicarPrestamoYCliente(p, c)
 }
 
 async function buscarPorCartera() {
@@ -343,7 +358,7 @@ async function buscarPorCartera() {
       : data.results.length > 1
         ? 'Varios préstamos en la zona; se muestra el más reciente.'
         : ''
-  aplicarPrestamoYCliente(p, c, aviso || undefined)
+  await aplicarPrestamoYCliente(p, c, aviso || undefined)
 }
 
 async function buscarPorCliente() {
@@ -369,7 +384,7 @@ async function buscarPorCliente() {
     data.results.length > 1 && !exact
       ? 'Varios clientes coinciden; se usó el primero y su préstamo más reciente.'
       : ''
-  aplicarPrestamoYCliente(p, c, aviso || undefined)
+  await aplicarPrestamoYCliente(p, c, aviso || undefined)
 }
 
 async function buscarPorIdentidad() {
@@ -388,7 +403,7 @@ async function buscarPorIdentidad() {
     return
   }
   const c = await cargarCliente(p.id_cliente)
-  aplicarPrestamoYCliente(p, c)
+  await aplicarPrestamoYCliente(p, c)
 }
 
 async function buscarPorTelefono() {
@@ -415,7 +430,7 @@ async function buscarPorTelefono() {
     data.results.length > 1 && !exact
       ? 'Varios clientes coinciden con la búsqueda; se usó el primero con coincidencia exacta de teléfono si existía.'
       : ''
-  aplicarPrestamoYCliente(p, c, aviso || undefined)
+  await aplicarPrestamoYCliente(p, c, aviso || undefined)
 }
 
 type CampoBusqueda =
@@ -468,9 +483,6 @@ async function buscarPorCampo(campo: CampoBusqueda) {
   }
 }
 
-onMounted(() => {
-  void cargarCarterasPorZona()
-})
 </script>
 
 <template>
