@@ -14,6 +14,7 @@ import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback } from '@/utils/facturaPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
+import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
 
 const toast = useToast()
@@ -41,7 +42,8 @@ const historialPrestamos = ref<Prestamo[]>([])
 const loadingPlan = ref(false)
 const loadingHistorialPrestamos = ref(false)
 const facturaAbriendoId = ref<number | null>(null)
-const estadoCuentaPdfVisible = ref(false)
+const pdfEstadoCuentaVisible = ref(false)
+const pdfCompartiendo = ref(false)
 
 const ETIQUETAS_ESTADO_PRESTAMO: Record<string, string> = {
   pendiente_aprobacion: 'Pendiente aprobación',
@@ -102,6 +104,57 @@ async function verFacturaPago(idPago: number) {
   }
 }
 
+async function compartirEstadoFinanciero() {
+  const idPrestamo = idPrestamoActivo.value
+  if (idPrestamo == null) return
+
+  const telefono = campos.value.telefono.trim()
+  if (!telefono) {
+    pdfEstadoCuentaVisible.value = true
+    return
+  }
+
+  pdfCompartiendo.value = true
+  try {
+    const blob = await fetchEstadoCuentaPdfBlob(idPrestamo)
+    const result = await compartirEstadoCuentaPdf({
+      telefono,
+      nombreCliente: campos.value.cliente || 'Cliente',
+      numeroPrestamo: campos.value.n || null,
+      pdfBlob: blob,
+    })
+
+    if (result === 'shared' || result === 'whatsapp') {
+      if (result === 'whatsapp') {
+        toast.add({
+          severity: 'info',
+          summary: 'WhatsApp',
+          detail: 'Se abrió WhatsApp y se descargó el PDF. Adjúntelo al chat con el cliente.',
+          life: 6000,
+        })
+      }
+      return
+    }
+
+    toast.add({
+      severity: 'warn',
+      summary: 'WhatsApp',
+      detail: 'Teléfono inválido. Se abrirá la vista previa del PDF.',
+      life: 5000,
+    })
+    pdfEstadoCuentaVisible.value = true
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Estado financiero',
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF del estado de cuenta.'),
+      life: 5000,
+    })
+  } finally {
+    pdfCompartiendo.value = false
+  }
+}
+
 /** Abonos en orden cronológico para alinear N con la secuencia de pagos. */
 const abonosOrdenados = computed(() =>
   [...abonos.value].sort((a, b) => {
@@ -134,18 +187,6 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
 
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
 const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
-
-const totalAbonado = computed(() =>
-  abonosOrdenados.value.reduce(
-    (sum, p) => sum + (Number(p.capital) || 0) + (Number(p.interes) || 0) + (Number(p.mora) || 0),
-    0,
-  ),
-)
-
-function abrirEstadoCuentaPdf() {
-  if (idPrestamoActivo.value == null) return
-  estadoCuentaPdfVisible.value = true
-}
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
@@ -477,22 +518,23 @@ onMounted(() => {
 
       <div class="bloque-resultados">
         <template v-if="idPrestamoActivo != null">
-          <div class="cliente-whatsapp-bar">
-            <div class="cliente-whatsapp-datos">
+          <div class="cliente-info-bar">
+            <div class="cliente-info-datos">
               <strong>{{ campos.cliente || 'Cliente' }}</strong>
               <span v-if="campos.identidad"> · DNI {{ campos.identidad }}</span>
               <span v-if="campos.telefono"> · {{ campos.telefono }}</span>
               <span v-else class="cliente-sin-tel"> · Sin teléfono</span>
             </div>
             <Button
-              label="Estado de cuenta PDF"
-              icon="pi pi-file-pdf"
+              label="Compartir estado financiero"
+              icon="pi pi-share-alt"
               type="button"
-              severity="success"
+              severity="secondary"
               outlined
               size="small"
-              :disabled="loadingPlan"
-              @click="abrirEstadoCuentaPdf"
+              :loading="pdfCompartiendo"
+              :disabled="loadingPlan || pdfCompartiendo"
+              @click="compartirEstadoFinanciero"
             />
           </div>
           <div class="seccion-tablas">
@@ -642,15 +684,15 @@ onMounted(() => {
         </div>
       </div>
     </div>
-
-    <EstadoCuentaPdfDialog
-      v-model:visible="estadoCuentaPdfVisible"
-      :prestamo-id="idPrestamoActivo"
-      :telefono="campos.telefono"
-      :nombre-cliente="campos.cliente || 'Cliente'"
-      :numero-prestamo="campos.n || null"
-    />
   </div>
+
+  <EstadoCuentaPdfDialog
+    v-model:visible="pdfEstadoCuentaVisible"
+    :prestamo-id="idPrestamoActivo"
+    :telefono="campos.telefono"
+    :nombre-cliente="campos.cliente || 'Cliente'"
+    :numero-prestamo="campos.n || null"
+  />
 </template>
 
 <style scoped>
@@ -729,7 +771,7 @@ onMounted(() => {
   margin-top: 0.15rem;
 }
 
-.cliente-whatsapp-bar {
+.cliente-info-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -742,7 +784,7 @@ onMounted(() => {
   background: #f8fafc;
 }
 
-.cliente-whatsapp-datos {
+.cliente-info-datos {
   font-size: 0.9rem;
   color: #0f172a;
 }

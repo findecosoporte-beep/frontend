@@ -22,6 +22,63 @@ export function abrirWhatsAppConMensaje(telefono: string, mensaje: string): bool
   return true
 }
 
+export function mensajeEstadoCuentaPdf(nombre: string, numeroPrestamo?: string): string {
+  const lineas = ['FINDECO — Estado de cuenta', '']
+  if (nombre.trim()) lineas.push(`Estimado(a) ${nombre.trim()},`)
+  lineas.push('Le comparto su estado de cuenta actualizado.')
+  if (numeroPrestamo?.trim()) lineas.push(`Préstamo: ${numeroPrestamo.trim()}`)
+  lineas.push('', 'Gracias por su preferencia.')
+  return lineas.join('\n')
+}
+
+export interface CompartirPdfWhatsAppParams {
+  telefono: string
+  pdfBlob: Blob
+  nombreArchivo: string
+  mensaje?: string
+}
+
+export type ResultadoCompartirPdfWhatsApp =
+  | { ok: true; metodo: 'share' | 'whatsapp-descarga' }
+  | { ok: false; razon: 'telefono_invalido' | 'share_rechazado' | 'share_no_disponible' }
+
+/** Comparte el PDF por WhatsApp: adjunto nativo en móvil o descarga + chat en escritorio. */
+export async function compartirPdfPorWhatsApp(
+  params: CompartirPdfWhatsAppParams,
+): Promise<ResultadoCompartirPdfWhatsApp> {
+  const destino = telefonoParaWhatsApp(params.telefono)
+  if (!destino) return { ok: false, razon: 'telefono_invalido' }
+
+  const mensaje = params.mensaje ?? 'FINDECO — Adjunto su estado de cuenta.'
+  const file = new File([params.pdfBlob], params.nombreArchivo, { type: 'application/pdf' })
+
+  if (typeof navigator.share === 'function' && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        text: mensaje,
+        title: 'Estado de cuenta FINDECO',
+      })
+      return { ok: true, metodo: 'share' }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        return { ok: false, razon: 'share_rechazado' }
+      }
+    }
+  }
+
+  const url = URL.createObjectURL(params.pdfBlob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = params.nombreArchivo
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
+
+  const textoWa = `${mensaje}\n\n(Adjunte el PDF descargado en este chat.)`
+  window.open(`https://wa.me/${destino}?text=${encodeURIComponent(textoWa)}`, '_blank', 'noopener,noreferrer')
+  return { ok: true, metodo: 'whatsapp-descarga' }
+}
+
 export interface ResumenWhatsAppCobros {
   nombre: string
   dni: string

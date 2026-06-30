@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
+import ProgressSpinner from 'primevue/progressspinner'
 import { useToast } from 'primevue/usetoast'
 
 import { getApiErrorMessage } from '@/api/errors'
@@ -12,16 +13,13 @@ import {
   fetchEstadoCuentaPdfBlob,
 } from '@/utils/estadoCuentaPdf'
 
+const visible = defineModel<boolean>('visible', { default: false })
+
 const props = defineProps<{
-  visible: boolean
   prestamoId: number | null
   telefono?: string | null
   nombreCliente?: string
   numeroPrestamo?: string | null
-}>()
-
-const emit = defineEmits<{
-  'update:visible': [value: boolean]
 }>()
 
 const toast = useToast()
@@ -29,33 +27,26 @@ const loading = ref(false)
 const sharing = ref(false)
 const error = ref('')
 const pdfUrl = ref<string | null>(null)
-let pdfBlob: Blob | null = null
+const pdfBlob = ref<Blob | null>(null)
 
-watch(
-  () => [props.visible, props.prestamoId] as const,
-  async ([visible, prestamoId]) => {
-    if (!visible || prestamoId == null) return
-    await cargarPdf(prestamoId)
-  },
-)
+const telefonoValido = computed(() => (props.telefono ?? '').trim().length > 0)
 
-onBeforeUnmount(() => revocarUrl())
-
-function revocarUrl() {
+function revokeUrl() {
   if (pdfUrl.value) {
     URL.revokeObjectURL(pdfUrl.value)
     pdfUrl.value = null
   }
-  pdfBlob = null
+  pdfBlob.value = null
 }
 
 async function cargarPdf(prestamoId: number) {
   loading.value = true
   error.value = ''
-  revocarUrl()
+  revokeUrl()
   try {
-    pdfBlob = await fetchEstadoCuentaPdfBlob(prestamoId)
-    pdfUrl.value = URL.createObjectURL(pdfBlob)
+    const blob = await fetchEstadoCuentaPdfBlob(prestamoId)
+    pdfBlob.value = blob
+    pdfUrl.value = URL.createObjectURL(blob)
   } catch (e) {
     error.value = getApiErrorMessage(e, 'No se pudo cargar el PDF del estado de cuenta.')
   } finally {
@@ -63,13 +54,8 @@ async function cargarPdf(prestamoId: number) {
   }
 }
 
-function cerrar() {
-  emit('update:visible', false)
-  revocarUrl()
-}
-
 async function compartir() {
-  if (!pdfBlob) return
+  if (!pdfBlob.value) return
   const telefono = props.telefono?.trim()
   if (!telefono) {
     toast.add({
@@ -86,7 +72,7 @@ async function compartir() {
       telefono,
       nombreCliente: props.nombreCliente || 'Cliente',
       numeroPrestamo: props.numeroPrestamo,
-      pdfBlob,
+      pdfBlob: pdfBlob.value,
     })
     if (result === 'failed') {
       toast.add({
@@ -109,72 +95,100 @@ async function compartir() {
 }
 
 function descargar() {
-  if (!pdfBlob) return
-  descargarEstadoCuentaPdf(pdfBlob, props.numeroPrestamo)
+  if (!pdfBlob.value) return
+  descargarEstadoCuentaPdf(pdfBlob.value, props.numeroPrestamo)
 }
+
+watch(
+  () => [visible.value, props.prestamoId] as const,
+  ([abierto, prestamoId]) => {
+    if (abierto && prestamoId != null) void cargarPdf(prestamoId)
+    if (!abierto) {
+      revokeUrl()
+      error.value = ''
+    }
+  },
+)
+
+onBeforeUnmount(() => revokeUrl())
+
+defineExpose({ cargarPdf, compartir })
 </script>
 
 <template>
   <Dialog
-    :visible="visible"
-    header="Estado de cuenta (PDF)"
+    v-model:visible="visible"
+    :header="nombreCliente ? `Estado financiero — ${nombreCliente}` : 'Estado financiero'"
     modal
-    :style="{ width: 'min(56rem, 98vw)' }"
-    :content-style="{ padding: 0 }"
-    @update:visible="(v: boolean) => (v ? emit('update:visible', true) : cerrar())"
+    :style="{ width: 'min(58rem, 96vw)' }"
+    :content-style="{ padding: 0, overflow: 'hidden' }"
   >
-    <div class="pdf-dialog-body">
-      <p v-if="error" class="pdf-dialog-error">{{ error }}</p>
-      <p v-else-if="loading" class="pdf-dialog-loading">Cargando PDF…</p>
+    <div class="pdf-modal-body">
+      <div v-if="loading" class="pdf-modal-loading">
+        <ProgressSpinner style="width: 2.5rem; height: 2.5rem" stroke-width="4" />
+        <span>Generando PDF…</span>
+      </div>
+      <p v-else-if="error" class="pdf-modal-error">{{ error }}</p>
       <iframe
         v-else-if="pdfUrl"
         :src="pdfUrl"
-        class="pdf-dialog-frame"
-        title="Vista previa del estado de cuenta"
+        class="pdf-modal-frame"
+        title="Estado de cuenta PDF"
       />
     </div>
     <template #footer>
       <Button
-        label="Compartir al cliente"
-        icon="pi pi-share-alt"
+        v-if="pdfUrl && telefonoValido"
+        label="Enviar por WhatsApp"
+        icon="pi pi-whatsapp"
         severity="success"
+        outlined
         :loading="sharing"
-        :disabled="loading || !!error || !pdfBlob || !telefono?.trim()"
+        :disabled="sharing"
         @click="compartir"
       />
       <Button
+        v-if="pdfUrl"
         label="Descargar"
         icon="pi pi-download"
         severity="secondary"
         outlined
-        :disabled="loading || !!error || !pdfBlob"
         @click="descargar"
       />
-      <Button label="Cerrar" severity="secondary" text @click="cerrar" />
+      <Button label="Cerrar" severity="secondary" text @click="visible = false" />
     </template>
   </Dialog>
 </template>
 
 <style scoped>
-.pdf-dialog-body {
-  min-height: min(70vh, 42rem);
+.pdf-modal-body {
+  min-height: min(78vh, 42rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #f1f5f9;
 }
 
-.pdf-dialog-frame {
-  display: block;
-  width: 100%;
-  min-height: min(70vh, 42rem);
-  border: 0;
+.pdf-modal-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: #475569;
+  font-size: 0.9rem;
 }
 
-.pdf-dialog-loading,
-.pdf-dialog-error {
-  margin: 0;
-  padding: 1.5rem;
-}
-
-.pdf-dialog-error {
+.pdf-modal-error {
+  margin: 1rem;
   color: #b91c1c;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.pdf-modal-frame {
+  width: 100%;
+  height: min(78vh, 42rem);
+  border: 0;
+  background: #fff;
 }
 </style>

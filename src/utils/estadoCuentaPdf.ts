@@ -1,6 +1,7 @@
 import { api } from '@/api/client'
 import { abrirWhatsAppConMensaje, telefonoParaWhatsApp } from '@/utils/whatsappCliente'
 
+/** Obtiene el PDF de estado de cuenta del préstamo como Blob. */
 export async function fetchEstadoCuentaPdfBlob(idPrestamo: number): Promise<Blob> {
   const response = await api.get(`/prestamos/${idPrestamo}/estado-cuenta-pdf/`, {
     responseType: 'blob',
