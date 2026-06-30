@@ -7,7 +7,12 @@ export interface Paginated<T> {
   results: T[]
 }
 
-export type RolOperativo = 'administrador' | 'asesor' | 'supervisor' | 'cobranza_adm_jud'
+export type RolOperativo =
+  | 'administrador'
+  | 'asesor'
+  | 'supervisor'
+  | 'cobrador'
+  | 'cobranza_adm_jud'
 
 export interface MeProfile {
   username: string
@@ -16,6 +21,13 @@ export interface MeProfile {
   rol: RolOperativo | null
   nombre_operativo: string | null
   id_usuario?: number | null
+  carteras?: CarteraAsignada[]
+}
+
+export interface CarteraAsignada {
+  id_cartera: number
+  nombre: string
+  dia_cobro: DiaCobroCartera
 }
 
 export interface Cliente {
@@ -31,6 +43,8 @@ export interface Cliente {
   actividad_economica: string | null
   /** Día de la semana preferido para cobro/visita (mismas claves que zona/cartera). */
   dia_cobro_semanal: DiaCobroCartera | null
+  /** Cantidad de préstamos vinculados (solo en listado API). */
+  total_prestamos?: number
 }
 
 export interface UsuarioRow {
@@ -38,6 +52,8 @@ export interface UsuarioRow {
   nombre: string
   rol: RolOperativo
   correo: string | null
+  carteras?: number[]
+  carteras_detalle?: CarteraAsignada[]
 }
 
 /** Celda de la hoja semanal GET /pagos/hoja-semanal-cuotas/ */
@@ -218,6 +234,52 @@ export interface HistorialPrestamo {
   plazo: number | null
   tasa: string | number | null
   saldo: string | number | null
+}
+
+export interface DashboardTotales {
+  clientes: number
+  prestamos: number
+  pagos: number
+  historial: number
+  usuarios: number
+}
+
+export interface DashboardPrestamoFila {
+  id_prestamo?: number
+  id_historial?: number
+  numero_prestamo: string
+  id_cliente: number
+  cliente_nombre?: string
+  producto: string | null
+  estado?: string
+  monto: string | number
+  interes: string | number
+  saldo: string | number | null
+  fecha_entrega?: string | null
+}
+
+export interface DashboardResumen {
+  totales: DashboardTotales
+  registros_mensuales: {
+    labels: string[]
+    prestamos: number[]
+    pagos: number[]
+  }
+  prestamos_por_estado: {
+    labels: string[]
+    valores: number[]
+  }
+  actividad_semanal: {
+    labels: string[]
+    cobros: number[]
+  }
+  tendencia_mensual: {
+    labels: string[]
+    monto_cobrado: number[]
+    monto_desembolsado: number[]
+  }
+  ultimos_prestamos: DashboardPrestamoFila[]
+  historial_prestamos: DashboardPrestamoFila[]
 }
 
 export interface AmortizacionItem {

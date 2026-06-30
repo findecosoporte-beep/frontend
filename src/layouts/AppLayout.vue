@@ -150,6 +150,7 @@ const rolLabel = computed(() => {
     administrador: 'Administrador',
     supervisor: 'Supervisor',
     asesor: 'Asesor',
+    cobrador: 'Cobrador',
     cobranza_adm_jud: 'Cobranza administrativa / judicial (según mora)',
   }
   return map[r] ?? r
