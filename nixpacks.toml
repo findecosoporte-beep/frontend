@@ -1,9 +1,8 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
-# Las dependencias se instalan en scripts/build.sh (instalación limpia por plataforma).
 [phases.install]
-cmds = ["echo 'deps en build.sh'"]
+cmds = ["npm ci --include=dev"]
 
 [variables]
 NPM_CONFIG_CACHE = "/tmp/npm-cache"

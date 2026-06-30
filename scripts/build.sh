@@ -5,7 +5,5 @@ cd "$(dirname "$0")/.."
 
 export NPM_CONFIG_CACHE="/tmp/npm-cache"
 
-# Instalación limpia en Linux: evita caché de node_modules con bindings de otra plataforma (rolldown/vite).
-rm -rf node_modules
-npm ci --include=dev
+# Dependencias instaladas en la fase install de nixpacks.toml (npm ci).
 npm run build
