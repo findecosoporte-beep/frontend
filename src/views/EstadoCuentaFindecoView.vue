@@ -13,7 +13,12 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback } from '@/utils/facturaPago'
-import { abrirWhatsAppConMensaje, mensajeEstadoCuentaFindeco } from '@/utils/whatsappCliente'
+import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
+import { fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
+import {
+  compartirPdfPorWhatsApp,
+  mensajeEstadoCuentaPdf,
+} from '@/utils/whatsappCliente'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
 
 const toast = useToast()
@@ -41,6 +46,8 @@ const historialPrestamos = ref<Prestamo[]>([])
 const loadingPlan = ref(false)
 const loadingHistorialPrestamos = ref(false)
 const facturaAbriendoId = ref<number | null>(null)
+const pdfEstadoCuentaVisible = ref(false)
+const pdfCompartiendo = ref(false)
 
 const ETIQUETAS_ESTADO_PRESTAMO: Record<string, string> = {
   pendiente_aprobacion: 'Pendiente aprobación',
@@ -101,6 +108,60 @@ async function verFacturaPago(idPago: number) {
   }
 }
 
+async function compartirEstadoFinanciero() {
+  const idPrestamo = idPrestamoActivo.value
+  if (idPrestamo == null) return
+
+  const telefono = campos.value.telefono.trim()
+  if (!telefono) {
+    pdfEstadoCuentaVisible.value = true
+    return
+  }
+
+  pdfCompartiendo.value = true
+  try {
+    const blob = await fetchEstadoCuentaPdfBlob(idPrestamo)
+    const resultado = await compartirPdfPorWhatsApp({
+      telefono,
+      pdfBlob: blob,
+      nombreArchivo: `estado-cuenta-${(campos.value.n || String(idPrestamo)).replace(/\s+/g, '-')}.pdf`,
+      mensaje: mensajeEstadoCuentaPdf(campos.value.cliente || 'Cliente', campos.value.n),
+    })
+
+    if (resultado.ok) {
+      if (resultado.metodo === 'whatsapp-descarga') {
+        toast.add({
+          severity: 'info',
+          summary: 'WhatsApp',
+          detail: 'Se descargó el PDF y se abrió el chat. Adjunte el archivo al mensaje.',
+          life: 6000,
+        })
+      }
+      return
+    }
+
+    if (resultado.razon === 'telefono_invalido') {
+      toast.add({
+        severity: 'warn',
+        summary: 'WhatsApp',
+        detail: 'Teléfono inválido. Se abrirá la vista previa del PDF.',
+        life: 5000,
+      })
+    }
+
+    pdfEstadoCuentaVisible.value = true
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Estado financiero',
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF del estado de cuenta.'),
+      life: 5000,
+    })
+  } finally {
+    pdfCompartiendo.value = false
+  }
+}
+
 /** Abonos en orden cronológico para alinear N con la secuencia de pagos. */
 const abonosOrdenados = computed(() =>
   [...abonos.value].sort((a, b) => {
@@ -133,49 +194,6 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
 
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
 const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
-
-const totalAbonado = computed(() =>
-  abonosOrdenados.value.reduce(
-    (sum, p) => sum + (Number(p.capital) || 0) + (Number(p.interes) || 0) + (Number(p.mora) || 0),
-    0,
-  ),
-)
-
-function enviarWhatsAppEstadoCuenta() {
-  const telefono = campos.value.telefono.trim()
-  if (!telefono) {
-    toast.add({
-      severity: 'warn',
-      summary: 'WhatsApp',
-      detail: 'El cliente no tiene teléfono registrado.',
-      life: 4000,
-    })
-    return
-  }
-  const mensaje = mensajeEstadoCuentaFindeco({
-    nombre: campos.value.cliente.trim() || 'Cliente',
-    dni: campos.value.identidad.trim() || '—',
-    numeroPrestamo: campos.value.n.trim(),
-    cartera: campos.value.cartera.trim(),
-    pendientes: cuotasPendientes.value.slice(0, 6).map((c) => ({
-      numero: c.numero_cuota,
-      fecha: formatDate(c.fecha_programada),
-      total: formatMoney(c.total_programado),
-    })),
-    totalPendientes: cuotasPendientes.value.length,
-    cuotasPagadas: cuotasPagadas.value.length,
-    totalAbonado: formatMoney(totalAbonado.value),
-  })
-  const ok = abrirWhatsAppConMensaje(telefono, mensaje)
-  if (!ok) {
-    toast.add({
-      severity: 'warn',
-      summary: 'WhatsApp',
-      detail: 'No se pudo abrir WhatsApp. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
-      life: 5000,
-    })
-  }
-}
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
@@ -507,22 +525,23 @@ onMounted(() => {
 
       <div class="bloque-resultados">
         <template v-if="idPrestamoActivo != null">
-          <div class="cliente-whatsapp-bar">
-            <div class="cliente-whatsapp-datos">
+          <div class="cliente-info-bar">
+            <div class="cliente-info-datos">
               <strong>{{ campos.cliente || 'Cliente' }}</strong>
               <span v-if="campos.identidad"> · DNI {{ campos.identidad }}</span>
               <span v-if="campos.telefono"> · {{ campos.telefono }}</span>
               <span v-else class="cliente-sin-tel"> · Sin teléfono</span>
             </div>
             <Button
-              label="Enviar por WhatsApp"
-              icon="pi pi-whatsapp"
+              label="Compartir estado financiero"
+              icon="pi pi-share-alt"
               type="button"
-              severity="success"
+              severity="secondary"
               outlined
               size="small"
-              :disabled="!campos.telefono.trim() || loadingPlan"
-              @click="enviarWhatsAppEstadoCuenta"
+              :loading="pdfCompartiendo"
+              :disabled="loadingPlan || pdfCompartiendo"
+              @click="compartirEstadoFinanciero"
             />
           </div>
           <div class="seccion-tablas">
@@ -675,6 +694,14 @@ onMounted(() => {
       </div>
     </div>
   </div>
+
+  <EstadoCuentaPdfDialog
+    v-model:visible="pdfEstadoCuentaVisible"
+    :id-prestamo="idPrestamoActivo"
+    :titulo-cliente="campos.cliente || undefined"
+    :telefono="campos.telefono || undefined"
+    :numero-prestamo="campos.n || undefined"
+  />
 </template>
 
 <style scoped>
@@ -753,7 +780,7 @@ onMounted(() => {
   margin-top: 0.15rem;
 }
 
-.cliente-whatsapp-bar {
+.cliente-info-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -766,7 +793,7 @@ onMounted(() => {
   background: #f8fafc;
 }
 
-.cliente-whatsapp-datos {
+.cliente-info-datos {
   font-size: 0.9rem;
   color: #0f172a;
 }

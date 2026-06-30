@@ -9,6 +9,7 @@ import Dialog from 'primevue/dialog'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
+import Tag from 'primevue/tag'
 
 import { useToast } from 'primevue/usetoast'
 
@@ -24,12 +25,14 @@ import {
 import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
 import {
   abrirFacturaPago,
+  buildPagoPorCuotaConFallback,
   buildPagoPorCuotaNumero,
 } from '@/utils/facturaPago'
+import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
+import { fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import {
-  abrirWhatsAppConMensaje,
-  mensajeConsultaClienteCobros,
-  mensajeEstadoCuentaModal,
+  compartirPdfPorWhatsApp,
+  mensajeEstadoCuentaPdf,
 } from '@/utils/whatsappCliente'
 import type {
   Cliente,
@@ -167,6 +170,18 @@ const estadoCuentaVisible = ref(false)
 const estadoCuentaLoading = ref(false)
 const estadoCuentaError = ref('')
 const estadoCuentaRows = ref<Pago[]>([])
+const estadoCuentaCuotasPlan = ref<PrestamoCuotaRow[]>([])
+
+interface FilaCuotaEstadoCuenta {
+  numero_cuota: number
+  fecha_programada: string
+  total_programado: string | number
+  saldo_capital_programado: string | number
+  estado: 'pendiente' | 'pagada'
+  id_pago: number | null
+  fecha_pago: string | null
+  documento: string | null
+}
 const cuotasVisible = ref(false)
 const cuotasLoading = ref(false)
 const cuotasError = ref('')
@@ -211,7 +226,55 @@ const estadoCuentaResumen = ref({
   tuvoMoraPagada: false,
   diasMora: 0,
   estadoPrestamo: '',
+  numeroPrestamo: '',
+  montoPrestamo: 0,
+  plazo: 0,
+  cartera: '',
 })
+
+const estadoCuentaPagosOrdenados = computed(() =>
+  [...estadoCuentaRows.value].sort((a, b) => {
+    const ta = new Date(a.fecha_pago).getTime()
+    const tb = new Date(b.fecha_pago).getTime()
+    if (ta !== tb) return ta - tb
+    return a.id_pago - b.id_pago
+  }),
+)
+
+const estadoCuentaPagoPorCuota = computed(() =>
+  buildPagoPorCuotaConFallback(estadoCuentaCuotasPlan.value, estadoCuentaPagosOrdenados.value),
+)
+
+const estadoCuentaFilasCuotas = computed((): FilaCuotaEstadoCuenta[] =>
+  [...estadoCuentaCuotasPlan.value]
+    .sort((a, b) => a.numero_cuota - b.numero_cuota)
+    .map((cuota) => {
+      const pago = estadoCuentaPagoPorCuota.value.get(cuota.numero_cuota)
+      return {
+        numero_cuota: cuota.numero_cuota,
+        fecha_programada: cuota.fecha_programada,
+        total_programado: cuota.total_programado,
+        saldo_capital_programado: cuota.saldo_capital_programado,
+        estado: pago ? 'pagada' : 'pendiente',
+        id_pago: pago?.id_pago ?? null,
+        fecha_pago: pago?.fecha_pago ?? null,
+        documento: pago?.documento ?? null,
+      }
+    }),
+)
+
+const estadoCuentaCuotasPendientes = computed(() =>
+  estadoCuentaFilasCuotas.value.filter((f) => f.estado === 'pendiente'),
+)
+const estadoCuentaCuotasPagadas = computed(() =>
+  estadoCuentaFilasCuotas.value.filter((f) => f.estado === 'pagada'),
+)
+const estadoCuentaTotalAbonado = computed(() =>
+  estadoCuentaPagosOrdenados.value.reduce(
+    (sum, p) => sum + (Number(p.capital) || 0) + (Number(p.interes) || 0) + (Number(p.mora) || 0),
+    0,
+  ),
+)
 const cajaForm = ref({
   id_prestamo: null as number | null,
   cliente: '',
@@ -564,6 +627,8 @@ function calculateDaysDiff(fromISO: string, toISO: string): number {
 }
 
 const facturaAbriendoId = ref<number | null>(null)
+const pdfEstadoCuentaVisible = ref(false)
+const pdfCompartiendo = ref(false)
 
 async function verFacturaPago(idPago: number) {
   facturaAbriendoId.value = idPago
@@ -578,6 +643,63 @@ async function verFacturaPago(idPago: number) {
     })
   } finally {
     facturaAbriendoId.value = null
+  }
+}
+
+async function compartirEstadoFinanciero() {
+  const cliente = searchResult.value
+  if (!cliente || cliente.prestamoId == null) return
+  const pid = cliente.prestamoId
+
+  const telefono = cliente.telefono?.trim() ?? ''
+  if (!telefono) {
+    pdfEstadoCuentaVisible.value = true
+    return
+  }
+
+  pdfCompartiendo.value = true
+  try {
+    const blob = await fetchEstadoCuentaPdfBlob(pid)
+    const numeroPrestamo =
+      estadoCuentaResumen.value.numeroPrestamo || cliente.prestamoLabel || String(pid)
+    const resultado = await compartirPdfPorWhatsApp({
+      telefono,
+      pdfBlob: blob,
+      nombreArchivo: `estado-cuenta-${numeroPrestamo.replace(/\s+/g, '-')}.pdf`,
+      mensaje: mensajeEstadoCuentaPdf(cliente.nombre, numeroPrestamo),
+    })
+
+    if (resultado.ok) {
+      if (resultado.metodo === 'whatsapp-descarga') {
+        toast.add({
+          severity: 'info',
+          summary: 'WhatsApp',
+          detail: 'Se descargó el PDF y se abrió el chat. Adjunte el archivo al mensaje.',
+          life: 6000,
+        })
+      }
+      return
+    }
+
+    if (resultado.razon === 'telefono_invalido') {
+      toast.add({
+        severity: 'warn',
+        summary: 'WhatsApp',
+        detail: 'Teléfono inválido. Se abrirá la vista previa del PDF.',
+        life: 5000,
+      })
+    }
+
+    pdfEstadoCuentaVisible.value = true
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Estado financiero',
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF del estado de cuenta.'),
+      life: 5000,
+    })
+  } finally {
+    pdfCompartiendo.value = false
   }
 }
 
@@ -1050,15 +1172,21 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
   estadoCuentaLoading.value = true
   estadoCuentaError.value = ''
   estadoCuentaRows.value = []
+  estadoCuentaCuotasPlan.value = []
   try {
-    const [pagos, { data: pr }] = await Promise.all([
+    const [pagos, { data: pr }, cuotas] = await Promise.all([
       fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=200`),
       api.get<Prestamo>(`/prestamos/${pid}/`),
+      fetchAllPages<PrestamoCuotaRow>(
+        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=500&ordering=numero_cuota`,
+      ),
     ])
     estadoCuentaRows.value = pagos.sort((a, b) => {
       const da = a.fecha_pago.localeCompare(b.fecha_pago)
       return da !== 0 ? da : b.id_pago - a.id_pago
     })
+    estadoCuentaCuotasPlan.value = cuotas
+    const meta = prestamoMeta.value.find((p) => p.id_prestamo === pid)
     estadoCuentaResumen.value = {
       totalPagos: pagos.length,
       totalCapital: pagos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
@@ -1068,81 +1196,16 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
       tuvoMoraPagada: pagos.some((p) => (Number(p.mora) || 0) > 0),
       diasMora: pr.dias_mora ?? 0,
       estadoPrestamo: pr.estado ?? '',
+      numeroPrestamo: pr.numero_prestamo?.trim() || meta?.numero_prestamo || String(pid),
+      montoPrestamo: Number(pr.monto) || 0,
+      plazo: pr.plazo ?? 0,
+      cartera: meta?.zona?.trim() || (pr.zona?.nombre ?? '').trim(),
     }
   } catch (e) {
     estadoCuentaError.value = getApiErrorMessage(e, 'No se pudo cargar el estado de cuenta.')
   } finally {
     estadoCuentaLoading.value = false
   }
-}
-
-function avisoWhatsAppSinTelefono() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'El cliente no tiene teléfono registrado.',
-    life: 4000,
-  })
-}
-
-function avisoWhatsAppNumeroInvalido() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'No se pudo abrir WhatsApp. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
-    life: 5000,
-  })
-}
-
-function enviarWhatsAppConsultaCliente() {
-  const cliente = searchResult.value
-  if (!cliente) return
-  const telefono = cliente.telefono?.trim()
-  if (!telefono) {
-    avisoWhatsAppSinTelefono()
-    return
-  }
-  const info = proximaCuotaSemanalInfo.value
-  let cuotasAtrasadas: string | undefined
-  if (proximaCuotaAtrasadas.value.count > 0) {
-    cuotasAtrasadas = `${proximaCuotaAtrasadas.value.count} cuota(s) vencida(s) sin cobro (#${proximaCuotaAtrasadas.value.numeros.replace(/,\s*/g, ', #')})`
-  }
-  const mensaje = mensajeConsultaClienteCobros({
-    nombre: cliente.nombre,
-    dni: cliente.dni || '—',
-    prestamoLabel: cliente.prestamoLabel,
-    cuotaNumero: info?.numero_cuota,
-    cuotaMonto: info ? formatMoney(info.monto_pendiente) : undefined,
-    cuotaFecha: info?.fecha_programada ? formatDate(info.fecha_programada) : undefined,
-    saldoActual: info
-      ? formatMoney(info.saldo_actual ?? info.saldo_inicial ?? 0)
-      : undefined,
-    cuotasAtrasadas,
-    notaCuota: proximaCuotaSemanalMensaje.value || undefined,
-  })
-  if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
-}
-
-function enviarWhatsAppEstadoCuentaModal() {
-  const cliente = searchResult.value
-  if (!cliente) return
-  const telefono = cliente.telefono?.trim()
-  if (!telefono) {
-    avisoWhatsAppSinTelefono()
-    return
-  }
-  const r = estadoCuentaResumen.value
-  const mensaje = mensajeEstadoCuentaModal({
-    nombre: cliente.nombre,
-    dni: cliente.dni || '—',
-    totalPagos: r.totalPagos,
-    totalCapital: formatMoney(r.totalCapital),
-    totalInteres: formatMoney(r.totalInteres),
-    totalMora: formatMoney(r.totalMora),
-    estadoPrestamo: r.estadoPrestamo,
-    diasMora: r.diasMora,
-  })
-  if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
 }
 
 async function abrirCuotas(prestamoId?: number | null) {
@@ -1912,15 +1975,6 @@ onMounted(async () => {
               :disabled="!searchResult.prestamoId"
               @click="() => abrirCuotas()"
             />
-            <Button
-              label="Enviar por WhatsApp"
-              icon="pi pi-whatsapp"
-              type="button"
-              severity="success"
-              outlined
-              :disabled="!searchResult.telefono?.trim()"
-              @click="enviarWhatsAppConsultaCliente"
-            />
           </div>
         </div>
       </div>
@@ -1930,76 +1984,193 @@ onMounted(async () => {
       v-model:visible="estadoCuentaVisible"
       header="Estado de cuenta"
       modal
-      :style="{ width: 'min(72rem, 98vw)' }"
+      :style="{ width: 'min(85rem, 98vw)' }"
+      :content-style="{ maxHeight: '85vh', overflow: 'auto' }"
     >
       <div class="estado-cuenta-wrap">
         <p v-if="estadoCuentaError" class="estado-error">{{ estadoCuentaError }}</p>
-        <div v-else class="estado-resumen-grid">
-          <div class="estado-card"><strong>Cobros registrados:</strong> {{ estadoCuentaResumen.totalPagos }}</div>
-          <div class="estado-card"><strong>Capital pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalCapital) }}</div>
-          <div class="estado-card"><strong>Interés pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalInteres) }}</div>
-          <div class="estado-card"><strong>Mora pagada:</strong> {{ formatMoney(estadoCuentaResumen.totalMora) }}</div>
-          <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
-          <div class="estado-card"><strong>Días en mora:</strong> {{ estadoCuentaResumen.diasMora }}</div>
-          <div class="estado-card">
-            <strong>¿Tiene mora vigente?:</strong>
-            {{ estadoCuentaResumen.tieneMoraVigente ? 'Sí' : 'No' }}
+        <template v-else>
+          <div v-if="searchResult" class="estado-cliente-bar">
+            <div class="estado-cliente-datos">
+              <strong>{{ searchResult.nombre }}</strong>
+              <span v-if="searchResult.dni"> · DNI {{ searchResult.dni }}</span>
+              <span v-if="searchResult.telefono"> · {{ searchResult.telefono }}</span>
+              <span v-if="estadoCuentaResumen.numeroPrestamo">
+                · Préstamo {{ estadoCuentaResumen.numeroPrestamo }}
+              </span>
+              <span v-if="estadoCuentaResumen.cartera"> · {{ estadoCuentaResumen.cartera }}</span>
+            </div>
+            <Button
+              label="Compartir estado financiero"
+              icon="pi pi-share-alt"
+              type="button"
+              severity="secondary"
+              outlined
+              size="small"
+              :loading="pdfCompartiendo"
+              :disabled="estadoCuentaLoading || pdfCompartiendo || !!estadoCuentaError"
+              @click="compartirEstadoFinanciero"
+            />
           </div>
-          <div class="estado-card">
-            <strong>¿Tuvo mora pagada?:</strong>
-            {{ estadoCuentaResumen.tuvoMoraPagada ? 'Sí' : 'No' }}
+          <div class="estado-resumen-grid">
+            <div class="estado-card">
+              <strong>Monto préstamo:</strong> {{ formatMoney(estadoCuentaResumen.montoPrestamo) }}
+            </div>
+            <div class="estado-card"><strong>Plazo:</strong> {{ estadoCuentaResumen.plazo }} cuotas</div>
+            <div class="estado-card">
+              <strong>Total abonado:</strong> {{ formatMoney(estadoCuentaTotalAbonado) }}
+            </div>
+            <div class="estado-card"><strong>Cobros registrados:</strong> {{ estadoCuentaResumen.totalPagos }}</div>
+            <div class="estado-card"><strong>Capital pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalCapital) }}</div>
+            <div class="estado-card"><strong>Interés pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalInteres) }}</div>
+            <div class="estado-card"><strong>Mora pagada:</strong> {{ formatMoney(estadoCuentaResumen.totalMora) }}</div>
+            <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
+            <div class="estado-card"><strong>Días en mora:</strong> {{ estadoCuentaResumen.diasMora }}</div>
+            <div class="estado-card">
+              <strong>¿Tiene mora vigente?:</strong>
+              {{ estadoCuentaResumen.tieneMoraVigente ? 'Sí' : 'No' }}
+            </div>
+            <div class="estado-card">
+              <strong>¿Tuvo mora pagada?:</strong>
+              {{ estadoCuentaResumen.tuvoMoraPagada ? 'Sí' : 'No' }}
+            </div>
+            <div class="estado-card">
+              <strong>Cuotas pagadas:</strong> {{ estadoCuentaCuotasPagadas.length }}
+            </div>
+            <div class="estado-card">
+              <strong>Cuotas pendientes:</strong> {{ estadoCuentaCuotasPendientes.length }}
+            </div>
           </div>
-        </div>
-        <DataTable
-          :value="estadoCuentaRows"
-          :loading="estadoCuentaLoading"
-          paginator
-          :rows="10"
-          responsive-layout="scroll"
-          class="estado-table"
-        >
-          <Column field="id_pago" header="ID pago" style="width: 6rem" />
-          <Column header="Fecha">
-            <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
-          </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-          </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Mora">
-            <template #body="{ data }">{{ formatMoney(data.mora) }}</template>
-          </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-          <Column field="documento" header="Documento" />
-          <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }: { data: Pago }">
-              <Button
-                icon="pi pi-file-pdf"
-                label="Ver"
-                size="small"
-                severity="secondary"
-                outlined
-                :loading="facturaAbriendoId === data.id_pago"
-                :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                @click="verFacturaPago(data.id_pago)"
-              />
-            </template>
-          </Column>
-        </DataTable>
+
+          <h4 class="subsection-title">Cuotas pendientes</h4>
+          <p v-if="!estadoCuentaLoading && !estadoCuentaCuotasPendientes.length" class="texto-muted">
+            No hay cuotas pendientes en el plan de pago.
+          </p>
+          <DataTable
+            v-else
+            :value="estadoCuentaCuotasPendientes"
+            data-key="numero_cuota"
+            :loading="estadoCuentaLoading"
+            size="small"
+            striped-rows
+            responsive-layout="scroll"
+            class="estado-table"
+          >
+            <Column field="numero_cuota" header="N" style="width: 4rem" />
+            <Column header="Fecha">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ formatDate(data.fecha_programada) }}
+              </template>
+            </Column>
+            <Column header="Cuota">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ formatMoney(data.total_programado) }}
+              </template>
+            </Column>
+            <Column header="Saldo">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ formatMoney(data.saldo_capital_programado) }}
+              </template>
+            </Column>
+            <Column header="Estado" style="width: 7rem">
+              <template #body>
+                <Tag severity="warn" value="Pendiente" />
+              </template>
+            </Column>
+          </DataTable>
+
+          <h4 class="subsection-title">Cuotas pagadas</h4>
+          <p v-if="!estadoCuentaLoading && !estadoCuentaCuotasPagadas.length" class="texto-muted">
+            Aún no hay cuotas pagadas registradas en este préstamo.
+          </p>
+          <DataTable
+            v-else
+            :value="estadoCuentaCuotasPagadas"
+            data-key="numero_cuota"
+            :loading="estadoCuentaLoading"
+            size="small"
+            striped-rows
+            responsive-layout="scroll"
+            class="estado-table"
+          >
+            <Column field="numero_cuota" header="N" style="width: 4rem" />
+            <Column header="Fecha pago">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
+              </template>
+            </Column>
+            <Column header="Cuota">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ formatMoney(data.total_programado) }}
+              </template>
+            </Column>
+            <Column header="Documento">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                {{ data.documento || `Cuota ${data.numero_cuota}` }}
+              </template>
+            </Column>
+            <Column header="Factura" style="width: 8rem">
+              <template #body="{ data }: { data: FilaCuotaEstadoCuenta }">
+                <Button
+                  v-if="data.id_pago"
+                  icon="pi pi-file-pdf"
+                  label="Ver"
+                  size="small"
+                  severity="secondary"
+                  outlined
+                  :loading="facturaAbriendoId === data.id_pago"
+                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
+                  @click="verFacturaPago(data.id_pago)"
+                />
+                <span v-else class="texto-muted">—</span>
+              </template>
+            </Column>
+          </DataTable>
+
+          <h4 class="subsection-title">Historial de pagos</h4>
+          <DataTable
+            :value="estadoCuentaRows"
+            :loading="estadoCuentaLoading"
+            paginator
+            :rows="10"
+            responsive-layout="scroll"
+            class="estado-table"
+          >
+            <Column field="id_pago" header="ID pago" style="width: 6rem" />
+            <Column header="Fecha">
+              <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
+            </Column>
+            <Column header="Capital">
+              <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
+            </Column>
+            <Column header="Interés">
+              <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
+            </Column>
+            <Column header="Mora">
+              <template #body="{ data }">{{ formatMoney(data.mora) }}</template>
+            </Column>
+            <Column header="Saldo">
+              <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
+            </Column>
+            <Column field="documento" header="Documento" />
+            <Column header="Factura" style="width: 8rem">
+              <template #body="{ data }: { data: Pago }">
+                <Button
+                  icon="pi pi-file-pdf"
+                  label="Ver"
+                  size="small"
+                  severity="secondary"
+                  outlined
+                  :loading="facturaAbriendoId === data.id_pago"
+                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
+                  @click="verFacturaPago(data.id_pago)"
+                />
+              </template>
+            </Column>
+          </DataTable>
+        </template>
       </div>
       <template #footer>
-        <Button
-          label="Enviar por WhatsApp"
-          icon="pi pi-whatsapp"
-          severity="success"
-          outlined
-          :disabled="!searchResult?.telefono?.trim() || estadoCuentaLoading || !!estadoCuentaError"
-          @click="enviarWhatsAppEstadoCuentaModal"
-        />
         <Button label="Cerrar" severity="secondary" text @click="estadoCuentaVisible = false" />
       </template>
     </Dialog>
@@ -2216,6 +2387,14 @@ onMounted(async () => {
         />
       </template>
     </Dialog>
+
+    <EstadoCuentaPdfDialog
+      v-model:visible="pdfEstadoCuentaVisible"
+      :id-prestamo="searchResult?.prestamoId ?? null"
+      :titulo-cliente="searchResult?.nombre"
+      :telefono="searchResult?.telefono"
+      :numero-prestamo="estadoCuentaResumen.numeroPrestamo || searchResult?.prestamoLabel || undefined"
+    />
   </div>
 </template>
 
@@ -2616,6 +2795,23 @@ onMounted(async () => {
   display: grid;
   gap: 0.6rem;
   grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.estado-cliente-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.estado-cliente-datos {
+  font-size: 0.9rem;
+  color: #0f172a;
 }
 
 .estado-card {
