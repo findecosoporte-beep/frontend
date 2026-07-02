@@ -7,6 +7,8 @@ import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import Fieldset from 'primevue/fieldset'
 import FloatLabel from 'primevue/floatlabel'
+import IconField from 'primevue/iconfield'
+import InputIcon from 'primevue/inputicon'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
@@ -32,6 +34,8 @@ const pageSize = ref(20)
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const loading = ref(false)
 const error = ref('')
+const search = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 const first = computed(() => (page.value - 1) * pageSize.value)
 
@@ -172,6 +176,8 @@ async function load() {
       page: String(page.value),
       page_size: String(pageSize.value),
     })
+    const termino = search.value.trim()
+    if (termino) params.set('search', termino)
     const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
     total.value = data.count
     rows.value = data.results
@@ -190,6 +196,21 @@ function onPage(e: { page: number; first: number; rows: number }) {
   void load()
 }
 
+function onSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    page.value = 1
+    void load()
+  }, 350)
+}
+
+function limpiarBusqueda() {
+  if (searchTimer) clearTimeout(searchTimer)
+  search.value = ''
+  page.value = 1
+  void load()
+}
+
 onMounted(() => {
   void load()
 })
@@ -199,6 +220,22 @@ onMounted(() => {
   <div class="page page-twelve-col">
     <h1 class="title span-full">Ver Clientes Findeco</h1>
     <div class="span-full acciones">
+      <IconField icon-position="left" class="buscador">
+        <InputIcon class="pi pi-search" />
+        <InputText
+          v-model="search"
+          placeholder="Buscar por nombre, DNI, teléfono..."
+          fluid
+          @input="onSearchInput"
+          @keyup.enter="onSearchInput"
+        />
+        <InputIcon
+          v-if="search"
+          class="pi pi-times buscador-clear"
+          title="Limpiar búsqueda"
+          @click="limpiarBusqueda"
+        />
+      </IconField>
       <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="load" />
     </div>
 
@@ -413,7 +450,22 @@ onMounted(() => {
   display: flex;
   justify-content: flex-start;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
   margin-bottom: 0.25rem;
+}
+
+.buscador {
+  width: min(28rem, 100%);
+}
+
+.buscador :deep(.p-inputtext) {
+  width: 100%;
+}
+
+.buscador-clear {
+  cursor: pointer;
+  pointer-events: auto;
 }
 
 .estado {
@@ -436,9 +488,13 @@ onMounted(() => {
   grid-column: 1 / -1;
 }
 
+.datatable-clientes :deep(.p-datatable-wrapper) {
+  overflow-x: auto;
+}
+
 .datatable-clientes :deep(table) {
   width: 100%;
-  table-layout: fixed;
+  min-width: 78rem;
 }
 
 .datatable-clientes :deep(.p-datatable-thead > tr > th),

@@ -483,6 +483,24 @@ async function buscarPorCampo(campo: CampoBusqueda) {
   }
 }
 
+function limpiarFormulario() {
+  campos.value = {
+    n: '',
+    cartera: '',
+    cliente: '',
+    identidad: '',
+    telefono: '',
+  }
+  error.value = ''
+  info.value = ''
+  idPrestamoActivo.value = null
+  idClienteActivo.value = null
+  cuotasPlan.value = []
+  abonos.value = []
+  historialPrestamos.value = []
+  pdfEstadoCuentaVisible.value = false
+}
+
 </script>
 
 <template>
@@ -523,6 +541,15 @@ async function buscarPorCampo(campo: CampoBusqueda) {
             <InputText v-model="campos.telefono" class="fila-input" placeholder="Teléfono" :disabled="loading" />
           </div>
           <div class="panel-busqueda-footer">
+            <Button
+              type="button"
+              label="Limpiar"
+              icon="pi pi-times"
+              severity="secondary"
+              outlined
+              :disabled="loading"
+              @click="limpiarFormulario"
+            />
             <Button type="submit" label="Buscar" icon="pi pi-search" :loading="loading" :disabled="loading" />
           </div>
         </form>
@@ -847,6 +874,7 @@ async function buscarPorCampo(campo: CampoBusqueda) {
 .panel-busqueda-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   padding: 0.75rem 0.9rem 0.85rem;
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;

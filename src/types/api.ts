@@ -125,6 +125,8 @@ export interface Prestamo {
   sucursal: string | null
   id_zona?: number | null
   zona?: Zona | null
+  id_cartera?: number | null
+  cartera?: Cartera | null
   ciclos: number
   supervisor: string | null
   asesor: string | null
