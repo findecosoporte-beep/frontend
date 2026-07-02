@@ -11,7 +11,9 @@ import Message from 'primevue/message'
 import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
+import Tag from 'primevue/tag'
 import ToggleSwitch from 'primevue/toggleswitch'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
@@ -21,7 +23,6 @@ import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import { formatDate, formatMoney } from '@/utils/format'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
-  etiquetaReglasTasaSemanal,
   interesTotalPctSemanal,
   periodosDesdePlazo,
   simularPrestamo,
@@ -39,7 +40,41 @@ import type {
 } from '@/types/api'
 
 const toast = useToast()
+const confirm = useConfirm()
 const { canWritePrestamos, canWriteClientes, canManageUsuarios } = usePermissions()
+
+const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
+const prestamosList = ref<Prestamo[]>([])
+const listLoading = ref(false)
+const listError = ref('')
+const listPage = ref(1)
+const listPageSize = ref(20)
+const listTotal = ref(0)
+const listSearch = ref('')
+const listFirst = computed(() => (listPage.value - 1) * listPageSize.value)
+
+const editDialogVisible = ref(false)
+const savingEdit = ref(false)
+const editingPrestamoId = ref<number | null>(null)
+const editForm = ref({
+  numero_prestamo: '',
+  id_cliente: null as number | null,
+  id_asesor: null as number | null,
+  id_cobrador: null as number | null,
+  monto: null as number | null,
+  plazo: 12,
+  tasa_interes: null as number | null,
+  estado: 'activo',
+  forma_pago: 'mensual',
+  forma_desembolso: 'efectivo',
+  comision: 0,
+  fecha_entrega: '',
+  id_cartera: null as number | null,
+  id_zona: null as number | null,
+  producto: '',
+  dias_mora: 0,
+  ciclos: 0,
+})
 
 const rolEtiquetaCorto: Record<string, string> = {
   cobrador: 'Cobrador',
@@ -76,6 +111,7 @@ const savingNuevoAsesor = ref(false)
 const savingNuevoCobrador = ref(false)
 const saving = ref(false)
 const generandoNumero = ref(false)
+const generandoNumeroEdit = ref(false)
 const simulating = ref(false)
 const simulacion = ref<SimulacionPrestamo | null>(null)
 const simulacionError = ref('')
@@ -85,6 +121,13 @@ const wizardStep = ref(1)
 const totalWizardSteps = 4
 
 const estadoOpts = [{ label: 'Activo', value: 'activo' }]
+const estadoEditOpts = [
+  { label: 'Activo', value: 'activo' },
+  { label: 'Pendiente aprobación', value: 'pendiente_aprobacion' },
+  { label: 'Pagado', value: 'pagado' },
+  { label: 'Mora', value: 'mora' },
+  { label: 'Cancelado', value: 'cancelado' },
+]
 const formaPagoOpts = [
   { label: 'Semanal', value: 'semanal' },
   { label: 'Mensual', value: 'mensual' },
@@ -178,19 +221,8 @@ const frecuenciaPlazoResumen = computed(() => {
   return `Meses del plazo: ${plazo}.`
 })
 
-const reglasTasaSemanalHint = computed(() => {
-  if (form.value.forma_pago !== 'semanal') return ''
-  const plazo = Number(form.value.plazo || 0)
-  if (plazo <= 0) {
-    return 'Semanal: 6 sem → 15%; 8 sem → 20%; 10 sem → 25%; 16 sem → 40% (2.5%/sem); otras → 10%/sem.'
-  }
-  return etiquetaReglasTasaSemanal(plazo)
-})
-
 const tasaConversionLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') {
-    const plazo = Number(form.value.plazo || 0)
-    if (plazo > 0) return etiquetaReglasTasaSemanal(plazo)
     return 'La tasa semanal se aplica según el número de semanas.'
   }
   if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
@@ -256,6 +288,15 @@ const clienteCalculoDetalle = computed(() => {
   return clientesById.value[form.value.id_cliente] ?? null
 })
 
+const clienteEditEtiqueta = computed(() => {
+  const id = editForm.value.id_cliente
+  if (id == null) return '—'
+  const c = clientesById.value[id]
+  if (!c) return nombreClienteListado(id)
+  const dni = c.dni?.trim()
+  return dni ? `${c.nombre} — DNI: ${dni}` : (c.nombre?.trim() || nombreClienteListado(id))
+})
+
 const clienteOptionsSinPrestamo = computed(() =>
   clienteOptions.value.filter((c) => !clientesConPrestamoIds.value.has(c.id_cliente)),
 )
@@ -303,6 +344,235 @@ function nombreUsuarioPorId(idUsuario: number | null): string {
   if (idUsuario == null) return ''
   const row = usuarioOptions.value.find((u) => u.id_usuario === idUsuario)
   return row?.nombre ?? ''
+}
+
+function numField(value: string | number | null | undefined): number | null {
+  if (value == null) return null
+  const n = typeof value === 'string' ? Number.parseFloat(value) : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function nombreClienteListado(idCliente: number): string {
+  return clientesById.value[idCliente]?.nombre?.trim() || `Cliente #${idCliente}`
+}
+
+function nombreCarteraListado(p: Prestamo): string {
+  const embebido = p.cartera?.nombre?.trim()
+  if (embebido) return embebido
+  const idC = p.id_cartera ?? null
+  if (idC == null) return '—'
+  return carteraOptions.value.find((c) => c.id_cartera === idC)?.label?.split(' — ')[0] ?? `Cartera #${idC}`
+}
+
+function etiquetaEstadoPrestamo(estado: string): string {
+  return estadoEditOpts.find((o) => o.value === estado)?.label ?? estado
+}
+
+function severityEstadoPrestamo(estado: string) {
+  if (estado === 'activo') return 'success'
+  if (estado === 'mora') return 'danger'
+  if (estado === 'pagado') return 'info'
+  if (estado === 'cancelado') return 'secondary'
+  return 'warn'
+}
+
+function formatTasaPct(value: string | number | null | undefined): string {
+  const n = numField(value)
+  if (n == null) return '—'
+  return `${n.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+}
+
+function resolveCobradorIdFromPrestamo(p: Prestamo): number | null {
+  const nombre = (p.supervisor ?? '').trim().toLowerCase()
+  if (!nombre) return null
+  const hit = cobradorOptions.value.find((u) => u.nombre.trim().toLowerCase() === nombre)
+  return hit?.id_usuario ?? null
+}
+
+async function loadPrestamosList() {
+  listLoading.value = true
+  listError.value = ''
+  try {
+    const params = new URLSearchParams({
+      page: String(listPage.value),
+      page_size: String(listPageSize.value),
+      ordering: '-id_prestamo',
+    })
+    const term = listSearch.value.trim()
+    if (term) params.set('search', term)
+    const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
+    prestamosList.value = data.results
+    listTotal.value = data.count
+  } catch (e) {
+    listError.value = getApiErrorMessage(e)
+    prestamosList.value = []
+    listTotal.value = 0
+  } finally {
+    listLoading.value = false
+  }
+}
+
+function onListPage(event: { page: number; rows: number }) {
+  listPage.value = event.page + 1
+  listPageSize.value = event.rows
+  void loadPrestamosList()
+}
+
+function onListSearch() {
+  listPage.value = 1
+  void loadPrestamosList()
+}
+
+function openEditPrestamo(row: Prestamo) {
+  editingPrestamoId.value = row.id_prestamo
+  editForm.value = {
+    numero_prestamo: row.numero_prestamo?.trim() ?? '',
+    id_cliente: row.id_cliente,
+    id_asesor: row.id_usuario,
+    id_cobrador: resolveCobradorIdFromPrestamo(row),
+    monto: numField(row.monto),
+    plazo: Number(row.plazo) || 1,
+    tasa_interes: numField(row.tasa_interes),
+    estado: row.estado || 'activo',
+    forma_pago: row.forma_pago || 'mensual',
+    forma_desembolso: row.forma_desembolso || 'efectivo',
+    comision: numField(row.comision) ?? 0,
+    fecha_entrega: row.fecha_entrega?.slice(0, 10) ?? '',
+    id_cartera: row.id_cartera ?? null,
+    id_zona: row.id_zona ?? row.cartera?.id_zona ?? null,
+    producto: row.producto?.trim() ?? '',
+    dias_mora: Number(row.dias_mora) || 0,
+    ciclos: Number(row.ciclos) || 0,
+  }
+  editDialogVisible.value = true
+  if (!editForm.value.numero_prestamo.trim()) {
+    void asignarNumeroPrestamoEditado()
+  }
+}
+
+function buildEditPayload() {
+  const asesorNombre = nombreUsuarioPorId(editForm.value.id_asesor)
+  const cobradorNombre = nombreUsuarioPorId(editForm.value.id_cobrador)
+  const cartera = carteraOptions.value.find((c) => c.id_cartera === editForm.value.id_cartera)
+  const fechaVencimiento = calculateFechaVencimiento(
+    editForm.value.fecha_entrega,
+    editForm.value.plazo,
+    editForm.value.forma_pago,
+    cartera?.dia_cobro ?? null,
+  )
+  return {
+    numero_prestamo: editForm.value.numero_prestamo.trim(),
+    id_cliente: editForm.value.id_cliente,
+    id_usuario: editForm.value.id_asesor,
+    monto: editForm.value.monto,
+    plazo: editForm.value.plazo,
+    tasa_interes: editForm.value.tasa_interes == null ? null : Number(editForm.value.tasa_interes.toFixed(2)),
+    estado: editForm.value.estado,
+    forma_pago: editForm.value.forma_pago,
+    forma_desembolso: editForm.value.forma_desembolso,
+    comision: editForm.value.comision == null ? 0 : Number(editForm.value.comision.toFixed(2)),
+    fecha_entrega: editForm.value.fecha_entrega,
+    fecha_vencimiento: fechaVencimiento || null,
+    id_cartera: editForm.value.id_cartera,
+    id_zona: editForm.value.id_zona,
+    asesor: asesorNombre || null,
+    supervisor: cobradorNombre || null,
+    producto: editForm.value.producto.trim() || null,
+    dias_mora: editForm.value.dias_mora,
+    ciclos: editForm.value.ciclos,
+  }
+}
+
+async function numeroPrestamoDuplicado(numero: string, excludeId?: number | null): Promise<boolean> {
+  const v = numero.trim()
+  if (!v) return false
+  const params = new URLSearchParams({ numero_prestamo: v, page_size: '10' })
+  const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
+  return data.results.some(
+    (item) =>
+      item.id_prestamo !== excludeId &&
+      item.numero_prestamo.trim().toLowerCase() === v.toLowerCase(),
+  )
+}
+
+async function saveEditPrestamo() {
+  if (editingPrestamoId.value == null) return
+  const numero = editForm.value.numero_prestamo.trim()
+  if (!numero || editForm.value.id_cliente == null || editForm.value.id_asesor == null) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Datos incompletos',
+      detail: 'Completa número, cliente y asesor.',
+      life: 4000,
+    })
+    return
+  }
+  if (editForm.value.monto == null || editForm.value.tasa_interes == null || !editForm.value.fecha_entrega) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Datos incompletos',
+      detail: 'Completa monto, tasa y fecha de entrega.',
+      life: 4000,
+    })
+    return
+  }
+  if (editForm.value.id_cartera == null) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cartera requerida',
+      detail: 'Selecciona una cartera de cobro.',
+      life: 4000,
+    })
+    return
+  }
+
+  savingEdit.value = true
+  try {
+    if (await numeroPrestamoDuplicado(numero, editingPrestamoId.value)) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Número duplicado',
+        detail: 'Ya existe otro préstamo con ese número.',
+        life: 5000,
+      })
+      return
+    }
+    await api.patch(`/prestamos/${editingPrestamoId.value}/`, buildEditPayload())
+    toast.add({ severity: 'success', summary: 'Préstamo actualizado', life: 3000 })
+    editDialogVisible.value = false
+    await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+function confirmarEliminarPrestamo(row: Prestamo) {
+  confirm.require({
+    message: `¿Eliminar el préstamo ${row.numero_prestamo}? Esta acción no se puede deshacer.`,
+    header: 'Confirmar eliminación',
+    icon: 'pi pi-exclamation-triangle',
+    rejectLabel: 'Cancelar',
+    acceptLabel: 'Eliminar',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        await api.delete(`/prestamos/${row.id_prestamo}/`)
+        toast.add({ severity: 'success', summary: 'Préstamo eliminado', life: 3000 })
+        await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
+      } catch (e) {
+        toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+      }
+    },
+  })
+}
+
+function aplicarReglasSemanalEdit() {
+  if (editForm.value.forma_pago !== 'semanal') return
+  const semanas = Math.trunc(Number(editForm.value.plazo || 0))
+  if (semanas <= 0) return
+  editForm.value.tasa_interes = tasaSemanalNegocio(semanas)
 }
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
@@ -614,24 +884,21 @@ async function loadOptions() {
  */
 async function generarNumeroPrestamo(): Promise<string> {
   try {
-    const { data } = await api.get<Paginated<Prestamo>>(
-      '/prestamos/?ordering=-id_prestamo&page_size=50',
-    )
+    const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
     let maxSeq = 0
     let prefijo = 'PR-'
     let ancho = 5
-    let detectado = false
-    for (const p of data.results) {
+    for (const p of prestamos) {
       const numero = (p.numero_prestamo ?? '').trim()
       const m = numero.match(/^(.*?)(\d+)$/)
       if (!m) continue
-      if (!detectado) {
+      const seq = Number.parseInt(m[2], 10)
+      if (!Number.isFinite(seq)) continue
+      if (seq > maxSeq) {
+        maxSeq = seq
         prefijo = m[1] ?? ''
         ancho = m[2].length
-        detectado = true
       }
-      const seq = Number.parseInt(m[2], 10)
-      if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq
     }
     return `${prefijo}${String(maxSeq + 1).padStart(ancho, '0')}`
   } catch {
@@ -648,8 +915,21 @@ async function asignarNumeroPrestamoGenerado() {
   }
 }
 
+async function asignarNumeroPrestamoEditado() {
+  generandoNumeroEdit.value = true
+  try {
+    editForm.value.numero_prestamo = await generarNumeroPrestamo()
+  } finally {
+    generandoNumeroEdit.value = false
+  }
+}
+
 async function regenerarNumeroPrestamo() {
   await asignarNumeroPrestamoGenerado()
+}
+
+async function regenerarNumeroPrestamoEdit() {
+  await asignarNumeroPrestamoEditado()
 }
 
 async function openCreate() {
@@ -1065,6 +1345,7 @@ async function save() {
     }
     toast.add({ severity: 'success', summary: 'Préstamo creado', life: 3000 })
     dialogVisible.value = false
+    await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
   } finally {
@@ -1075,10 +1356,27 @@ async function save() {
 onMounted(async () => {
   try {
     await loadOptions()
+    await loadPrestamosList()
   } catch (e) {
     toast.add({ severity: 'warn', summary: 'Opciones', detail: getApiErrorMessage(e), life: 5000 })
   }
 })
+
+watch(
+  () => editForm.value.id_cartera,
+  (idCartera) => {
+    if (idCartera == null) return
+    const cartera = carteraOptions.value.find((c) => c.id_cartera === idCartera)
+    if (cartera) editForm.value.id_zona = cartera.id_zona
+  },
+)
+
+watch(
+  () => [editForm.value.forma_pago, editForm.value.plazo] as const,
+  () => {
+    aplicarReglasSemanalEdit()
+  },
+)
 
 watch(
   () => currentSimulationSignature.value,
@@ -1099,6 +1397,94 @@ watch(
       <h1 class="title">Préstamos</h1>
       <Button v-if="canWritePrestamos" label="Nuevo préstamo" icon="pi pi-plus" @click="openCreate" />
     </div>
+
+    <section class="prestamos-listado">
+      <div class="listado-toolbar">
+        <InputText
+          v-model="listSearch"
+          placeholder="Buscar por número, cliente o producto…"
+          class="listado-search"
+          @keyup.enter="onListSearch"
+        />
+        <Button label="Buscar" icon="pi pi-search" severity="secondary" @click="onListSearch" />
+        <Button
+          label="Actualizar"
+          icon="pi pi-refresh"
+          severity="secondary"
+          outlined
+          :loading="listLoading"
+          @click="loadPrestamosList"
+        />
+      </div>
+
+      <Message v-if="listError" severity="error" class="listado-msg" :closable="false">{{ listError }}</Message>
+
+      <DataTable
+        :value="prestamosList"
+        lazy
+        paginator
+        :first="listFirst"
+        :rows="listPageSize"
+        :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
+        :total-records="listTotal"
+        :loading="listLoading"
+        data-key="id_prestamo"
+        responsive-layout="scroll"
+        striped-rows
+        size="small"
+        class="prestamos-tabla"
+        @page="onListPage"
+      >
+        <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ data.numero_prestamo || data.id_prestamo }}</template>
+        </Column>
+        <Column header="Cliente" :style="{ minWidth: '12rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ nombreClienteListado(data.id_cliente) }}</template>
+        </Column>
+        <Column header="Cartera" :style="{ minWidth: '9rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ nombreCarteraListado(data) }}</template>
+        </Column>
+        <Column header="Monto" :style="{ minWidth: '8rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
+        </Column>
+        <Column header="Plazo" :style="{ width: '5rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
+        </Column>
+        <Column header="Tasa" :style="{ width: '6rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
+        </Column>
+        <Column header="Estado" :style="{ width: '8rem' }">
+          <template #body="{ data }: { data: Prestamo }">
+            <Tag :value="etiquetaEstadoPrestamo(data.estado)" :severity="severityEstadoPrestamo(data.estado)" />
+          </template>
+        </Column>
+        <Column header="Entrega" :style="{ minWidth: '8rem' }">
+          <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
+        </Column>
+        <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }">
+          <template #body="{ data }: { data: Prestamo }">
+            <div class="acciones-tabla">
+              <Button
+                icon="pi pi-pencil"
+                severity="secondary"
+                text
+                rounded
+                aria-label="Editar préstamo"
+                @click="openEditPrestamo(data)"
+              />
+              <Button
+                icon="pi pi-trash"
+                severity="danger"
+                text
+                rounded
+                aria-label="Eliminar préstamo"
+                @click="confirmarEliminarPrestamo(data)"
+              />
+            </div>
+          </template>
+        </Column>
+      </DataTable>
+    </section>
 
     <Dialog
       v-model:visible="dialogVisible"
@@ -1286,7 +1672,6 @@ watch(
             </div>
             <small class="hint-text">{{ frecuenciaEfectoLabel }}</small>
             <small v-if="frecuenciaPlazoResumen" class="hint-text">{{ frecuenciaPlazoResumen }}</small>
-            <small v-if="reglasTasaSemanalHint && esSemanal" class="hint-text">{{ reglasTasaSemanalHint }}</small>
           </div>
           <div class="full">
             <label class="lbl">Desembolso</label>
@@ -1326,10 +1711,6 @@ watch(
             <label class="lbl" for="p-zona-asig">Zona asignada</label>
             <InputText id="p-zona-asig" :model-value="zonaAsignadaNombre" readonly fluid />
           </div>
-          <Message v-else-if="form.id_cartera" severity="warn" class="full" :closable="false">
-            Esta cartera no tiene zona vinculada. Asigna día y zona en catálogo de zonas para que aparezca en la hoja
-            de cobros por territorio.
-          </Message>
           <div class="field-block">
             <label class="lbl" for="p-fe">Fecha inicio del préstamo</label>
             <InputText id="p-fe" v-model="form.fecha_entrega" type="date" fluid />
@@ -1476,6 +1857,156 @@ watch(
           :disabled="!canSave"
           @click="save"
         />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="editDialogVisible"
+      header="Editar préstamo"
+      modal
+      class="prestamo-dialog"
+      :style="{ width: 'min(72rem, 98vw)' }"
+    >
+      <div class="form-grid">
+        <div class="full numero-prestamo-wrap">
+          <label class="lbl" for="ep-num">Número préstamo</label>
+          <div class="cliente-select-row">
+            <InputText
+              id="ep-num"
+              :model-value="generandoNumeroEdit ? 'Generando…' : editForm.numero_prestamo"
+              readonly
+              fluid
+              class="cliente-select"
+            />
+            <Button
+              type="button"
+              icon="pi pi-refresh"
+              label="Regenerar"
+              severity="secondary"
+              outlined
+              class="cliente-add-btn"
+              :loading="generandoNumeroEdit"
+              aria-label="Regenerar número de préstamo"
+              @click="regenerarNumeroPrestamoEdit"
+            />
+          </div>
+          <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+        </div>
+        <div>
+          <label class="lbl" for="ep-estado">Estado</label>
+          <Select
+            id="ep-estado"
+            v-model="editForm.estado"
+            :options="estadoEditOpts"
+            option-label="label"
+            option-value="value"
+            fluid
+          />
+        </div>
+        <div class="full">
+          <label class="lbl" for="ep-cliente">Cliente</label>
+          <InputText id="ep-cliente" :model-value="clienteEditEtiqueta" readonly fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-asesor">Asesor</label>
+          <Select
+            id="ep-asesor"
+            v-model="editForm.id_asesor"
+            :options="asesorOptions"
+            option-label="label"
+            option-value="id_usuario"
+            filter
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-cobrador">Cobrador</label>
+          <Select
+            id="ep-cobrador"
+            v-model="editForm.id_cobrador"
+            :options="cobradorOptions"
+            option-label="label"
+            option-value="id_usuario"
+            filter
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-cartera">Cartera</label>
+          <Select
+            id="ep-cartera"
+            v-model="editForm.id_cartera"
+            :options="carteraOptions"
+            option-label="label"
+            option-value="id_cartera"
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-monto">Monto</label>
+          <InputNumber id="ep-monto" v-model="editForm.monto" mode="currency" currency="HNL" locale="es-HN" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-plazo">{{ editForm.forma_pago === 'semanal' ? 'Plazo (semanas)' : 'Plazo (meses)' }}</label>
+          <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-tasa">{{ editForm.forma_pago === 'semanal' ? 'Tasa semanal %' : 'Tasa mensual %' }}</label>
+          <InputNumber
+            id="ep-tasa"
+            v-model="editForm.tasa_interes"
+            :min-fraction-digits="2"
+            :max-fraction-digits="2"
+            :disabled="editForm.forma_pago === 'semanal'"
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-forma-pago">Forma de pago</label>
+          <Select
+            id="ep-forma-pago"
+            v-model="editForm.forma_pago"
+            :options="formaPagoOpts"
+            option-label="label"
+            option-value="value"
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-desembolso">Forma desembolso</label>
+          <Select
+            id="ep-desembolso"
+            v-model="editForm.forma_desembolso"
+            :options="formaDesOpts"
+            option-label="label"
+            option-value="value"
+            fluid
+          />
+        </div>
+        <div>
+          <label class="lbl" for="ep-comision">Comisión</label>
+          <InputNumber id="ep-comision" v-model="editForm.comision" mode="currency" currency="HNL" locale="es-HN" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-entrega">Fecha entrega</label>
+          <InputText id="ep-entrega" v-model="editForm.fecha_entrega" type="date" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-producto">Producto</label>
+          <InputText id="ep-producto" v-model="editForm.producto" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-mora">Días mora</label>
+          <InputNumber id="ep-mora" v-model="editForm.dias_mora" :min="0" fluid />
+        </div>
+        <div>
+          <label class="lbl" for="ep-ciclos">Ciclos</label>
+          <InputNumber id="ep-ciclos" v-model="editForm.ciclos" :min="0" fluid />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="savingEdit" @click="editDialogVisible = false" />
+        <Button label="Guardar cambios" icon="pi pi-check" :loading="savingEdit" @click="saveEditPrestamo" />
       </template>
     </Dialog>
 
@@ -1661,6 +2192,42 @@ watch(
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 1rem;
+}
+
+.prestamos-listado {
+  margin-bottom: 1.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+}
+
+.listado-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.listado-search {
+  flex: 1 1 14rem;
+  min-width: min(100%, 14rem);
+}
+
+.listado-msg {
+  margin-bottom: 0.75rem;
+}
+
+.prestamos-tabla :deep(.p-datatable-wrapper) {
+  border-radius: 0.45rem;
+}
+
+.acciones-tabla {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
 }
 
 .title {

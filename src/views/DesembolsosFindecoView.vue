@@ -4,11 +4,18 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
+import ProgressSpinner from 'primevue/progressspinner'
 import Select from 'primevue/select'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import {
+  descargarDesembolsosFindecoPdf,
+  generateDesembolsosFindecoPdf,
+  type DesembolsosFindecoPdfData,
+} from '@/utils/desembolsosFindecoPdf'
 import { formatDate, formatMoney } from '@/utils/format'
 import { totalInteresDesdeCondiciones } from '@/utils/prestamoCalc'
 import type { Cartera, Cliente, Paginated, Prestamo } from '@/types/api'
@@ -27,6 +34,13 @@ const diaFiltro = ref<number | null>(null)
 const carterasCatalogo = ref<Cartera[]>([])
 const consultaHecha = ref(false)
 const clientesNombrePorId = ref<Record<number, string>>({})
+const pdfModalVisible = ref(false)
+const pdfLoading = ref(false)
+const pdfError = ref('')
+const pdfUrl = ref<string | null>(null)
+const pdfBlob = ref<Blob | null>(null)
+const pdfTitulo = ref('REPORTE DE DESEMBOLSOS')
+const pdfFrameRef = ref<HTMLIFrameElement | null>(null)
 
 const MESES: { label: string; value: number | null }[] = [
   { label: 'Todos los meses', value: null },
@@ -74,6 +88,11 @@ function montoPrestamo(p: Prestamo): number {
 
 function nombreCliente(id: number): string {
   return clientesNombrePorId.value[id]?.trim() || '—'
+}
+
+function codigoPrestamo(p: Prestamo): string {
+  const codigo = (p.numero_prestamo ?? '').trim()
+  return codigo || String(p.id_prestamo)
 }
 
 function parsePartesFecha(iso: string | null | undefined): { anio: number; mes: number; dia: number } | null {
@@ -356,14 +375,6 @@ async function buscarDesembolsos() {
   }
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
 function fechaReporteEncabezado(): string {
   const d = new Date()
   const dd = String(d.getDate()).padStart(2, '0')
@@ -372,155 +383,105 @@ function fechaReporteEncabezado(): string {
   return `${dd}/${mm}/${yy}`
 }
 
-function imprimirReporte() {
-  if (bloquesPorCartera.value.length === 0) return
+function carteraTituloReporte(): string {
+  return carteraFiltroId.value == null
+    ? 'Todas las carteras'
+    : opcionesCarteraFiltro.value.find((c) => c.value === carteraFiltroId.value)?.label ?? 'Cartera'
+}
 
-  const carteraTitulo =
-    carteraFiltroId.value == null
-      ? 'Todas las carteras'
-      : opcionesCarteraFiltro.value.find((c) => c.value === carteraFiltroId.value)?.label ?? 'Cartera'
-
-  const resumenCarteraRows = bloquesPorCartera.value
-    .map(
-      (b) => `<tr>
-        <td>${escapeHtml(b.nombreCartera)}</td>
-        <td style="text-align:right">${b.cantidad}</td>
-        <td style="text-align:right">${escapeHtml(formatMoney(b.montoTotal))}</td>
-        <td style="text-align:right">${escapeHtml(formatMoney(b.interesTotal))}</td>
-      </tr>`,
-    )
-    .join('')
-
-  const detalleCarteras = bloquesPorCartera.value
-    .map((bloque) => {
-      const filasFecha = bloque.porFecha
-        .map(
-          (f) => `<tr>
-            <td>${escapeHtml(formatDate(f.fecha))}</td>
-            <td style="text-align:right">${f.cantidad}</td>
-            <td style="text-align:right">${escapeHtml(formatMoney(f.montoTotal))}</td>
-            <td style="text-align:right">${escapeHtml(formatMoney(f.interesTotal))}</td>
-          </tr>`,
-        )
-        .join('')
-
-      const filasDetalle = bloque.prestamos
-        .map((p, i) => {
-          const interes = totalInteresDesdePrestamo(p)
-          return `<tr>
-            <td style="text-align:right">${i + 1}</td>
-            <td>${escapeHtml(nombreCliente(p.id_cliente))}</td>
-            <td>${escapeHtml(formatDate(p.fecha_entrega))}</td>
-            <td style="text-align:right">${escapeHtml(formatMoney(p.monto))}</td>
-            <td style="text-align:right">${escapeHtml(formatTasaPct(p.tasa_interes))}</td>
-            <td style="text-align:right">${p.plazo}</td>
-            <td style="text-align:right">${escapeHtml(formatMoney(interes))}</td>
-          </tr>`
-        })
-        .join('')
-
-      return `
-        <h2>${escapeHtml(bloque.nombreCartera)}</h2>
-        <h3>Desglose por día de entrega</h3>
-        <table class="t">
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th style="text-align:right">Préstamos</th>
-              <th style="text-align:right">Monto</th>
-              <th style="text-align:right">Interés</th>
-            </tr>
-          </thead>
-          <tbody>${filasFecha}</tbody>
-        </table>
-        <h3>Detalle</h3>
-        <table class="t">
-          <thead>
-            <tr>
-              <th>N</th>
-              <th>Nombre</th>
-              <th>Entrega</th>
-              <th>Monto</th>
-              <th>Tasa</th>
-              <th>Plazo</th>
-              <th>Interés</th>
-            </tr>
-          </thead>
-          <tbody>${filasDetalle}</tbody>
-        </table>`
-    })
-    .join('')
-
+function construirDatosPdf(): DesembolsosFindecoPdfData {
   const fechaEnc = fechaReporteEncabezado()
-  const tituloImpresion = `REPORTE DE DESEMBOLSOS ${fechaEnc}`
+  const titulo = `REPORTE DE DESEMBOLSOS ${fechaEnc}`
   const { cantidad, montoTotal, interesTotal } = totalesGenerales.value
 
-  const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(tituloImpresion)}</title>
-  <style>
-    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; padding: 1.25rem; color: #0f172a; }
-    .print-encabezado {
-      border-top: 1px solid #94a3b8;
-      border-bottom: 1px solid #94a3b8;
-      background: #e8edf2;
-      padding: 0.65rem 1rem;
-      margin: 0 0 1rem;
-      text-align: center;
-    }
-    .print-encabezado h1 {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 800;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-    h2 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.25rem; }
-    h3 { font-size: 0.85rem; margin: 0.85rem 0 0.35rem; color: #334155; }
-    table.t { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 0.75rem; }
-    table.t th, table.t td { border: 1px solid #cbd5e1; padding: 4px 6px; }
-    table.t th { background: #f1f5f9; text-align: left; text-transform: uppercase; font-size: 10px; }
-    .meta { color: #64748b; font-size: 12px; margin-bottom: 1rem; }
-  </style>
-</head>
-<body>
-  <header class="print-encabezado"><h1>${escapeHtml(tituloImpresion)}</h1></header>
-  <p class="meta">
-    Cartera: ${escapeHtml(carteraTitulo)} · Periodo: ${escapeHtml(etiquetaPeriodo.value)} ·
-    Préstamos: ${cantidad} · Monto: ${escapeHtml(formatMoney(montoTotal))} · Interés: ${escapeHtml(formatMoney(interesTotal))}
-  </p>
-  <h2>Resumen por cartera</h2>
-  <table class="t">
-    <thead>
-      <tr>
-        <th>Cartera</th>
-        <th style="text-align:right">Préstamos</th>
-        <th style="text-align:right">Monto</th>
-        <th style="text-align:right">Interés</th>
-      </tr>
-    </thead>
-    <tbody>${resumenCarteraRows}</tbody>
-  </table>
-  ${detalleCarteras}
-</body>
-</html>`
+  return {
+    titulo,
+    carteraTitulo: carteraTituloReporte(),
+    etiquetaPeriodo: etiquetaPeriodo.value,
+    totales: {
+      cantidad,
+      monto: formatMoney(montoTotal),
+      interes: formatMoney(interesTotal),
+    },
+    bloques: bloquesPorCartera.value.map((bloque) => ({
+      nombreCartera: bloque.nombreCartera,
+      cantidad: bloque.cantidad,
+      montoTotal: formatMoney(bloque.montoTotal),
+      interesTotal: formatMoney(bloque.interesTotal),
+      porFecha: bloque.porFecha.map((f) => ({
+        fecha: formatDate(f.fecha),
+        cantidad: f.cantidad,
+        monto: formatMoney(f.montoTotal),
+        interes: formatMoney(f.interesTotal),
+      })),
+      prestamos: bloque.prestamos.map((p, i) => ({
+        numero: i + 1,
+        codigo: codigoPrestamo(p),
+        cliente: nombreCliente(p.id_cliente),
+        fechaEntrega: formatDate(p.fecha_entrega),
+        monto: formatMoney(p.monto),
+        tasa: formatTasaPct(p.tasa_interes),
+        plazo: String(p.plazo),
+        interes: formatMoney(totalInteresDesdePrestamo(p)),
+      })),
+    })),
+  }
+}
 
-  const w = window.open('', '_blank', 'width=1100,height=820')
-  if (!w) return
-  w.document.open()
-  w.document.write(html)
-  w.document.close()
-  w.focus()
-  w.print()
+function revocarPdfUrl() {
+  if (pdfUrl.value) {
+    URL.revokeObjectURL(pdfUrl.value)
+    pdfUrl.value = null
+  }
+  pdfBlob.value = null
+}
+
+async function imprimirReporte() {
+  if (bloquesPorCartera.value.length === 0) return
+
+  pdfModalVisible.value = true
+  pdfLoading.value = true
+  pdfError.value = ''
+  revocarPdfUrl()
+
+  try {
+    const datos = construirDatosPdf()
+    pdfTitulo.value = datos.titulo
+    const blob = generateDesembolsosFindecoPdf(datos)
+    pdfBlob.value = blob
+    pdfUrl.value = URL.createObjectURL(blob)
+  } catch {
+    pdfError.value = 'No se pudo generar el PDF del reporte.'
+  } finally {
+    pdfLoading.value = false
+  }
+}
+
+function descargarPdfModal() {
+  if (!pdfBlob.value) return
+  descargarDesembolsosFindecoPdf(pdfBlob.value, pdfTitulo.value)
+}
+
+function imprimirDesdeModal() {
+  const frame = pdfFrameRef.value
+  if (!frame?.contentWindow) return
+  frame.contentWindow.focus()
+  frame.contentWindow.print()
 }
 
 onMounted(() => {
   void Promise.all([cargarClientes(), cargarCarterasCatalogo()])
 })
 
+watch(pdfModalVisible, (abierto) => {
+  if (!abierto) {
+    revocarPdfUrl()
+    pdfError.value = ''
+  }
+})
+
 onBeforeUnmount(() => {
+  revocarPdfUrl()
   carteraFiltroId.value = null
   prestamos.value = []
   carterasCatalogo.value = []
@@ -539,10 +500,6 @@ onBeforeUnmount(() => {
     </header>
 
     <h1 class="title span-full">Reporte de desembolsos por cartera</h1>
-    <p class="intro span-full">
-      Consulta los préstamos entregados agrupados por <strong>cartera</strong> y desglosados por
-      <strong>día de entrega</strong>. Filtra por año, mes y día.
-    </p>
 
     <form
       class="span-full barra-filtros"
@@ -699,6 +656,9 @@ onBeforeUnmount(() => {
             <Column header="N" :style="{ width: '2.75rem' }">
               <template #body="{ index }: { index: number }">{{ (index ?? 0) + 1 }}</template>
             </Column>
+            <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
+              <template #body="{ data }: { data: Prestamo }">{{ codigoPrestamo(data) }}</template>
+            </Column>
             <Column header="Nombre" :style="{ minWidth: '14rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ nombreCliente(data.id_cliente) }}</template>
             </Column>
@@ -723,6 +683,48 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </template>
+
+    <Dialog
+      v-model:visible="pdfModalVisible"
+      :header="pdfTitulo"
+      modal
+      :style="{ width: 'min(58rem, 96vw)' }"
+      :content-style="{ padding: 0, overflow: 'hidden' }"
+    >
+      <div class="pdf-modal-body">
+        <div v-if="pdfLoading" class="pdf-modal-loading">
+          <ProgressSpinner style="width: 2.5rem; height: 2.5rem" stroke-width="4" />
+          <span>Generando PDF…</span>
+        </div>
+        <p v-else-if="pdfError" class="pdf-modal-error">{{ pdfError }}</p>
+        <iframe
+          v-else-if="pdfUrl"
+          ref="pdfFrameRef"
+          :src="pdfUrl"
+          class="pdf-modal-frame"
+          title="Reporte de desembolsos PDF"
+        />
+      </div>
+      <template #footer>
+        <Button
+          v-if="pdfUrl"
+          label="Imprimir"
+          icon="pi pi-print"
+          severity="secondary"
+          outlined
+          @click="imprimirDesdeModal"
+        />
+        <Button
+          v-if="pdfUrl"
+          label="Descargar"
+          icon="pi pi-download"
+          severity="secondary"
+          outlined
+          @click="descargarPdfModal"
+        />
+        <Button label="Cerrar" severity="secondary" text @click="pdfModalVisible = false" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -782,13 +784,6 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 1.25rem;
   font-weight: 600;
-}
-
-.intro {
-  margin: 0;
-  color: #64748b;
-  font-size: 0.92rem;
-  line-height: 1.45;
 }
 
 .barra-filtros {
@@ -907,5 +902,36 @@ onBeforeUnmount(() => {
 
 .datatable-desembolso :deep(.p-datatable-tbody > tr > td) {
   font-size: 0.875rem;
+}
+
+.pdf-modal-body {
+  min-height: min(78vh, 42rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+}
+
+.pdf-modal-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.pdf-modal-error {
+  margin: 1rem;
+  color: #b91c1c;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.pdf-modal-frame {
+  width: 100%;
+  height: min(78vh, 42rem);
+  border: 0;
+  background: #fff;
 }
 </style>
