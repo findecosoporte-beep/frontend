@@ -214,6 +214,7 @@ const estadoCuentaResumen = ref({
 })
 const cajaForm = ref({
   id_prestamo: null as number | null,
+  numero_prestamo: '',
   cliente: '',
   dni: '',
   id_cartera: null as number | null,
@@ -776,8 +777,18 @@ function ensureSearchContextFromPrestamo(prestamoId: number) {
   }
 }
 
+function resolverNumeroPrestamoCaja(idPrestamo: number, numero?: string | null): string {
+  const directo = (numero ?? '').trim()
+  if (directo) return directo
+  const meta = prestamoMeta.value.find((p) => p.id_prestamo === idPrestamo)
+  const desdeMeta = meta?.numero_prestamo?.trim()
+  if (desdeMeta) return desdeMeta
+  return String(idPrestamo)
+}
+
 function abrirDialogoCaja(payload: {
   id_prestamo: number
+  numero_prestamo?: string | null
   cliente: string
   dni: string
   id_cartera?: number | null
@@ -838,6 +849,7 @@ function abrirDialogoCaja(payload: {
   const fechaPago = fechaCuota
   cajaForm.value = {
     id_prestamo: payload.id_prestamo,
+    numero_prestamo: resolverNumeroPrestamoCaja(payload.id_prestamo, payload.numero_prestamo),
     cliente: payload.cliente,
     dni: payload.dni,
     id_cartera: idCartera,
@@ -902,6 +914,7 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
   const dni = await resolverDniPrestamo(fila.id_prestamo)
   abrirDialogoCaja({
     id_prestamo: fila.id_prestamo,
+    numero_prestamo: fila.numero_prestamo,
     cliente: fila.nombre_cliente,
     dni,
     id_cartera: fila.id_cartera ?? null,
@@ -1388,13 +1401,14 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
   }
   let fechaCuota: string | undefined
   let montoPendiente: number | undefined
+  let filaReporte: ReporteIntegracionFila | undefined
   try {
     const { data } = await api.get<ReporteIntegracionResponse>(
       `/prestamos/reporte-integracion/?id_prestamo=${pid}&all=1`,
     )
-    const fila = data.filas?.[0]
-    fechaCuota = fila?.cuota_siguiente_fecha ?? undefined
-    if (fila) montoPendiente = montoPendienteDesdeFilaReporte(fila)
+    filaReporte = data.filas?.[0]
+    fechaCuota = filaReporte?.cuota_siguiente_fecha ?? undefined
+    if (filaReporte) montoPendiente = montoPendienteDesdeFilaReporte(filaReporte)
   } catch {
     fechaCuota = undefined
     montoPendiente = undefined
@@ -1402,6 +1416,7 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
 
   abrirDialogoCaja({
     id_prestamo: pid,
+    numero_prestamo: filaReporte?.numero_prestamo,
     cliente: clienteNombre,
     dni: dniResolved,
     ...carteraInfo,
@@ -2171,7 +2186,7 @@ onMounted(async () => {
           <p v-else-if="cajaCarteraAdvertencia" class="caja-cartera-hint">{{ cajaCarteraAdvertencia }}</p>
           <div class="result-field">
             <label class="result-label" for="cj-prestamo">Préstamo</label>
-            <InputText id="cj-prestamo" :model-value="String(cajaForm.id_prestamo ?? '')" readonly />
+            <InputText id="cj-prestamo" :model-value="cajaForm.numero_prestamo" readonly />
           </div>
           <div class="result-field">
             <label class="result-label" for="cj-cuota">Número de cuota</label>
