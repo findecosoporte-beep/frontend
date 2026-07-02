@@ -10,70 +10,54 @@ import Select from 'primevue/select'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
+import { totalInteresDesdeCondiciones } from '@/utils/prestamoCalc'
 import type { Cartera, Cliente, Paginated, Prestamo } from '@/types/api'
 
 const PAGE_SIZE_FETCH = 100
 
-/** ID único en cada visita a la pantalla: el navegador no reutiliza sugerencias ligadas a un `id`/`name` fijo. */
 const carteraFieldDomId = `cartera-findeco-${crypto.randomUUID()}`
 
 const loading = ref(false)
 const error = ref('')
 const prestamos = ref<Prestamo[]>([])
 const carteraFiltroId = ref<number | null>(null)
-/** Catálogo de carteras (API); el listado solo se pide por `id_cartera` al consultar. */
+const anioFiltro = ref(new Date().getFullYear())
+const mesFiltro = ref<number | null>(null)
+const diaFiltro = ref<number | null>(null)
 const carterasCatalogo = ref<Cartera[]>([])
-/** True después de ejecutar una búsqueda por cartera (aunque el resultado sea vacío). */
 const consultaHecha = ref(false)
 const clientesNombrePorId = ref<Record<number, string>>({})
 
-/** Redondeo a 2 decimales alineado con el API (interés simple por periodo). */
+const MESES: { label: string; value: number | null }[] = [
+  { label: 'Todos los meses', value: null },
+  { label: 'Enero', value: 1 },
+  { label: 'Febrero', value: 2 },
+  { label: 'Marzo', value: 3 },
+  { label: 'Abril', value: 4 },
+  { label: 'Mayo', value: 5 },
+  { label: 'Junio', value: 6 },
+  { label: 'Julio', value: 7 },
+  { label: 'Agosto', value: 8 },
+  { label: 'Septiembre', value: 9 },
+  { label: 'Octubre', value: 10 },
+  { label: 'Noviembre', value: 11 },
+  { label: 'Diciembre', value: 12 },
+]
+
 function roundMoney2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
-/** Igual que `SimulacionPrestamoView` en Django: tasa nominal mensual (%) → tasa del periodo. */
-function periodicRateFromNominal(tasaNominalPct: number, formaPago: string): number {
-  if (formaPago === 'semanal') return tasaNominalPct / 4
-  if (formaPago === 'quincenal') return tasaNominalPct / 2
-  return tasaNominalPct
-}
-
-function periodsFromMonths(plazoMeses: number, formaPago: string): number {
-  if (formaPago === 'semanal') return plazoMeses * 4
-  if (formaPago === 'quincenal') return plazoMeses * 2
-  return plazoMeses
-}
-
-/** Interés total del crédito (suma de intereses por periodo), misma lógica que `POST /prestamos/simular/`. */
 function totalInteresDesdePrestamo(p: Prestamo): number {
   const monto = typeof p.monto === 'string' ? Number.parseFloat(p.monto) : Number(p.monto)
   const tasa =
     typeof p.tasa_interes === 'string' ? Number.parseFloat(String(p.tasa_interes)) : Number(p.tasa_interes)
-  const plazoMeses = Math.trunc(Number(p.plazo))
+  const plazo = Math.trunc(Number(p.plazo))
   const formaPago = p.forma_pago || 'mensual'
 
-  if (!Number.isFinite(monto) || !Number.isFinite(tasa) || plazoMeses <= 0) return 0
+  if (!Number.isFinite(monto) || !Number.isFinite(tasa) || plazo <= 0) return 0
 
-  const periodos = periodsFromMonths(plazoMeses, formaPago)
-  if (periodos <= 0) return 0
-
-  const tasaPeriodica = periodicRateFromNominal(tasa, formaPago) / 100
-  const capitalFijo = roundMoney2(monto / periodos)
-  const interesFijo = roundMoney2(monto * tasaPeriodica)
-  let saldo = monto
-  let totalInteres = 0
-
-  for (let periodo = 1; periodo <= periodos; periodo++) {
-    const interes = interesFijo
-    let capital = capitalFijo
-    if (periodo === periodos) capital = saldo
-    saldo = roundMoney2(saldo - capital)
-    if (saldo < 0) saldo = 0
-    totalInteres += interes
-  }
-
-  return roundMoney2(totalInteres)
+  return totalInteresDesdeCondiciones(monto, plazo, formaPago, tasa)
 }
 
 function formatTasaPct(value: string | number | null | undefined): string {
@@ -83,55 +67,205 @@ function formatTasaPct(value: string | number | null | undefined): string {
   return `${n.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }
 
+function montoPrestamo(p: Prestamo): number {
+  const m = typeof p.monto === 'string' ? Number.parseFloat(p.monto) : Number(p.monto)
+  return Number.isFinite(m) ? m : 0
+}
+
 function nombreCliente(id: number): string {
   return clientesNombrePorId.value[id]?.trim() || '—'
 }
 
-const prestamosOrdenados = computed(() =>
-  [...prestamos.value].sort((a, b) =>
-    a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true }),
-  ),
-)
+function parsePartesFecha(iso: string | null | undefined): { anio: number; mes: number; dia: number } | null {
+  const t = (iso ?? '').trim().slice(0, 10)
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t)
+  if (!m) return null
+  return {
+    anio: Number.parseInt(m[1], 10),
+    mes: Number.parseInt(m[2], 10),
+    dia: Number.parseInt(m[3], 10),
+  }
+}
 
-const nombreCarteraSeleccionada = computed(() => {
-  if (carteraFiltroId.value == null) return ''
-  const c = carterasCatalogo.value.find((x) => x.id_cartera === carteraFiltroId.value)
-  return c?.nombre?.trim() ?? ''
+function prestamoCoincideFiltroFecha(p: Prestamo): boolean {
+  const partes = parsePartesFecha(p.fecha_entrega)
+  if (!partes) return false
+  if (partes.anio !== anioFiltro.value) return false
+  if (mesFiltro.value != null && partes.mes !== mesFiltro.value) return false
+  if (diaFiltro.value != null && partes.dia !== diaFiltro.value) return false
+  return true
+}
+
+function nombreCarteraPrestamo(p: Prestamo): string {
+  const embebido = p.cartera?.nombre?.trim()
+  if (embebido) return embebido
+  const idC = p.id_cartera ?? null
+  if (idC == null) return 'Sin cartera'
+  return carterasCatalogo.value.find((c) => c.id_cartera === idC)?.nombre?.trim() || `Cartera #${idC}`
+}
+
+function claveCartera(p: Prestamo): string {
+  const idC = p.id_cartera ?? null
+  return idC == null ? 'sin-cartera' : String(idC)
+}
+
+const opcionesAnio = computed(() => {
+  const actual = new Date().getFullYear()
+  const items: { label: string; value: number }[] = []
+  for (let y = actual + 1; y >= actual - 10; y -= 1) {
+    items.push({ label: String(y), value: y })
+  }
+  return items
 })
 
-const opcionesCarteraFiltro = computed(() =>
-  carterasCatalogo.value
+const opcionesDia = computed(() => {
+  const items: { label: string; value: number | null }[] = [{ label: 'Todos los días', value: null }]
+  if (mesFiltro.value == null) return items
+  const dias = diasEnMes(anioFiltro.value, mesFiltro.value)
+  for (let d = 1; d <= dias; d += 1) {
+    items.push({ label: String(d), value: d })
+  }
+  return items
+})
+
+function diasEnMes(anio: number, mes: number): number {
+  return new Date(anio, mes, 0).getDate()
+}
+
+const opcionesCarteraFiltro = computed(() => [
+  { label: 'Todas las carteras', value: null as number | null },
+  ...carterasCatalogo.value
     .slice()
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
     .map((c) => ({
       label: c.nombre,
       value: c.id_cartera,
     })),
+])
+
+const etiquetaPeriodo = computed(() => {
+  const partes = [String(anioFiltro.value)]
+  if (mesFiltro.value != null) {
+    const mesLabel = MESES.find((m) => m.value === mesFiltro.value)?.label ?? String(mesFiltro.value)
+    partes.push(mesLabel)
+  }
+  if (diaFiltro.value != null) partes.push(`día ${diaFiltro.value}`)
+  return partes.join(' · ')
+})
+
+interface FilaPorFecha {
+  fecha: string
+  cantidad: number
+  montoTotal: number
+  interesTotal: number
+}
+
+interface BloqueCartera {
+  clave: string
+  idCartera: number | null
+  nombreCartera: string
+  cantidad: number
+  montoTotal: number
+  interesTotal: number
+  porFecha: FilaPorFecha[]
+  prestamos: Prestamo[]
+}
+
+const prestamosFiltrados = computed(() =>
+  prestamos.value.filter((p) => prestamoCoincideFiltroFecha(p)),
 )
+
+const bloquesPorCartera = computed((): BloqueCartera[] => {
+  const map = new Map<string, BloqueCartera>()
+
+  for (const p of prestamosFiltrados.value) {
+    const clave = claveCartera(p)
+    let bloque = map.get(clave)
+    if (!bloque) {
+      bloque = {
+        clave,
+        idCartera: p.id_cartera ?? null,
+        nombreCartera: nombreCarteraPrestamo(p),
+        cantidad: 0,
+        montoTotal: 0,
+        interesTotal: 0,
+        porFecha: [],
+        prestamos: [],
+      }
+      map.set(clave, bloque)
+    }
+    bloque.cantidad += 1
+    bloque.montoTotal = roundMoney2(bloque.montoTotal + montoPrestamo(p))
+    bloque.interesTotal = roundMoney2(bloque.interesTotal + totalInteresDesdePrestamo(p))
+    bloque.prestamos.push(p)
+  }
+
+  const bloques = [...map.values()].sort((a, b) => a.nombreCartera.localeCompare(b.nombreCartera, 'es'))
+
+  for (const bloque of bloques) {
+    const porFechaMap = new Map<string, FilaPorFecha>()
+    for (const p of bloque.prestamos) {
+      const fecha = (p.fecha_entrega ?? '').slice(0, 10)
+      let fila = porFechaMap.get(fecha)
+      if (!fila) {
+        fila = { fecha, cantidad: 0, montoTotal: 0, interesTotal: 0 }
+        porFechaMap.set(fecha, fila)
+      }
+      fila.cantidad += 1
+      fila.montoTotal = roundMoney2(fila.montoTotal + montoPrestamo(p))
+      fila.interesTotal = roundMoney2(fila.interesTotal + totalInteresDesdePrestamo(p))
+    }
+    bloque.porFecha = [...porFechaMap.values()].sort((a, b) => a.fecha.localeCompare(b.fecha))
+    bloque.prestamos.sort((a, b) => {
+      const fa = (a.fecha_entrega ?? '').localeCompare(b.fecha_entrega ?? '')
+      if (fa !== 0) return fa
+      return a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true })
+    })
+  }
+
+  return bloques
+})
 
 const totalesGenerales = computed(() => {
   let monto = 0
-  for (const p of prestamosOrdenados.value) {
-    const m = typeof p.monto === 'string' ? Number.parseFloat(p.monto) : Number(p.monto)
-    if (!Number.isNaN(m)) monto += m
+  let interes = 0
+  for (const p of prestamosFiltrados.value) {
+    monto = roundMoney2(monto + montoPrestamo(p))
+    interes = roundMoney2(interes + totalInteresDesdePrestamo(p))
   }
-  return { cantidad: prestamosOrdenados.value.length, montoTotal: monto }
+  return {
+    cantidad: prestamosFiltrados.value.length,
+    montoTotal: monto,
+    interesTotal: interes,
+  }
 })
 
-/** Suma de interés total (columna Interés) de todos los préstamos en el listado filtrado. */
-const totalesInteresListado = computed(() => {
-  let s = 0
-  for (const p of prestamosOrdenados.value) {
-    s += totalInteresDesdePrestamo(p)
-  }
-  return roundMoney2(s)
-})
+const resumenPorCartera = computed(() =>
+  bloquesPorCartera.value.map((b) => ({
+    nombreCartera: b.nombreCartera,
+    cantidad: b.cantidad,
+    montoTotal: b.montoTotal,
+    interesTotal: b.interesTotal,
+  })),
+)
 
-watch(carteraFiltroId, (v) => {
-  if (v == null) carteraFiltroId.value = null
+watch(carteraFiltroId, () => {
   prestamos.value = []
   consultaHecha.value = false
   error.value = ''
+})
+
+watch(mesFiltro, () => {
+  if (mesFiltro.value == null) diaFiltro.value = null
+  else if (diaFiltro.value != null && diaFiltro.value > diasEnMes(anioFiltro.value, mesFiltro.value)) {
+    diaFiltro.value = null
+  }
+})
+
+watch(anioFiltro, () => {
+  if (mesFiltro.value != null && diaFiltro.value != null) {
+    if (diaFiltro.value > diasEnMes(anioFiltro.value, mesFiltro.value)) diaFiltro.value = null
+  }
 })
 
 async function cargarClientes() {
@@ -183,17 +317,10 @@ async function cargarCarterasCatalogo() {
 
 async function actualizarCatalogoYListado() {
   await cargarCarterasCatalogo()
-  if (carteraFiltroId.value != null) await buscarPrestamosPorCartera()
+  if (consultaHecha.value) await buscarDesembolsos()
 }
 
-/** Trae préstamos de la cartera elegida (`GET /prestamos/?id_cartera=…`). */
-async function buscarPrestamosPorCartera() {
-  const idCartera = carteraFiltroId.value
-  if (idCartera == null || idCartera <= 0) {
-    error.value = 'Selecciona una cartera para consultar.'
-    return
-  }
-
+async function buscarDesembolsos() {
   loading.value = true
   error.value = ''
   prestamos.value = []
@@ -207,8 +334,11 @@ async function buscarPrestamosPorCartera() {
       const params = new URLSearchParams({
         page: String(page),
         page_size: String(PAGE_SIZE_FETCH),
-        id_cartera: String(idCartera),
+        ordering: '-fecha_entrega,-id_prestamo',
       })
+      if (carteraFiltroId.value != null) {
+        params.set('id_cartera', String(carteraFiltroId.value))
+      }
       const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
       total = data.count
       allRows.push(...data.results)
@@ -234,7 +364,6 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/** Fecha de generación del reporte para el encabezado impreso (dd/mm/aa). */
 function fechaReporteEncabezado(): string {
   const d = new Date()
   const dd = String(d.getDate()).padStart(2, '0')
@@ -244,30 +373,87 @@ function fechaReporteEncabezado(): string {
 }
 
 function imprimirReporte() {
-  const lista = prestamosOrdenados.value
-  if (lista.length === 0) return
-  const tituloCartera = nombreCarteraSeleccionada.value || 'Cartera'
-  const { montoTotal } = totalesGenerales.value
+  if (bloquesPorCartera.value.length === 0) return
 
-  const filas = lista
-    .map((p, i) => {
-      const n = i + 1
-      const nombre = nombreCliente(p.id_cliente)
-      const interes = totalInteresDesdePrestamo(p)
-      return `<tr>
-          <td style="text-align:right">${n}</td>
-          <td>${escapeHtml(nombre)}</td>
-          <td>${escapeHtml(formatDate(p.fecha_entrega))}</td>
-          <td style="text-align:right">${escapeHtml(formatMoney(p.monto))}</td>
-          <td style="text-align:right">${escapeHtml(formatTasaPct(p.tasa_interes))}</td>
-          <td style="text-align:right">${p.plazo}</td>
-          <td style="text-align:right">${escapeHtml(formatMoney(interes))}</td>
-        </tr>`
+  const carteraTitulo =
+    carteraFiltroId.value == null
+      ? 'Todas las carteras'
+      : opcionesCarteraFiltro.value.find((c) => c.value === carteraFiltroId.value)?.label ?? 'Cartera'
+
+  const resumenCarteraRows = bloquesPorCartera.value
+    .map(
+      (b) => `<tr>
+        <td>${escapeHtml(b.nombreCartera)}</td>
+        <td style="text-align:right">${b.cantidad}</td>
+        <td style="text-align:right">${escapeHtml(formatMoney(b.montoTotal))}</td>
+        <td style="text-align:right">${escapeHtml(formatMoney(b.interesTotal))}</td>
+      </tr>`,
+    )
+    .join('')
+
+  const detalleCarteras = bloquesPorCartera.value
+    .map((bloque) => {
+      const filasFecha = bloque.porFecha
+        .map(
+          (f) => `<tr>
+            <td>${escapeHtml(formatDate(f.fecha))}</td>
+            <td style="text-align:right">${f.cantidad}</td>
+            <td style="text-align:right">${escapeHtml(formatMoney(f.montoTotal))}</td>
+            <td style="text-align:right">${escapeHtml(formatMoney(f.interesTotal))}</td>
+          </tr>`,
+        )
+        .join('')
+
+      const filasDetalle = bloque.prestamos
+        .map((p, i) => {
+          const interes = totalInteresDesdePrestamo(p)
+          return `<tr>
+            <td style="text-align:right">${i + 1}</td>
+            <td>${escapeHtml(nombreCliente(p.id_cliente))}</td>
+            <td>${escapeHtml(formatDate(p.fecha_entrega))}</td>
+            <td style="text-align:right">${escapeHtml(formatMoney(p.monto))}</td>
+            <td style="text-align:right">${escapeHtml(formatTasaPct(p.tasa_interes))}</td>
+            <td style="text-align:right">${p.plazo}</td>
+            <td style="text-align:right">${escapeHtml(formatMoney(interes))}</td>
+          </tr>`
+        })
+        .join('')
+
+      return `
+        <h2>${escapeHtml(bloque.nombreCartera)}</h2>
+        <h3>Desglose por día de entrega</h3>
+        <table class="t">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th style="text-align:right">Préstamos</th>
+              <th style="text-align:right">Monto</th>
+              <th style="text-align:right">Interés</th>
+            </tr>
+          </thead>
+          <tbody>${filasFecha}</tbody>
+        </table>
+        <h3>Detalle</h3>
+        <table class="t">
+          <thead>
+            <tr>
+              <th>N</th>
+              <th>Nombre</th>
+              <th>Entrega</th>
+              <th>Monto</th>
+              <th>Tasa</th>
+              <th>Plazo</th>
+              <th>Interés</th>
+            </tr>
+          </thead>
+          <tbody>${filasDetalle}</tbody>
+        </table>`
     })
     .join('')
 
   const fechaEnc = fechaReporteEncabezado()
-  const tituloImpresion = `REPORTE DE PRESTAMOS ENTREGADOS ${fechaEnc}`
+  const tituloImpresion = `REPORTE DE DESEMBOLSOS ${fechaEnc}`
+  const { cantidad, montoTotal, interesTotal } = totalesGenerales.value
 
   const html = `<!DOCTYPE html>
 <html lang="es">
@@ -290,50 +476,34 @@ function imprimirReporte() {
       font-weight: 800;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      line-height: 1.35;
-      color: #0f172a;
     }
     h2 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.25rem; }
-    table.t { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 0.5rem; }
+    h3 { font-size: 0.85rem; margin: 0.85rem 0 0.35rem; color: #334155; }
+    table.t { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 0.75rem; }
     table.t th, table.t td { border: 1px solid #cbd5e1; padding: 4px 6px; }
-    table.t th { background: #f1f5f9; text-align: left; text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; font-weight: 700; }
+    table.t th { background: #f1f5f9; text-align: left; text-transform: uppercase; font-size: 10px; }
     .meta { color: #64748b; font-size: 12px; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
-  <header class="print-encabezado" role="banner">
-    <h1>${escapeHtml(tituloImpresion)}</h1>
-  </header>
-  <p class="meta">Cartera: ${escapeHtml(tituloCartera)} · Monto desembolsado (suma): ${escapeHtml(formatMoney(montoTotal))}</p>
+  <header class="print-encabezado"><h1>${escapeHtml(tituloImpresion)}</h1></header>
+  <p class="meta">
+    Cartera: ${escapeHtml(carteraTitulo)} · Periodo: ${escapeHtml(etiquetaPeriodo.value)} ·
+    Préstamos: ${cantidad} · Monto: ${escapeHtml(formatMoney(montoTotal))} · Interés: ${escapeHtml(formatMoney(interesTotal))}
+  </p>
+  <h2>Resumen por cartera</h2>
   <table class="t">
     <thead>
       <tr>
         <th>Cartera</th>
-        <th style="text-align:right">Monto total</th>
+        <th style="text-align:right">Préstamos</th>
+        <th style="text-align:right">Monto</th>
+        <th style="text-align:right">Interés</th>
       </tr>
     </thead>
-    <tbody>
-      <tr>
-        <td>${escapeHtml(tituloCartera)}</td>
-        <td style="text-align:right">${escapeHtml(formatMoney(montoTotal))}</td>
-      </tr>
-    </tbody>
+    <tbody>${resumenCarteraRows}</tbody>
   </table>
-  <h2>${escapeHtml(tituloCartera)}</h2>
-  <table class="t">
-    <thead>
-      <tr>
-        <th>N</th>
-        <th>NOMBRE</th>
-        <th>ENTREGA</th>
-        <th>MONTO</th>
-        <th>TASA</th>
-        <th>PLAZO</th>
-        <th>INTERES</th>
-      </tr>
-    </thead>
-    <tbody>${filas}</tbody>
-  </table>
+  ${detalleCarteras}
 </body>
 </html>`
 
@@ -368,7 +538,11 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <h1 class="title span-full">Reporte de préstamos entregados</h1>
+    <h1 class="title span-full">Reporte de desembolsos por cartera</h1>
+    <p class="intro span-full">
+      Consulta los préstamos entregados agrupados por <strong>cartera</strong> y desglosados por
+      <strong>día de entrega</strong>. Filtra por año, mes y día.
+    </p>
 
     <form
       class="span-full barra-filtros"
@@ -376,36 +550,57 @@ onBeforeUnmount(() => {
       data-lpignore="true"
       data-1p-ignore
       data-bwignore
-      @submit.prevent
+      @submit.prevent="buscarDesembolsos"
     >
-      <div
-        class="cartera-select-wrap"
-        data-lpignore="true"
-        data-1p-ignore
-      >
-        <label class="cartera-select-label" :for="carteraFieldDomId">Cartera</label>
+      <div class="filtro-campo">
+        <label class="filtro-label" :for="carteraFieldDomId">Cartera</label>
         <Select
           :input-id="carteraFieldDomId"
-          :name="carteraFieldDomId"
           v-model="carteraFiltroId"
           :options="opcionesCarteraFiltro"
           option-label="label"
           option-value="value"
-          placeholder="Elige cartera y luego Consultar"
+          placeholder="Todas las carteras"
           show-clear
-          :disabled="opcionesCarteraFiltro.length === 0"
+          fluid
+        />
+      </div>
+      <div class="filtro-campo filtro-campo-corto">
+        <label class="filtro-label" for="anio-findeco">Año</label>
+        <Select
+          id="anio-findeco"
+          v-model="anioFiltro"
+          :options="opcionesAnio"
+          option-label="label"
+          option-value="value"
+          fluid
+        />
+      </div>
+      <div class="filtro-campo filtro-campo-corto">
+        <label class="filtro-label" for="mes-findeco">Mes</label>
+        <Select
+          id="mes-findeco"
+          v-model="mesFiltro"
+          :options="MESES"
+          option-label="label"
+          option-value="value"
+          fluid
+        />
+      </div>
+      <div class="filtro-campo filtro-campo-corto">
+        <label class="filtro-label" for="dia-findeco">Día</label>
+        <Select
+          id="dia-findeco"
+          v-model="diaFiltro"
+          :options="opcionesDia"
+          option-label="label"
+          option-value="value"
+          :disabled="mesFiltro == null"
           fluid
         />
       </div>
       <div class="acciones">
-        <Button
-          label="Consultar"
-          icon="pi pi-search"
-          type="button"
-          :loading="loading"
-          :disabled="carteraFiltroId == null"
-          @click="buscarPrestamosPorCartera"
-        />
+        <Button label="Consultar" icon="pi pi-search" type="submit" :loading="loading" />
         <Button
           label="Actualizar datos"
           icon="pi pi-refresh"
@@ -420,7 +615,7 @@ onBeforeUnmount(() => {
           icon="pi pi-print"
           severity="secondary"
           type="button"
-          :disabled="loading || prestamos.length === 0"
+          :disabled="loading || bloquesPorCartera.length === 0"
           @click="imprimirReporte"
         />
       </div>
@@ -428,65 +623,96 @@ onBeforeUnmount(() => {
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
 
-    <p v-if="loading && carteraFiltroId != null" class="estado span-full">Cargando préstamos de la cartera…</p>
-    <p v-else-if="!loading && opcionesCarteraFiltro.length === 0" class="estado span-full">
-      No hay carteras en el catálogo. Revisa permisos o el endpoint de carteras.
+    <p v-if="loading" class="estado span-full">Cargando desembolsos…</p>
+    <p v-else-if="!consultaHecha" class="estado span-full">
+      Elige cartera y periodo, luego pulsa <strong>Consultar</strong>.
     </p>
-    <p v-else-if="!loading && carteraFiltroId == null" class="estado span-full">
-      Selecciona una cartera y pulsa <strong>Consultar</strong> para cargar los préstamos de esa cartera.
-    </p>
-    <p v-else-if="!loading && carteraFiltroId != null && !consultaHecha" class="estado span-full">
-      Pulsa <strong>Consultar</strong> para traer los préstamos desde el servidor (filtrado por cartera).
-    </p>
-    <p v-else-if="!loading && consultaHecha && prestamos.length === 0 && !error" class="estado span-full">
-      No hay préstamos en la cartera seleccionada.
+    <p v-else-if="consultaHecha && bloquesPorCartera.length === 0 && !error" class="estado span-full">
+      No hay desembolsos para {{ etiquetaPeriodo }}
+      <template v-if="carteraFiltroId != null"> en la cartera seleccionada</template>.
     </p>
 
-    <template v-else-if="prestamosOrdenados.length > 0">
+    <template v-else-if="bloquesPorCartera.length > 0">
       <div class="span-full panel-tabla">
-        <h2 class="subtitulo">Detalle por cartera</h2>
+        <h2 class="subtitulo">Resumen por cartera · {{ etiquetaPeriodo }}</h2>
+        <DataTable
+          class="datatable-reporte"
+          :value="resumenPorCartera"
+          responsive-layout="scroll"
+          striped-rows
+          size="small"
+        >
+          <Column field="nombreCartera" header="Cartera" :style="{ minWidth: '12rem' }" />
+          <Column header="Préstamos" :style="{ width: '6rem' }">
+            <template #body="{ data }">{{ data.cantidad }}</template>
+          </Column>
+          <Column header="Monto desembolsado" :style="{ minWidth: '9rem' }">
+            <template #body="{ data }">{{ formatMoney(data.montoTotal) }}</template>
+          </Column>
+          <Column header="Interés total" :style="{ minWidth: '9rem' }">
+            <template #body="{ data }">{{ formatMoney(data.interesTotal) }}</template>
+          </Column>
+        </DataTable>
+        <div class="fila-totales fila-total-detalle-pie" aria-label="Totales generales">
+          <span>Total general</span>
+          <span>{{ totalesGenerales.cantidad }} préstamos</span>
+          <span>Monto {{ formatMoney(totalesGenerales.montoTotal) }}</span>
+          <span>Interés {{ formatMoney(totalesGenerales.interesTotal) }}</span>
+        </div>
+      </div>
+
+      <div v-for="bloque in bloquesPorCartera" :key="bloque.clave" class="span-full panel-tabla">
+        <h2 class="subtitulo">{{ bloque.nombreCartera }}</h2>
+
+        <h3 class="subtitulo-detalle">Por día de entrega</h3>
+        <DataTable
+          class="datatable-reporte datatable-desembolso"
+          :value="bloque.porFecha"
+          responsive-layout="scroll"
+          striped-rows
+          size="small"
+        >
+          <Column header="Fecha" :style="{ minWidth: '9rem' }">
+            <template #body="{ data }">{{ formatDate(data.fecha) }}</template>
+          </Column>
+          <Column header="Préstamos" :style="{ width: '6rem' }">
+            <template #body="{ data }">{{ data.cantidad }}</template>
+          </Column>
+          <Column header="Monto" :style="{ minWidth: '8rem' }">
+            <template #body="{ data }">{{ formatMoney(data.montoTotal) }}</template>
+          </Column>
+          <Column header="Interés" :style="{ minWidth: '8rem' }">
+            <template #body="{ data }">{{ formatMoney(data.interesTotal) }}</template>
+          </Column>
+        </DataTable>
+
+        <h3 class="subtitulo-detalle">Detalle de préstamos</h3>
         <div class="bloque-cartera-tabla">
-          <h3 class="bloque-cartera-titulo">
-            <span class="bloque-cartera-nombre">{{ nombreCarteraSeleccionada }}</span>
-            <span class="bloque-cartera-meta"> · {{ formatMoney(totalesGenerales.montoTotal) }}</span>
-          </h3>
           <DataTable
             class="datatable-reporte datatable-desembolso"
-            :value="prestamosOrdenados"
+            :value="bloque.prestamos"
             responsive-layout="scroll"
             striped-rows
             size="small"
             data-key="id_prestamo"
           >
             <Column header="N" :style="{ width: '2.75rem' }">
-              <template #body="{ index }: { index: number }">
-                {{ (index ?? 0) + 1 }}
-              </template>
+              <template #body="{ index }: { index: number }">{{ (index ?? 0) + 1 }}</template>
             </Column>
             <Column header="Nombre" :style="{ minWidth: '14rem' }">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ nombreCliente(data.id_cliente) }}
-              </template>
+              <template #body="{ data }: { data: Prestamo }">{{ nombreCliente(data.id_cliente) }}</template>
             </Column>
             <Column header="Entrega" :style="{ minWidth: '9rem' }">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ formatDate(data.fecha_entrega) }}
-              </template>
+              <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
             </Column>
             <Column header="Monto" :style="{ minWidth: '8rem' }">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ formatMoney(data.monto) }}
-              </template>
+              <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
             </Column>
             <Column header="Tasa" :style="{ minWidth: '6.5rem' }">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ formatTasaPct(data.tasa_interes) }}
-              </template>
+              <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
             </Column>
             <Column header="Plazo" :style="{ width: '4.5rem' }">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ data.plazo }}
-              </template>
+              <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
             </Column>
             <Column header="Interés" :style="{ minWidth: '8rem' }">
               <template #body="{ data }: { data: Prestamo }">
@@ -494,15 +720,6 @@ onBeforeUnmount(() => {
               </template>
             </Column>
           </DataTable>
-        </div>
-        <div
-          v-if="carteraFiltroId != null"
-          class="fila-totales fila-total-detalle-pie"
-          aria-label="Totales del listado (cartera filtrada)"
-        >
-          <span>Total</span>
-          <span>Monto {{ formatMoney(totalesGenerales.montoTotal) }}</span>
-          <span>Interés {{ formatMoney(totalesInteresListado) }}</span>
         </div>
       </div>
     </template>
@@ -567,6 +784,13 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
+.intro {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 .barra-filtros {
   display: flex;
   flex-wrap: wrap;
@@ -575,15 +799,20 @@ onBeforeUnmount(() => {
   margin-bottom: 0.35rem;
 }
 
-.cartera-select-wrap {
-  flex: 1 1 16rem;
-  min-width: min(100%, 18rem);
+.filtro-campo {
+  flex: 1 1 14rem;
+  min-width: min(100%, 14rem);
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
 }
 
-.cartera-select-label {
+.filtro-campo-corto {
+  flex: 0 1 9rem;
+  min-width: min(100%, 9rem);
+}
+
+.filtro-label {
   font-size: 0.8rem;
   font-weight: 600;
   color: #475569;
@@ -614,6 +843,13 @@ onBeforeUnmount(() => {
   color: #334155;
 }
 
+.subtitulo-detalle {
+  margin: 0.85rem 0 0.45rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #475569;
+}
+
 .panel-tabla {
   min-width: 0;
   border-radius: 0.5rem;
@@ -627,28 +863,10 @@ onBeforeUnmount(() => {
   margin-top: 0;
 }
 
-.bloque-cartera-titulo {
-  margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: #0f172a;
-  line-height: 1.4;
-}
-
-.bloque-cartera-nombre {
-  font-weight: 600;
-}
-
-.bloque-cartera-meta {
-  font-weight: 400;
-  color: #64748b;
-  font-size: 0.9rem;
-}
-
 .fila-totales {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 1rem;
+  grid-template-columns: 1.2fr repeat(3, auto);
+  gap: 0.75rem 1rem;
   align-items: center;
   margin-top: 0.75rem;
   padding: 0.6rem 0.75rem;
@@ -660,8 +878,6 @@ onBeforeUnmount(() => {
 }
 
 .fila-total-detalle-pie {
-  grid-template-columns: minmax(5rem, 1fr) auto auto;
-  gap: 0.75rem 1rem;
   margin-top: 1rem;
   border: 1px solid #e2e8f0;
 }

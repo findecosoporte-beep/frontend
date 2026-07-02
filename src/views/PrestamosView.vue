@@ -5,7 +5,6 @@ import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
-import FloatLabel from 'primevue/floatlabel'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -19,7 +18,15 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
-import { formatMoney } from '@/utils/format'
+import { formatDate, formatMoney } from '@/utils/format'
+import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
+import {
+  etiquetaReglasTasaSemanal,
+  interesTotalPctSemanal,
+  periodosDesdePlazo,
+  simularPrestamo,
+  tasaSemanalNegocio,
+} from '@/utils/prestamoCalc'
 import type {
   Cartera,
   Cliente,
@@ -45,6 +52,7 @@ const rolEtiquetaCorto: Record<string, string> = {
 /** Opciones del Select: `label` para mostrar nombre y DNI juntos */
 const clienteOptions = ref<Array<{ id_cliente: number; nombre: string; dni: string; label: string }>>([])
 const clientesById = ref<Record<number, Cliente>>({})
+const clientesConPrestamoIds = ref<Set<number>>(new Set())
 const usuarioOptions = ref<
   Array<{ id_usuario: number; nombre: string; rol: string; label: string }>
 >([])
@@ -67,6 +75,7 @@ const savingNuevoCliente = ref(false)
 const savingNuevoAsesor = ref(false)
 const savingNuevoCobrador = ref(false)
 const saving = ref(false)
+const generandoNumero = ref(false)
 const simulating = ref(false)
 const simulacion = ref<SimulacionPrestamo | null>(null)
 const simulacionError = ref('')
@@ -75,13 +84,7 @@ const simulationSignature = ref('')
 const wizardStep = ref(1)
 const totalWizardSteps = 4
 
-const estadoOpts = [
-  { label: 'Pendiente aprobación', value: 'pendiente_aprobacion' },
-  { label: 'Activo', value: 'activo' },
-  { label: 'Pagado', value: 'pagado' },
-  { label: 'Mora', value: 'mora' },
-  { label: 'Cancelado', value: 'cancelado' },
-]
+const estadoOpts = [{ label: 'Activo', value: 'activo' }]
 const formaPagoOpts = [
   { label: 'Semanal', value: 'semanal' },
   { label: 'Mensual', value: 'mensual' },
@@ -102,7 +105,7 @@ const form = ref({
   monto: null as number | null,
   plazo: 12,
   tasa_interes: null as number | null,
-  estado: 'pendiente_aprobacion',
+  estado: 'activo',
   forma_pago: 'mensual',
   forma_desembolso: 'efectivo',
   comision: 0,
@@ -146,8 +149,16 @@ const currentSimulationSignature = computed(() =>
 )
 
 const tasaPeriodoLabel = computed(() => {
+  if (form.value.forma_pago === 'semanal') return 'Tasa semanal % (automática)'
   return 'Tasa mensual %'
 })
+
+const plazoFieldLabel = computed(() => {
+  if (form.value.forma_pago === 'semanal') return 'Plazo (semanas)'
+  return 'Plazo (meses)'
+})
+
+const esSemanal = computed(() => form.value.forma_pago === 'semanal')
 
 const frecuenciaEfectoLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 1 semana por cuota (semanal).'
@@ -159,8 +170,7 @@ const frecuenciaPlazoResumen = computed(() => {
   const plazo = Number(form.value.plazo || 0)
   if (plazo <= 0) return ''
   if (form.value.forma_pago === 'semanal') {
-    const semanas = plazo * 4
-    return `Semanas totales estimadas para el plazo actual: ${semanas} (${plazo} mes${plazo === 1 ? '' : 'es'} × 4 cuotas/mes).`
+    return `${plazo} cuota${plazo === 1 ? '' : 's'} semanal${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctSemanal(plazo)}%.`
   }
   if (form.value.forma_pago === 'quincenal') {
     return `Quincenas totales estimadas para el plazo actual: ${plazo * 2}.`
@@ -168,8 +178,21 @@ const frecuenciaPlazoResumen = computed(() => {
   return `Meses del plazo: ${plazo}.`
 })
 
+const reglasTasaSemanalHint = computed(() => {
+  if (form.value.forma_pago !== 'semanal') return ''
+  const plazo = Number(form.value.plazo || 0)
+  if (plazo <= 0) {
+    return 'Semanal: 6 sem → 15%; 8 sem → 20%; 10 sem → 25%; 16 sem → 40% (2.5%/sem); otras → 10%/sem.'
+  }
+  return etiquetaReglasTasaSemanal(plazo)
+})
+
 const tasaConversionLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Tasa por periodo aplicada: tasa mensual / 4.'
+  if (form.value.forma_pago === 'semanal') {
+    const plazo = Number(form.value.plazo || 0)
+    if (plazo > 0) return etiquetaReglasTasaSemanal(plazo)
+    return 'La tasa semanal se aplica según el número de semanas.'
+  }
   if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
   return 'Tasa por periodo aplicada: tasa mensual.'
 })
@@ -219,14 +242,23 @@ const wizardStepTitle = computed(() => {
 
 const fechaVencimientoCalculada = computed(() => {
   if (!form.value.fecha_entrega || form.value.plazo <= 0) return ''
-  const base = new Date(`${form.value.fecha_entrega}T00:00:00`)
-  return toISODate(addPeriod(base, form.value.forma_pago, form.value.plazo))
+  const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
+  return calculateFechaVencimiento(
+    form.value.fecha_entrega,
+    form.value.plazo,
+    form.value.forma_pago,
+    cartera?.dia_cobro ?? null,
+  )
 })
 
 const clienteCalculoDetalle = computed(() => {
   if (form.value.id_cliente == null) return null
   return clientesById.value[form.value.id_cliente] ?? null
 })
+
+const clienteOptionsSinPrestamo = computed(() =>
+  clienteOptions.value.filter((c) => !clientesConPrestamoIds.value.has(c.id_cliente)),
+)
 
 const asesorOptions = computed(() =>
   usuarioOptions.value.filter((u) => u.rol === 'asesor' || u.rol === 'supervisor' || u.rol === 'administrador'),
@@ -540,12 +572,22 @@ function sincronizarCarteraDesdeCliente(idCliente: number | null) {
   form.value.id_zona = cartera.id_zona
 }
 
+async function cargarIdsClientesConPrestamo() {
+  const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
+  const ids = new Set<number>()
+  for (const p of prestamos) {
+    if (p.id_cliente != null) ids.add(p.id_cliente)
+  }
+  clientesConPrestamoIds.value = ids
+}
+
 async function loadOptions() {
   const [clientes, usuarios, zonas, carteras] = await Promise.all([
     fetchAllPages<Cliente>('/clientes/?page_size=100'),
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
     fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
+    cargarIdsClientesConPrestamo(),
   ])
   clienteOptions.value = clientes
     .map(mapClienteOption)
@@ -566,25 +608,70 @@ async function loadOptions() {
     }))
 }
 
-function openCreate() {
+/**
+ * Genera el siguiente número de préstamo tomando el mayor consecutivo existente.
+ * Conserva el prefijo y el ancho (ceros a la izquierda) del último número usado.
+ */
+async function generarNumeroPrestamo(): Promise<string> {
+  try {
+    const { data } = await api.get<Paginated<Prestamo>>(
+      '/prestamos/?ordering=-id_prestamo&page_size=50',
+    )
+    let maxSeq = 0
+    let prefijo = 'PR-'
+    let ancho = 5
+    let detectado = false
+    for (const p of data.results) {
+      const numero = (p.numero_prestamo ?? '').trim()
+      const m = numero.match(/^(.*?)(\d+)$/)
+      if (!m) continue
+      if (!detectado) {
+        prefijo = m[1] ?? ''
+        ancho = m[2].length
+        detectado = true
+      }
+      const seq = Number.parseInt(m[2], 10)
+      if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq
+    }
+    return `${prefijo}${String(maxSeq + 1).padStart(ancho, '0')}`
+  } catch {
+    return `PR-${Date.now()}`
+  }
+}
+
+async function asignarNumeroPrestamoGenerado() {
+  generandoNumero.value = true
+  try {
+    form.value.numero_prestamo = await generarNumeroPrestamo()
+  } finally {
+    generandoNumero.value = false
+  }
+}
+
+async function regenerarNumeroPrestamo() {
+  await asignarNumeroPrestamoGenerado()
+}
+
+async function openCreate() {
   simulacion.value = null
   simulacionError.value = ''
   simulacionNotice.value = ''
   simulationSignature.value = ''
+  await cargarIdsClientesConPrestamo()
   form.value = {
     numero_prestamo: '',
-    id_cliente: clienteOptions.value[0]?.id_cliente ?? null,
+    id_cliente: clienteOptionsSinPrestamo.value[0]?.id_cliente ?? null,
     id_usuario: asesorOptions.value[0]?.id_usuario ?? null,
     id_asesor: asesorOptions.value[0]?.id_usuario ?? null,
     id_cobrador: cobradorOptions.value[0]?.id_usuario ?? null,
     monto: null,
     plazo: 12,
     tasa_interes: null,
-    estado: 'pendiente_aprobacion',
+    estado: 'activo',
     forma_pago: 'mensual',
     forma_desembolso: 'efectivo',
     comision: 0,
-    fecha_entrega: '',
+    fecha_entrega: getTodayISO(),
     id_cartera: carteraOptions.value[0]?.id_cartera ?? null,
     id_zona: carteraOptions.value[0]?.id_zona ?? null,
     producto: '',
@@ -594,6 +681,7 @@ function openCreate() {
   sincronizarCarteraDesdeCliente(form.value.id_cliente)
   wizardStep.value = 1
   dialogVisible.value = true
+  void asignarNumeroPrestamoGenerado()
 }
 
 function goToNextStep() {
@@ -632,20 +720,6 @@ watch(
   },
 )
 
-function addPeriod(baseDate: Date, formaPago: string, period: number): Date {
-  const next = new Date(baseDate)
-  if (formaPago === 'semanal') {
-    next.setDate(next.getDate() + period * 7)
-    return next
-  }
-  if (formaPago === 'quincenal') {
-    next.setDate(next.getDate() + period * 15)
-    return next
-  }
-  next.setMonth(next.getMonth() + period)
-  return next
-}
-
 function toISODate(value: Date): string {
   const year = value.getFullYear()
   const month = String(value.getMonth() + 1).padStart(2, '0')
@@ -653,29 +727,50 @@ function toISODate(value: Date): string {
   return `${year}-${month}-${day}`
 }
 
-/** Alineado con `getDay()` de JS: 0 = domingo … 6 = sábado. */
-const DIA_SEMANA_A_JS_DOW: Record<DiaCobroCartera, number> = {
-  domingo: 0,
-  lunes: 1,
-  martes: 2,
-  miercoles: 3,
-  jueves: 4,
-  viernes: 5,
-  sabado: 6,
-}
-
-/** Primera fecha (hoy o en los próximos 7 días) que coincide con el día de ruta de la zona. */
-function proximaFechaEntregaParaDiaSemana(dia: DiaCobroCartera | null | undefined): string {
-  if (!dia || !(dia in DIA_SEMANA_A_JS_DOW)) return ''
-  const targetDow = DIA_SEMANA_A_JS_DOW[dia]
+function getTodayISO(): string {
   const d = new Date()
   d.setHours(0, 0, 0, 0)
-  for (let i = 0; i < 8; i++) {
-    if (d.getDay() === targetDow) return toISODate(d)
-    d.setDate(d.getDate() + 1)
-  }
-  return ''
+  return toISODate(d)
 }
+
+function parseIsoDateLocal(iso: string): Date {
+  return new Date(`${iso}T00:00:00`)
+}
+
+function totalCuotasEstimadas(): number {
+  return periodosDesdePlazo(Number(form.value.plazo || 0), form.value.forma_pago)
+}
+
+function aplicarReglasSemanal() {
+  if (form.value.forma_pago !== 'semanal') return
+  const semanas = Math.trunc(Number(form.value.plazo || 0))
+  if (semanas <= 0) return
+  form.value.tasa_interes = tasaSemanalNegocio(semanas)
+}
+
+const fechaEntregaEnPasado = computed(() => {
+  const iso = form.value.fecha_entrega?.trim()
+  if (!iso) return false
+  const entrega = parseIsoDateLocal(iso)
+  const hoy = parseIsoDateLocal(getTodayISO())
+  return entrega.getTime() < hoy.getTime()
+})
+
+const resumenCalendarioCuotas = computed(() => {
+  const total = totalCuotasEstimadas()
+  if (!form.value.fecha_entrega || total <= 0) return ''
+  const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
+  const diaCobro = cartera?.dia_cobro ?? null
+  const primera = calculateFechaPrimeraCuota(form.value.fecha_entrega, form.value.forma_pago, diaCobro)
+  const vencimiento = calculateFechaVencimiento(
+    form.value.fecha_entrega,
+    form.value.plazo,
+    form.value.forma_pago,
+    diaCobro,
+  )
+  if (!primera || !vencimiento) return ''
+  return `${total} cuota${total === 1 ? '' : 's'} · 1.ª ${formatDate(primera)} · última ${formatDate(vencimiento)}`
+})
 
 watch(
   () => form.value.id_cartera,
@@ -687,8 +782,9 @@ watch(
     const c = carteraOptions.value.find((x) => x.id_cartera === idCartera)
     if (!c) return
     form.value.id_zona = c.id_zona
-    const siguiente = proximaFechaEntregaParaDiaSemana(c.dia_cobro)
-    if (siguiente) form.value.fecha_entrega = siguiente
+    if (!form.value.fecha_entrega) {
+      form.value.fecha_entrega = getTodayISO()
+    }
   },
 )
 
@@ -700,8 +796,21 @@ function onFormaPagoToggle(targetValue: string, checked: boolean) {
   }
   if (checked) {
     form.value.forma_pago = targetValue
+    if (targetValue === 'semanal') {
+      form.value.plazo = 6
+      aplicarReglasSemanal()
+    } else if (form.value.plazo <= 0 || form.value.plazo === 6) {
+      form.value.plazo = 12
+    }
   }
 }
+
+watch(
+  () => [form.value.forma_pago, form.value.plazo] as const,
+  () => {
+    aplicarReglasSemanal()
+  },
+)
 
 async function simulate() {
   simulacionError.value = ''
@@ -711,8 +820,17 @@ async function simulate() {
   simulating.value = true
   try {
     const payload = buildSimulationPayload()
-    const { data } = await api.post<SimulacionPrestamo>('/prestamos/simular/', payload)
-    simulacion.value = data
+    if (payload.monto == null || payload.tasa_interes == null || payload.plazo <= 0) {
+      simulacionError.value = 'Completa monto, plazo y tasa antes de calcular.'
+      return
+    }
+    simulacion.value = simularPrestamo({
+      monto: payload.monto,
+      plazo: payload.plazo,
+      tasa_interes: payload.tasa_interes,
+      forma_pago: payload.forma_pago,
+      comision: payload.comision,
+    })
     simulationSignature.value = currentSimulationSignature.value
   } catch (e) {
     simulacionError.value = getApiErrorMessage(e, 'No se pudo completar el cálculo.')
@@ -728,6 +846,55 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+function valorPrint(value: string | null | undefined, fallback = 'N/A'): string {
+  const v = (value ?? '').trim()
+  return v ? escapeHtml(v) : fallback
+}
+
+function buildPrintClienteSection(): string {
+  const cliente = clienteCalculoDetalle.value
+  const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
+  const zona = zonaOptions.value.find((z) => z.id_zona === form.value.id_zona)
+  const formaPagoLabel =
+    formaPagoOpts.find((o) => o.value === form.value.forma_pago)?.label ?? form.value.forma_pago
+  const plazoUnidad = form.value.forma_pago === 'semanal' ? 'semanas' : 'meses'
+  const asesor = nombreUsuarioPorId(form.value.id_asesor)
+  const cobrador = nombreUsuarioPorId(form.value.id_cobrador)
+  const direccion = cliente?.direccion_residencia?.trim() || cliente?.direccion_negocio?.trim() || ''
+  const monto =
+    form.value.monto == null ? 'N/A' : escapeHtml(formatMoney(form.value.monto))
+  const plazo =
+    form.value.plazo > 0 ? `${form.value.plazo} ${plazoUnidad}` : 'N/A'
+
+  return `
+        <section class="section">
+          <h2>Datos del cliente</h2>
+          <div class="info-grid">
+            <div><strong>Cliente:</strong> ${valorPrint(cliente?.nombre)}</div>
+            <div><strong>DNI:</strong> ${valorPrint(cliente?.dni)}</div>
+            <div><strong>Teléfono:</strong> ${valorPrint(cliente?.telefono)}</div>
+            <div><strong>Dirección:</strong> ${direccion ? escapeHtml(direccion) : 'N/A'}</div>
+            <div><strong>Actividad:</strong> ${valorPrint(cliente?.actividad_economica)}</div>
+            <div><strong>Referencia:</strong> ${valorPrint(cliente?.referencia)}</div>
+          </div>
+        </section>
+        <section class="section">
+          <h2>Condiciones del préstamo</h2>
+          <div class="info-grid">
+            <div><strong>Número:</strong> ${valorPrint(form.value.numero_prestamo)}</div>
+            <div><strong>Forma de pago:</strong> ${escapeHtml(formaPagoLabel)}</div>
+            <div><strong>Monto:</strong> ${monto}</div>
+            <div><strong>Plazo:</strong> ${plazo}</div>
+            <div><strong>Fecha entrega:</strong> ${form.value.fecha_entrega ? escapeHtml(formatDate(form.value.fecha_entrega)) : 'N/A'}</div>
+            <div><strong>Fecha vencimiento:</strong> ${fechaVencimientoCalculada.value ? escapeHtml(formatDate(fechaVencimientoCalculada.value)) : 'N/A'}</div>
+            <div><strong>Cartera:</strong> ${valorPrint(cartera?.label.split(' — ')[0])}</div>
+            <div><strong>Zona:</strong> ${valorPrint(zona?.nombre)}</div>
+            <div><strong>Asesor:</strong> ${asesor ? escapeHtml(asesor) : 'N/A'}</div>
+            <div><strong>Cobrador:</strong> ${cobrador ? escapeHtml(cobrador) : 'N/A'}</div>
+          </div>
+        </section>`
 }
 
 function printCalculo() {
@@ -755,6 +922,9 @@ function printCalculo() {
         <style>
           body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
           h1 { margin: 0 0 8px; font-size: 20px; }
+          h2 { margin: 0 0 8px; font-size: 14px; color: #0f172a; }
+          .section { margin: 0 0 16px; }
+          .info-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 6px 16px; font-size: 13px; color: #334155; }
           .meta { margin: 0 0 14px; font-size: 13px; color: #334155; }
           .grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px 16px; margin: 12px 0 18px; }
           .card { border: 1px solid #dbe3ee; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
@@ -765,16 +935,16 @@ function printCalculo() {
       </head>
       <body>
         <h1>Cálculo de préstamo</h1>
-        <p class="meta">
-          Número: ${escapeHtml(form.value.numero_prestamo || 'N/A')} | Forma de pago:
-          ${escapeHtml(form.value.forma_pago)}
-        </p>
+        ${buildPrintClienteSection()}
+        <section class="section">
+          <h2>Resumen del cálculo</h2>
         <div class="grid">
           <div class="card"><strong>Cuota:</strong> ${escapeHtml(formatMoney(simulacion.value.cuota_periodica))}</div>
           <div class="card"><strong>Interés total:</strong> ${escapeHtml(formatMoney(simulacion.value.total_interes))}</div>
           <div class="card"><strong>Comisión:</strong> ${escapeHtml(formatMoney(simulacion.value.comision_monto))}</div>
           <div class="card"><strong>Total a pagar:</strong> ${escapeHtml(formatMoney(simulacion.value.total_pagar))}</div>
         </div>
+        </section>
         <table>
           <thead>
             <tr>
@@ -812,7 +982,7 @@ function buildPayload() {
     monto: form.value.monto,
     plazo: form.value.plazo,
     tasa_interes: tasaInteres,
-    estado: form.value.estado,
+    estado: 'activo',
     forma_pago: form.value.forma_pago,
     forma_desembolso: form.value.forma_desembolso,
     comision,
@@ -846,12 +1016,40 @@ async function hasDuplicateNumeroPrestamoByCliente(): Promise<boolean> {
 async function save() {
   saving.value = true
   try {
-    const duplicateExists = await hasDuplicateNumeroPrestamoByCliente()
-    if (duplicateExists) {
+    let intentos = 0
+    while ((await hasDuplicateNumeroPrestamoByCliente()) && intentos < 5) {
+      form.value.numero_prestamo = await generarNumeroPrestamo()
+      intentos += 1
+    }
+    if (await hasDuplicateNumeroPrestamoByCliente()) {
       toast.add({
         severity: 'warn',
         summary: 'Número duplicado',
-        detail: 'Ya existe un préstamo con ese número. Usa un número diferente.',
+        detail: 'No se pudo generar un número único. Intenta nuevamente.',
+        life: 5000,
+      })
+      return
+    }
+
+    if (fechaEntregaEnPasado.value) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Fecha de inicio en el pasado',
+        detail:
+          'La fecha de inicio es anterior a hoy. Las cuotas pueden aparecer como atrasadas de inmediato. Corrige la fecha en el paso 3.',
+        life: 7000,
+      })
+      return
+    }
+
+    if (
+      form.value.id_cliente != null &&
+      clientesConPrestamoIds.value.has(form.value.id_cliente)
+    ) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Cliente con préstamo',
+        detail: 'Este cliente ya tiene un préstamo registrado. Selecciona otro cliente.',
         life: 5000,
       })
       return
@@ -859,6 +1057,12 @@ async function save() {
 
     const payload = buildPayload()
     await api.post('/prestamos/', payload)
+    if (form.value.id_cliente != null) {
+      clientesConPrestamoIds.value = new Set([
+        ...clientesConPrestamoIds.value,
+        form.value.id_cliente,
+      ])
+    }
     toast.add({ severity: 'success', summary: 'Préstamo creado', life: 3000 })
     dialogVisible.value = false
   } catch (e) {
@@ -911,24 +1115,44 @@ watch(
       </div>
       <div class="form-grid">
         <template v-if="wizardStep === 1">
-          <FloatLabel>
-            <InputText id="p-num" v-model="form.numero_prestamo" fluid />
-            <label for="p-num">Número préstamo</label>
-          </FloatLabel>
+          <div class="full numero-prestamo-wrap">
+            <label class="lbl" for="p-num">Número préstamo</label>
+            <div class="cliente-select-row">
+              <InputText
+                id="p-num"
+                :model-value="generandoNumero ? 'Generando…' : form.numero_prestamo"
+                readonly
+                fluid
+                class="cliente-select"
+              />
+              <Button
+                type="button"
+                icon="pi pi-refresh"
+                label="Regenerar"
+                severity="secondary"
+                outlined
+                class="cliente-add-btn"
+                :loading="generandoNumero"
+                aria-label="Regenerar número de préstamo"
+                @click="regenerarNumeroPrestamo"
+              />
+            </div>
+            <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+          </div>
           <div class="full cliente-select-wrap">
             <label class="lbl" for="p-cliente">Cliente</label>
             <div class="cliente-select-row">
               <Select
                 id="p-cliente"
                 v-model="form.id_cliente"
-                :options="clienteOptions"
+                :options="clienteOptionsSinPrestamo"
                 option-label="label"
                 option-value="id_cliente"
                 placeholder="Buscar cliente por nombre o DNI"
                 filter
                 filter-placeholder="Buscar..."
-                empty-filter-message="No hay clientes con ese criterio."
-                empty-message="No hay clientes registrados."
+                empty-filter-message="No hay clientes sin préstamo con ese criterio."
+                empty-message="No hay clientes disponibles sin préstamo."
                 :show-clear="true"
                 fluid
                 class="cliente-select"
@@ -945,8 +1169,9 @@ watch(
                 @click="abrirNuevoClienteModal"
               />
             </div>
-            <small v-if="canWriteClientes" class="hint-text">
-              Si no aparece en la lista, regístralo con el botón «Nuevo».
+            <small class="hint-text">
+              Solo se muestran clientes que aún no tienen préstamo.
+              <template v-if="canWriteClientes"> Si no aparece, regístralo con «Nuevo».</template>
             </small>
           </div>
           <div class="full asesor-select-wrap">
@@ -1025,7 +1250,7 @@ watch(
             <InputNumber id="p-monto" v-model="form.monto" mode="decimal" :min-fraction-digits="2" fluid />
           </div>
           <div class="field-block">
-            <label class="lbl" for="p-plazo">Plazo (meses)</label>
+            <label class="lbl" for="p-plazo">{{ plazoFieldLabel }}</label>
             <InputNumber id="p-plazo" v-model="form.plazo" :min="1" fluid />
           </div>
           <div class="field-block">
@@ -1039,13 +1264,14 @@ watch(
               :min-fraction-digits="2"
               :step="0.01"
               :use-grouping="false"
+              :readonly="esSemanal"
               fluid
             />
             <small class="hint-text">{{ tasaConversionLabel }}</small>
           </div>
           <div class="full">
             <label class="lbl">Estado</label>
-            <Select v-model="form.estado" :options="estadoOpts" option-label="label" option-value="value" fluid />
+            <Select v-model="form.estado" :options="estadoOpts" option-label="label" option-value="value" disabled fluid />
           </div>
           <div class="full">
             <label class="lbl">Forma pago</label>
@@ -1060,6 +1286,7 @@ watch(
             </div>
             <small class="hint-text">{{ frecuenciaEfectoLabel }}</small>
             <small v-if="frecuenciaPlazoResumen" class="hint-text">{{ frecuenciaPlazoResumen }}</small>
+            <small v-if="reglasTasaSemanalHint && esSemanal" class="hint-text">{{ reglasTasaSemanalHint }}</small>
           </div>
           <div class="full">
             <label class="lbl">Desembolso</label>
@@ -1107,14 +1334,20 @@ watch(
             <label class="lbl" for="p-fe">Fecha inicio del préstamo</label>
             <InputText id="p-fe" v-model="form.fecha_entrega" type="date" fluid />
             <small class="hint-text">
-              Si la cartera tiene día de cobro, esta fecha se ajusta al próximo día coincidente (puedes cambiarla
-              manualmente).
+              Usa la fecha real del desembolso. Las cuotas se programan según el día de cobro de la cartera.
             </small>
           </div>
+          <Message v-if="fechaEntregaEnPasado" severity="warn" class="full" :closable="false">
+            La fecha de inicio es anterior a hoy. El préstamo puede mostrar cuotas atrasadas de inmediato en
+            cobros.
+          </Message>
           <div class="field-block">
             <label class="lbl" for="p-fv-calc">Fecha fin (calculada)</label>
             <InputText id="p-fv-calc" :model-value="fechaVencimientoCalculada" readonly fluid />
-            <small class="hint-text">Se recalcula automáticamente al cambiar forma de pago, plazo o fecha inicio.</small>
+            <small v-if="resumenCalendarioCuotas" class="hint-text">{{ resumenCalendarioCuotas }}</small>
+            <small v-else class="hint-text">
+              Se recalcula automáticamente al cambiar forma de pago, plazo o fecha inicio.
+            </small>
           </div>
           <div class="field-block">
             <label class="lbl" for="p-pr">Producto</label>
@@ -1187,8 +1420,6 @@ watch(
           </Message>
           <div v-if="simulacion" class="full sim-box">
             <div class="sim-grid">
-              <div><strong>Tasa usada:</strong> {{ simulacion.tasa_interes.toFixed(2) }}% ({{ simulacion.forma_pago }})</div>
-              <div><strong>Tasa anual efectiva:</strong> {{ simulacion.tasa_anual.toFixed(2) }}%</div>
               <div><strong>Cuota:</strong> {{ formatMoney(simulacion.cuota_periodica) }}</div>
               <div><strong>Interés total:</strong> {{ formatMoney(simulacion.total_interes) }}</div>
               <div><strong>Comisión:</strong> {{ formatMoney(simulacion.comision_monto) }}</div>

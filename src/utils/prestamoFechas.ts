@@ -75,7 +75,7 @@ function primeraFechaCuotaProgramada(
 }
 
 function periodsFromMonths(plazoMeses: number, formaPago: string): number {
-  if (formaPago === 'semanal') return plazoMeses * 4
+  if (formaPago === 'semanal') return plazoMeses
   if (formaPago === 'quincenal') return plazoMeses * 2
   return plazoMeses
 }
@@ -115,6 +115,17 @@ function calculateFechaCuota(
   return alignWeekdayOnOrAfter(addMonths(fechaEntrega, periodo), weekday)
 }
 
+/** Fecha de la primera cuota; misma lógica que el API Django. */
+export function calculateFechaPrimeraCuota(
+  fechaEntregaIso: string,
+  formaPago: string,
+  diaCobro?: DiaCobroCartera | null,
+): string {
+  if (!fechaEntregaIso) return ''
+  const entrega = parseIsoDate(fechaEntregaIso)
+  return toISODate(calculateFechaCuota(entrega, 1, formaPago, diaCobro))
+}
+
 /** Fecha de la última cuota; misma lógica que el API Django. */
 export function calculateFechaVencimiento(
   fechaEntregaIso: string,
@@ -130,7 +141,7 @@ export function calculateFechaVencimiento(
   }
   if (formaPago === 'semanal') {
     const next = new Date(entrega)
-    next.setDate(next.getDate() + plazoMeses * 4 * 7)
+    next.setDate(next.getDate() + plazoMeses * 7)
     return toISODate(next)
   }
   if (formaPago === 'quincenal') {
