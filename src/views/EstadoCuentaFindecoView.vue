@@ -594,10 +594,13 @@ function limpiarFormulario() {
               :loading="loadingPlan"
             >
               <Column field="numero_cuota" header="N" />
-              <Column header="FECHA">
+              <Column header="Fecha programada">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatDate(data.fecha_programada) }}
                 </template>
+              </Column>
+              <Column header="Fecha canceló">
+                <template #body>—</template>
               </Column>
               <Column header="CUOTA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
@@ -629,7 +632,12 @@ function limpiarFormulario() {
               :loading="loadingPlan"
             >
               <Column field="numero_cuota" header="N" />
-              <Column header="FECHA PAGO">
+              <Column header="Fecha programada">
+                <template #body="{ data }: { data: FilaCuotaEstado }">
+                  {{ formatDate(data.fecha_programada) }}
+                </template>
+              </Column>
+              <Column header="Fecha canceló">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
                 </template>

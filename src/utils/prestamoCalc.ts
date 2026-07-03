@@ -41,7 +41,7 @@ export function periodosDesdePlazo(plazo: number, formaPago: string): number {
 
 /** Tasa semanal (%) según reglas FINDECO. */
 export function tasaSemanalNegocio(semanas: number): number {
-  if (semanas === 6 || semanas === 8 || semanas === 10 || semanas === 16) return 2.5
+  if (semanas === 6 || semanas === 8 || semanas === 10 || semanas === 12 || semanas === 16) return 2.5
   return 10
 }
 

@@ -230,6 +230,8 @@ export interface Pago {
   interes: string | number
   mora: string | number
   saldo: string | number
+  /** Cobro anulado (no cuenta en saldos). */
+  anulado?: boolean
   /** Si existe, este pago es línea secundaria; la factura está en el pago maestro. */
   id_pago_factura?: number | null
   /** Efectivo que entregó el cliente (factura). */
@@ -276,6 +278,7 @@ export interface AnularPagoResponse {
 
 export interface HistorialPagosCobrosFila {
   id_pago: number
+  fecha_programada?: string
   fecha_pago: string
   hora_pago?: string
   cobrado_en?: string | null

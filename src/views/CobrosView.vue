@@ -150,6 +150,20 @@ const estadoCuentaVisible = ref(false)
 const estadoCuentaLoading = ref(false)
 const estadoCuentaError = ref('')
 const estadoCuentaRows = ref<Pago[]>([])
+const estadoCuentaPlanRows = ref<
+  Array<{
+    numero_cuota: number
+    fecha_programada: string
+    fecha_cancelo: string | null
+    hora_pago: string | null
+    cobrado_en: string | null
+    total_programado: number
+    estado: string
+    documento: string | null
+    id_pago: number | null
+    id_pago_factura: number | null
+  }>
+>([])
 const cuotasVisible = ref(false)
 const cuotasLoading = ref(false)
 const cuotasError = ref('')
@@ -1130,19 +1144,42 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
   estadoCuentaLoading.value = true
   estadoCuentaError.value = ''
   estadoCuentaRows.value = []
+  estadoCuentaPlanRows.value = []
   try {
-    const [pagos, { data: pr }] = await Promise.all([
+    const [pagos, cuotas, { data: pr }] = await Promise.all([
       fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=200`),
+      fetchAllPages<PrestamoCuotaRow>(
+        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=200&ordering=numero_cuota`,
+      ),
       api.get<Prestamo>(`/prestamos/${pid}/`),
     ])
-    estadoCuentaRows.value = pagos.sort((a, b) => {
+    const pagosVigentes = pagos.filter((p) => !p.anulado)
+    estadoCuentaRows.value = pagosVigentes.sort((a, b) => {
       const da = a.fecha_pago.localeCompare(b.fecha_pago)
       return da !== 0 ? da : b.id_pago - a.id_pago
     })
+    const pagoPorCuota = buildPagoPorCuotaNumero(pagosVigentes)
+    estadoCuentaPlanRows.value = [...cuotas]
+      .sort((a, b) => a.numero_cuota - b.numero_cuota)
+      .map((cuota) => {
+        const pago = pagoPorCuota.get(cuota.numero_cuota)
+        return {
+          numero_cuota: cuota.numero_cuota,
+          fecha_programada: cuota.fecha_programada,
+          fecha_cancelo: pago?.fecha_pago ?? null,
+          hora_pago: null,
+          cobrado_en: pago?.cobrado_en ?? null,
+          total_programado: Number(cuota.total_programado) || 0,
+          estado: pago ? 'Pagada' : 'Pendiente',
+          documento: pago?.documento ?? null,
+          id_pago: pago?.id_pago ?? null,
+          id_pago_factura: pago?.id_pago_factura ?? null,
+        }
+      })
     estadoCuentaResumen.value = {
-      totalPagos: pagos.length,
-      totalCapital: pagos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
-      totalInteres: pagos.reduce((s, p) => s + (Number(p.interes) || 0), 0),
+      totalPagos: pagosVigentes.length,
+      totalCapital: pagosVigentes.reduce((s, p) => s + (Number(p.capital) || 0), 0),
+      totalInteres: pagosVigentes.reduce((s, p) => s + (Number(p.interes) || 0), 0),
       estadoPrestamo: pr.estado ?? '',
     }
   } catch (e) {
@@ -2036,34 +2073,39 @@ onMounted(async () => {
           <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
         </div>
         <DataTable
-          :value="estadoCuentaRows"
+          :value="estadoCuentaPlanRows"
           :loading="estadoCuentaLoading"
           paginator
           :rows="10"
+          data-key="numero_cuota"
           responsive-layout="scroll"
           class="estado-table"
         >
-          <Column field="id_pago" header="ID pago" style="width: 6rem" />
-          <Column header="Fecha">
-            <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
+          <Column field="numero_cuota" header="Cuota" style="width: 5rem" />
+          <Column header="Fecha programada">
+            <template #body="{ data }">{{ formatDate(data.fecha_programada) }}</template>
+          </Column>
+          <Column header="Fecha canceló">
+            <template #body="{ data }">
+              {{ data.fecha_cancelo ? formatDate(data.fecha_cancelo) : '—' }}
+            </template>
           </Column>
           <Column header="Hora">
-            <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
+            <template #body="{ data }">
+              {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
+            </template>
           </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
+          <Column header="Cuota $">
+            <template #body="{ data }">{{ formatMoney(data.total_programado) }}</template>
           </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
+          <Column field="estado" header="Estado" />
+          <Column header="Documento">
+            <template #body="{ data }">{{ data.documento || `Cuota ${data.numero_cuota}` }}</template>
           </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-          <Column field="documento" header="Documento" />
           <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }: { data: Pago }">
+            <template #body="{ data }">
               <Button
-                v-if="!esPagoFacturaSecundario(data)"
+                v-if="data.id_pago && !esPagoFacturaSecundario(data)"
                 icon="pi pi-file-pdf"
                 label="Ver"
                 size="small"
@@ -2108,8 +2150,17 @@ onMounted(async () => {
           class="estado-table"
         >
           <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha de pago">
+          <Column header="Fecha programada">
             <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
+          </Column>
+          <Column header="Fecha canceló">
+            <template #body="{ data }">
+              {{
+                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
+                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
+                  : '—'
+              }}
+            </template>
           </Column>
           <Column header="Capital">
             <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
@@ -2124,8 +2175,17 @@ onMounted(async () => {
         <h4 class="subsection-title">Cuotas pagadas</h4>
         <DataTable :value="cuotasPagadasRows" responsive-layout="scroll" class="estado-table">
           <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha límite">
+          <Column header="Fecha programada">
             <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
+          </Column>
+          <Column header="Fecha canceló">
+            <template #body="{ data }">
+              {{
+                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
+                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
+                  : '—'
+              }}
+            </template>
           </Column>
           <Column header="Capital">
             <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
