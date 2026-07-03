@@ -210,7 +210,8 @@ export interface ReporteIntegracionResponse {
 
 /** Línea del resumen cuando POST /pagos/ reparte el cobro en varias cuotas. */
 export interface PagoDistribucionLinea {
-  cuota: number
+  cuota?: number
+  abono_capital?: boolean
   capital?: string
   interes?: string
   mora?: string

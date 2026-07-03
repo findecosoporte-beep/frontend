@@ -1491,7 +1491,12 @@ async function confirmarPagoCuota() {
     let detail = `Se registró la cuota #${cajaForm.value.cuota_numero}.`
     if (pagoCreado.distribucion?.length) {
       const partes = pagoCreado.distribucion
-        .map((linea) => `Cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`)
+        .map((linea) => {
+          if (linea.abono_capital) {
+            return `Abono a capital: ${formatMoney(Number(linea.total))}`
+          }
+          return `Cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`
+        })
         .join('; ')
       detail = `Distribución: ${partes}`
     } else if (cajaPendienteCuotaTrasCobro.value > 0.01) {
