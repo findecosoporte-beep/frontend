@@ -481,9 +481,6 @@ onMounted(async () => {
         <Column header="Capital" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
         </Column>
-        <Column header="Interés" style="text-align: right">
-          <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-        </Column>
         <Column header="Mora" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.mora) }}</template>
         </Column>
@@ -554,7 +551,6 @@ onMounted(async () => {
             <th>Cartera</th>
             <th>Doc.</th>
             <th>Capital</th>
-            <th>Interés</th>
             <th>Mora</th>
             <th>Total</th>
           </tr>
@@ -569,7 +565,6 @@ onMounted(async () => {
             <td>{{ fila.cartera_nombre }}</td>
             <td>{{ fila.documento || '—' }}</td>
             <td class="num">{{ formatMoney(fila.capital) }}</td>
-            <td class="num">{{ formatMoney(fila.interes) }}</td>
             <td class="num">{{ formatMoney(fila.mora) }}</td>
             <td class="num">{{ formatMoney(fila.total) }}</td>
           </tr>
@@ -577,9 +572,7 @@ onMounted(async () => {
       </table>
 
       <footer class="historial-totales">
-        <span><strong>Registros:</strong> {{ reporte.resumen.registros }}</span>
         <span><strong>Capital:</strong> {{ formatMoney(reporte.resumen.total_capital) }}</span>
-        <span><strong>Interés:</strong> {{ formatMoney(reporte.resumen.total_interes) }}</span>
         <span><strong>Mora:</strong> {{ formatMoney(reporte.resumen.total_mora) }}</span>
         <span class="historial-total-grande"
           ><strong>Total cobrado:</strong> {{ formatMoney(reporte.resumen.total_cobrado) }}</span
