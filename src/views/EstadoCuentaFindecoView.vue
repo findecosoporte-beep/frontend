@@ -12,7 +12,7 @@ import { useToast } from 'primevue/usetoast'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney } from '@/utils/format'
-import { abrirFacturaPago, buildPagoPorCuotaConFallback } from '@/utils/facturaPago'
+import { abrirFacturaPago, buildPagoPorCuotaConFallback, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
@@ -86,6 +86,7 @@ interface FilaCuotaEstado {
   saldo_capital_programado: string | number
   estado: 'pendiente' | 'pagada'
   id_pago: number | null
+  id_pago_factura: number | null
   fecha_pago: string | null
   documento: string | null
 }
@@ -181,6 +182,7 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
         saldo_capital_programado: cuota.saldo_capital_programado,
         estado: pago ? 'pagada' : 'pendiente',
         id_pago: pago?.id_pago ?? null,
+        id_pago_factura: pago?.id_pago_factura ?? null,
         fecha_pago: pago?.fecha_pago ?? null,
         documento: pago?.documento ?? null,
       }
@@ -643,7 +645,7 @@ function limpiarFormulario() {
               <Column header="FACTURA">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   <Button
-                    v-if="data.id_pago"
+                    v-if="data.id_pago && !esPagoFacturaSecundario(data)"
                     icon="pi pi-file-pdf"
                     label="Ver factura"
                     size="small"

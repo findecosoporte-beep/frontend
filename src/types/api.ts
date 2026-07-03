@@ -172,6 +172,14 @@ export interface ReporteIntegracionFila {
   cuota_siguiente_capital?: string | null
   cuota_siguiente_interes?: string | null
   cuota_siguiente_saldo_capital?: string | null
+  /** Cuotas vencidas sin pago completo (según plan y fecha de hoy). */
+  cuotas_atrasadas?: number
+  cuotas_atrasadas_numeros?: string
+  id_cartera?: number | null
+  cartera_nombre?: string
+  cartera_dia_cobro?: string
+  cliente_dia_cobro_semanal?: string
+  telefono?: string
 }
 
 export interface ReporteIntegracionResumen {
@@ -180,12 +188,28 @@ export interface ReporteIntegracionResumen {
   total_cuotas_plazo: number
   total_saldo_inicial: string
   total_saldo_actual: string
+  total_cuota?: string
 }
 
 export interface ReporteIntegracionResponse {
   fecha_reporte: string
   filas: ReporteIntegracionFila[]
   resumen: ReporteIntegracionResumen
+  /** Paginación (GET reporte-integracion con page/page_size). */
+  count?: number
+  page?: number
+  next?: string | null
+  previous?: string | null
+}
+
+/** Línea del resumen cuando POST /pagos/ reparte el cobro en varias cuotas. */
+export interface PagoDistribucionLinea {
+  cuota: number
+  capital?: string
+  interes?: string
+  mora?: string
+  total: string
+  parcial?: boolean
 }
 
 export interface Pago {
@@ -197,6 +221,14 @@ export interface Pago {
   interes: string | number
   mora: string | number
   saldo: string | number
+  /** Si existe, este pago es línea secundaria; la factura está en el pago maestro. */
+  id_pago_factura?: number | null
+  /** Efectivo que entregó el cliente (factura). */
+  monto_recibido_cliente?: string | number | null
+  /** Desglose por cuota en cobros con excedente o abono parcial. */
+  detalle_distribucion?: PagoDistribucionLinea[] | null
+  /** Solo en la respuesta de creación si hubo reparto (parcial, excedente, mora). */
+  distribucion?: PagoDistribucionLinea[]
 }
 
 /** Fila del plan persistido GET /prestamo-cuotas/ */

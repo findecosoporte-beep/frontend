@@ -25,6 +25,7 @@ import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
 import {
   abrirFacturaPago,
   buildPagoPorCuotaNumero,
+  esPagoFacturaSecundario,
 } from '@/utils/facturaPago'
 import {
   abrirWhatsAppConMensaje,
@@ -340,20 +341,6 @@ function formatNumeroHoja(value: string | number | null | undefined): string {
   return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
 }
 
-function cuotasAtrasadasDesdePlan(
-  cuotas: PrestamoCuotaRow[],
-  paid: Set<number>,
-  hoyIso = getTodayISO(),
-): { count: number; numeros: string } {
-  const nums = cuotas
-    .filter((row) => !paid.has(row.numero_cuota) && row.fecha_programada < hoyIso)
-    .map((row) => row.numero_cuota)
-  return {
-    count: nums.length,
-    numeros: nums.join(', '),
-  }
-}
-
 function textoCuotasAtrasadas(fila: ReporteIntegracionFila): string {
   const n = fila.cuotas_atrasadas ?? 0
   if (n <= 0) return ''
@@ -367,7 +354,7 @@ const hojaCobrosTotales = computed(() => {
   if (r) {
     return {
       saldoInicial: Number.parseFloat(r.total_saldo_inicial) || 0,
-      cuota: Number.parseFloat(r.total_cuota) || 0,
+      cuota: Number.parseFloat(r.total_cuota ?? '') || 0,
       saldoActual: Number.parseFloat(r.total_saldo_actual) || 0,
     }
   }
@@ -2028,6 +2015,7 @@ onMounted(async () => {
           <Column header="Factura" style="width: 8rem">
             <template #body="{ data }: { data: Pago }">
               <Button
+                v-if="!esPagoFacturaSecundario(data)"
                 icon="pi pi-file-pdf"
                 label="Ver"
                 size="small"
@@ -2037,6 +2025,7 @@ onMounted(async () => {
                 :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
                 @click="verFacturaPago(data.id_pago)"
               />
+              <span v-else class="text-muted">—</span>
             </template>
           </Column>
         </DataTable>
@@ -2101,17 +2090,20 @@ onMounted(async () => {
           </Column>
           <Column header="Factura" style="width: 8rem">
             <template #body="{ data }">
-              <Button
-                v-if="cuotasPagoPorPeriodo.get(data.periodo)"
-                icon="pi pi-file-pdf"
-                label="Ver"
-                size="small"
-                severity="secondary"
-                outlined
-                :loading="facturaAbriendoId === cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                :disabled="facturaAbriendoId != null && facturaAbriendoId !== cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                @click="verFacturaPago(cuotasPagoPorPeriodo.get(data.periodo)!.id_pago)"
-              />
+              <template v-if="cuotasPagoPorPeriodo.get(data.periodo)">
+                <Button
+                  v-if="!esPagoFacturaSecundario(cuotasPagoPorPeriodo.get(data.periodo)!)"
+                  icon="pi pi-file-pdf"
+                  label="Ver"
+                  size="small"
+                  severity="secondary"
+                  outlined
+                  :loading="facturaAbriendoId === cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
+                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
+                  @click="verFacturaPago(cuotasPagoPorPeriodo.get(data.periodo)!.id_pago)"
+                />
+                <span v-else class="texto-muted">—</span>
+              </template>
               <span v-else class="texto-muted">—</span>
             </template>
           </Column>
