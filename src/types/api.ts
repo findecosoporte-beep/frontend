@@ -267,6 +267,13 @@ export interface Servicio {
   porcentaje: string | number
 }
 
+export interface AnularPagoResponse {
+  detail: string
+  id_pago_maestro: number
+  pagos_anulados: number[]
+  id_prestamo: number
+}
+
 export interface HistorialPagosCobrosFila {
   id_pago: number
   fecha_pago: string

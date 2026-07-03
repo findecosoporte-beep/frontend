@@ -4,18 +4,22 @@ import { computed, onMounted, ref } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
+import Textarea from 'primevue/textarea'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import type { Cartera, HistorialPagosCobrosResponse, Paginated } from '@/types/api'
+import type { AnularPagoResponse, Cartera, HistorialPagosCobrosResponse, Paginated } from '@/types/api'
 
 const toast = useToast()
 const auth = useAuthStore()
+const { canAnularPagos } = usePermissions()
 
 const MESES = [
   { label: 'Enero', value: 1 },
@@ -55,8 +59,13 @@ const carteras = ref<Cartera[]>([])
 const loading = ref(false)
 const exportandoExcel = ref(false)
 const exportandoPdf = ref(false)
+const anulando = ref(false)
 const error = ref('')
 const reporte = ref<HistorialPagosCobrosResponse | null>(null)
+
+const dialogAnularVisible = ref(false)
+const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
+const motivoAnulacion = ref('')
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
@@ -264,6 +273,56 @@ function imprimirHistorial() {
   window.print()
 }
 
+function abrirDialogoAnular(fila: { id_pago: number; nombre_cliente: string; total: string }) {
+  pagoSeleccionado.value = fila
+  motivoAnulacion.value = ''
+  dialogAnularVisible.value = true
+}
+
+function cerrarDialogoAnular() {
+  dialogAnularVisible.value = false
+  pagoSeleccionado.value = null
+  motivoAnulacion.value = ''
+}
+
+async function confirmarAnulacion() {
+  if (!pagoSeleccionado.value) return
+  const motivo = motivoAnulacion.value.trim()
+  if (!motivo) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Motivo requerido',
+      detail: 'Indique por qué se anula este cobro.',
+      life: 4000,
+    })
+    return
+  }
+  anulando.value = true
+  try {
+    const { data } = await api.post<AnularPagoResponse>(
+      `/pagos/${pagoSeleccionado.value.id_pago}/anular/`,
+      { motivo },
+    )
+    toast.add({
+      severity: 'success',
+      summary: 'Cobro anulado',
+      detail: data.detail,
+      life: 5000,
+    })
+    cerrarDialogoAnular()
+    await consultarHistorial()
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo anular',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    anulando.value = false
+  }
+}
+
 onMounted(async () => {
   if (auth.isAuthenticated && !auth.profile) {
     await auth.fetchProfile()
@@ -431,7 +490,58 @@ onMounted(async () => {
         <Column header="Total" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.total) }}</template>
         </Column>
+        <Column v-if="canAnularPagos" header="Acciones" class="no-print-col">
+          <template #body="{ data }">
+            <Button
+              label="Anular"
+              icon="pi pi-times-circle"
+              severity="danger"
+              size="small"
+              outlined
+              type="button"
+              :disabled="anulando"
+              @click="abrirDialogoAnular(data)"
+            />
+          </template>
+        </Column>
       </DataTable>
+
+      <Dialog
+        v-model:visible="dialogAnularVisible"
+        modal
+        header="Anular cobro"
+        class="dialog-anular-cobro no-print"
+        :style="{ width: 'min(28rem, 95vw)' }"
+        @hide="cerrarDialogoAnular"
+      >
+        <p v-if="pagoSeleccionado" class="dialog-anular-resumen">
+          Se anulará el cobro de <strong>{{ pagoSeleccionado.nombre_cliente }}</strong>
+          por <strong>{{ formatMoney(pagoSeleccionado.total) }}</strong>.
+          El saldo del préstamo se recalculará y la factura quedará marcada como anulada.
+        </p>
+        <div class="dialog-anular-field">
+          <label for="motivo-anulacion">Motivo</label>
+          <Textarea
+            id="motivo-anulacion"
+            v-model="motivoAnulacion"
+            rows="3"
+            auto-resize
+            class="w-full"
+            placeholder="Ej.: cobro duplicado, monto incorrecto…"
+          />
+        </div>
+        <template #footer>
+          <Button label="Cancelar" severity="secondary" text type="button" @click="cerrarDialogoAnular" />
+          <Button
+            label="Anular cobro"
+            icon="pi pi-times-circle"
+            severity="danger"
+            type="button"
+            :loading="anulando"
+            @click="confirmarAnulacion"
+          />
+        </template>
+      </Dialog>
 
       <table class="historial-print-table" aria-hidden="true">
         <thead>
@@ -590,6 +700,23 @@ onMounted(async () => {
 
 .historial-total-grande {
   font-size: 1rem;
+}
+
+.dialog-anular-resumen {
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+
+.dialog-anular-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dialog-anular-field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color);
 }
 
 .historial-print-table {
