@@ -88,6 +88,7 @@ function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boole
     fila.documento,
     fila.capital,
     fila.total,
+    fila.fecha_programada,
     fila.fecha_pago,
     fila.hora_pago,
     String(fila.id_pago),
@@ -508,7 +509,12 @@ onMounted(async () => {
         responsive-layout="scroll"
         class="historial-table no-print-table"
       >
-        <Column header="Fecha">
+        <Column header="Fecha programada">
+          <template #body="{ data }">
+            {{ data.fecha_programada ? formatDate(data.fecha_programada) : '—' }}
+          </template>
+        </Column>
+        <Column header="Fecha canceló">
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
         </Column>
         <Column header="Hora">
@@ -581,7 +587,8 @@ onMounted(async () => {
       <table class="historial-print-table" aria-hidden="true">
         <thead>
           <tr>
-            <th>Fecha</th>
+            <th>F. programada</th>
+            <th>F. canceló</th>
             <th>Hora</th>
             <th>Cliente</th>
             <th>DNI</th>
@@ -594,6 +601,7 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
+            <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
             <td>{{ formatDate(fila.fecha_pago) }}</td>
             <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
             <td>{{ fila.nombre_cliente }}</td>
