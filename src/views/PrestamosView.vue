@@ -87,7 +87,10 @@ const rolEtiquetaCorto: Record<string, string> = {
 /** Opciones del Select: `label` para mostrar nombre y DNI juntos */
 const clienteOptions = ref<Array<{ id_cliente: number; nombre: string; dni: string; label: string }>>([])
 const clientesById = ref<Record<number, Cliente>>({})
-const clientesConPrestamoIds = ref<Set<number>>(new Set())
+const clientesConPrestamoActivoIds = ref<Set<number>>(new Set())
+const prestamosRegistrados = ref<Prestamo[]>([])
+
+const ESTADOS_PRESTAMO_ACTIVO = new Set(['activo', 'mora', 'pendiente_aprobacion'])
 const usuarioOptions = ref<
   Array<{ id_usuario: number; nombre: string; rol: string; label: string }>
 >([])
@@ -297,9 +300,24 @@ const clienteEditEtiqueta = computed(() => {
   return dni ? `${c.nombre} — DNI: ${dni}` : (c.nombre?.trim() || nombreClienteListado(id))
 })
 
-const clienteOptionsSinPrestamo = computed(() =>
-  clienteOptions.value.filter((c) => !clientesConPrestamoIds.value.has(c.id_cliente)),
+const clienteOptionsParaNuevoPrestamo = computed(() =>
+  clienteOptions.value.filter((c) => !clientesConPrestamoActivoIds.value.has(c.id_cliente)),
 )
+
+const clienteSeleccionadoEsRenovacion = computed(() => {
+  const id = form.value.id_cliente
+  if (id == null) return false
+  return prestamosRegistrados.value.some((p) => p.id_cliente === id && p.estado === 'pagado')
+})
+
+const ultimoPrestamoPagadoCliente = computed(() => {
+  const id = form.value.id_cliente
+  if (id == null) return null
+  const pagados = prestamosRegistrados.value
+    .filter((p) => p.id_cliente === id && p.estado === 'pagado')
+    .sort((a, b) => b.id_prestamo - a.id_prestamo)
+  return pagados[0] ?? null
+})
 
 const asesorOptions = computed(() =>
   usuarioOptions.value.filter((u) => u.rol === 'asesor' || u.rol === 'supervisor' || u.rol === 'administrador'),
@@ -540,7 +558,7 @@ async function saveEditPrestamo() {
     await api.patch(`/prestamos/${editingPrestamoId.value}/`, buildEditPayload())
     toast.add({ severity: 'success', summary: 'Préstamo actualizado', life: 3000 })
     editDialogVisible.value = false
-    await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
+    await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
   } finally {
@@ -560,7 +578,7 @@ function confirmarEliminarPrestamo(row: Prestamo) {
       try {
         await api.delete(`/prestamos/${row.id_prestamo}/`)
         toast.add({ severity: 'success', summary: 'Préstamo eliminado', life: 3000 })
-        await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
+        await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
       } catch (e) {
         toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
       }
@@ -842,13 +860,27 @@ function sincronizarCarteraDesdeCliente(idCliente: number | null) {
   form.value.id_zona = cartera.id_zona
 }
 
-async function cargarIdsClientesConPrestamo() {
+async function cargarPrestamosParaRenovacion() {
   const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
+  prestamosRegistrados.value = prestamos
   const ids = new Set<number>()
   for (const p of prestamos) {
-    if (p.id_cliente != null) ids.add(p.id_cliente)
+    if (p.id_cliente != null && ESTADOS_PRESTAMO_ACTIVO.has(p.estado)) {
+      ids.add(p.id_cliente)
+    }
   }
-  clientesConPrestamoIds.value = ids
+  clientesConPrestamoActivoIds.value = ids
+}
+
+function calcularCiclosRenovacion(idCliente: number): number {
+  const delCliente = prestamosRegistrados.value.filter((p) => p.id_cliente === idCliente)
+  if (!delCliente.length) return 0
+  const maxCiclos = Math.max(...delCliente.map((p) => Number(p.ciclos) || 0))
+  return maxCiclos + 1
+}
+
+function sincronizarCiclosDesdeCliente(idCliente: number | null) {
+  form.value.ciclos = idCliente == null ? 0 : calcularCiclosRenovacion(idCliente)
 }
 
 async function loadOptions() {
@@ -857,7 +889,7 @@ async function loadOptions() {
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
     fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
-    cargarIdsClientesConPrestamo(),
+    cargarPrestamosParaRenovacion(),
   ])
   clienteOptions.value = clientes
     .map(mapClienteOption)
@@ -937,10 +969,10 @@ async function openCreate() {
   simulacionError.value = ''
   simulacionNotice.value = ''
   simulationSignature.value = ''
-  await cargarIdsClientesConPrestamo()
+  await cargarPrestamosParaRenovacion()
   form.value = {
     numero_prestamo: '',
-    id_cliente: clienteOptionsSinPrestamo.value[0]?.id_cliente ?? null,
+    id_cliente: clienteOptionsParaNuevoPrestamo.value[0]?.id_cliente ?? null,
     id_usuario: asesorOptions.value[0]?.id_usuario ?? null,
     id_asesor: asesorOptions.value[0]?.id_usuario ?? null,
     id_cobrador: cobradorOptions.value[0]?.id_usuario ?? null,
@@ -959,6 +991,7 @@ async function openCreate() {
     ciclos: 0,
   }
   sincronizarCarteraDesdeCliente(form.value.id_cliente)
+  sincronizarCiclosDesdeCliente(form.value.id_cliente)
   wizardStep.value = 1
   dialogVisible.value = true
   void asignarNumeroPrestamoGenerado()
@@ -997,6 +1030,7 @@ watch(
   () => form.value.id_cliente,
   (idCliente) => {
     sincronizarCarteraDesdeCliente(idCliente)
+    sincronizarCiclosDesdeCliente(idCliente)
   },
 )
 
@@ -1324,13 +1358,14 @@ async function save() {
 
     if (
       form.value.id_cliente != null &&
-      clientesConPrestamoIds.value.has(form.value.id_cliente)
+      clientesConPrestamoActivoIds.value.has(form.value.id_cliente)
     ) {
       toast.add({
         severity: 'warn',
-        summary: 'Cliente con préstamo',
-        detail: 'Este cliente ya tiene un préstamo registrado. Selecciona otro cliente.',
-        life: 5000,
+        summary: 'Préstamo activo',
+        detail:
+          'Este cliente tiene un préstamo activo o en mora. Solo puede renovar cuando el anterior esté pagado o cancelado.',
+        life: 5500,
       })
       return
     }
@@ -1338,14 +1373,14 @@ async function save() {
     const payload = buildPayload()
     await api.post('/prestamos/', payload)
     if (form.value.id_cliente != null) {
-      clientesConPrestamoIds.value = new Set([
-        ...clientesConPrestamoIds.value,
+      clientesConPrestamoActivoIds.value = new Set([
+        ...clientesConPrestamoActivoIds.value,
         form.value.id_cliente,
       ])
     }
     toast.add({ severity: 'success', summary: 'Préstamo creado', life: 3000 })
     dialogVisible.value = false
-    await Promise.all([loadPrestamosList(), cargarIdsClientesConPrestamo()])
+    await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
   } finally {
@@ -1531,14 +1566,14 @@ watch(
               <Select
                 id="p-cliente"
                 v-model="form.id_cliente"
-                :options="clienteOptionsSinPrestamo"
+                :options="clienteOptionsParaNuevoPrestamo"
                 option-label="label"
                 option-value="id_cliente"
                 placeholder="Buscar cliente por nombre o DNI"
                 filter
                 filter-placeholder="Buscar..."
-                empty-filter-message="No hay clientes sin préstamo con ese criterio."
-                empty-message="No hay clientes disponibles sin préstamo."
+                empty-filter-message="No hay clientes elegibles con ese criterio."
+                empty-message="No hay clientes disponibles (todos tienen préstamo activo)."
                 :show-clear="true"
                 fluid
                 class="cliente-select"
@@ -1556,9 +1591,21 @@ watch(
               />
             </div>
             <small class="hint-text">
-              Solo se muestran clientes que aún no tienen préstamo.
+              Clientes sin préstamo activo. Si ya pagó uno anterior, puede renovar con código nuevo.
               <template v-if="canWriteClientes"> Si no aparece, regístralo con «Nuevo».</template>
             </small>
+            <Message
+              v-if="clienteSeleccionadoEsRenovacion && ultimoPrestamoPagadoCliente"
+              severity="info"
+              :closable="false"
+              class="renovacion-hint"
+            >
+              Renovación: el préstamo
+              <strong>{{ ultimoPrestamoPagadoCliente.numero_prestamo }}</strong>
+              está pagado. Se creará el código
+              <strong>{{ form.numero_prestamo || '…' }}</strong>
+              (ciclo {{ form.ciclos }}).
+            </Message>
           </div>
           <div class="full asesor-select-wrap">
             <label class="lbl" for="p-asesor">Asesor</label>
