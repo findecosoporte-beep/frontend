@@ -11,7 +11,7 @@ import { useToast } from 'primevue/usetoast'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
 import type { Cartera, HistorialPagosCobrosResponse, Paginated } from '@/types/api'
 
 const toast = useToast()
@@ -395,6 +395,9 @@ onMounted(async () => {
         <h2 class="historial-marca">FINDECO</h2>
         <p class="historial-cartera">CARTERA: {{ tituloCartera }}</p>
         <p class="historial-periodo">PERIODO: {{ periodoLegible }}</p>
+        <p v-if="reporte.generado_en" class="historial-generado">
+          GENERADO: {{ formatDateTime(reporte.generado_en) }}
+        </p>
         <p class="historial-tipo">HISTORIAL DE PAGOS — PRÉSTAMOS</p>
       </header>
 
@@ -407,6 +410,9 @@ onMounted(async () => {
       >
         <Column header="Fecha">
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
+        </Column>
+        <Column header="Hora">
+          <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
         </Column>
         <Column field="nombre_cliente" header="Cliente" />
         <Column field="dni_cliente" header="DNI" />
@@ -431,6 +437,7 @@ onMounted(async () => {
         <thead>
           <tr>
             <th>Fecha</th>
+            <th>Hora</th>
             <th>Cliente</th>
             <th>DNI</th>
             <th>Préstamo</th>
@@ -445,6 +452,7 @@ onMounted(async () => {
         <tbody>
           <tr v-for="fila in reporte.filas" :key="fila.id_pago">
             <td>{{ formatDate(fila.fecha_pago) }}</td>
+            <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
             <td>{{ fila.nombre_cliente }}</td>
             <td>{{ fila.dni_cliente }}</td>
             <td>{{ fila.numero_prestamo }}</td>
@@ -563,6 +571,7 @@ onMounted(async () => {
 
 .historial-cartera,
 .historial-periodo,
+.historial-generado,
 .historial-tipo {
   margin: 0.2rem 0 0;
   font-size: 0.9rem;

@@ -16,7 +16,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
 import {
   fechaCobroModalNegocio,
   resolverDiaCobroOperativo,
@@ -91,6 +91,7 @@ const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosFilasPrint = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosResumen = ref<ReporteIntegracionResumen | null>(null)
 const hojaCobrosFechaReporte = ref('')
+const hojaCobrosGeneradoEn = ref('')
 const hojaPreviewVisible = ref(false)
 const hojaPreviewCargando = ref(false)
 const hojaImprimiendo = ref(false)
@@ -334,6 +335,10 @@ const hojaCobrosFechaLegible = computed(() =>
   hojaCobrosFechaReporte.value ? formatFechaHojaLegible(hojaCobrosFechaReporte.value) : formatFechaHojaLegible(getTodayISO()),
 )
 
+const hojaCobrosGeneradoLegible = computed(() =>
+  hojaCobrosGeneradoEn.value ? formatDateTime(hojaCobrosGeneradoEn.value) : formatDateTime(new Date().toISOString()),
+)
+
 function formatNumeroHoja(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return ''
   const n = typeof value === 'string' ? Number.parseFloat(value) : value
@@ -422,6 +427,7 @@ async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: 
     hojaCobrosFilas.value = (data.filas ?? []).slice(0, hojaCobrosPageSize.value)
     hojaCobrosResumen.value = data.resumen ?? null
     hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
+    hojaCobrosGeneradoEn.value = data.generado_en ?? ''
     hojaCobrosTotal.value = data.count ?? data.resumen?.prestamos ?? hojaCobrosFilas.value.length
     if (typeof data.page === 'number') hojaCobrosPage.value = data.page
     hojaCobrosCargada.value = true
@@ -1654,6 +1660,7 @@ onMounted(async () => {
           <h1 class="hoja-findeco-marca">FINDECO</h1>
           <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
           <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
+          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
         </header>
 
         <DataTable
@@ -1785,6 +1792,7 @@ onMounted(async () => {
           />
           <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
           <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
+          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
         </header>
 
         <div class="hoja-preview-scroll">
@@ -1998,6 +2006,9 @@ onMounted(async () => {
           <Column field="id_pago" header="ID pago" style="width: 6rem" />
           <Column header="Fecha">
             <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
+          </Column>
+          <Column header="Hora">
+            <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
           </Column>
           <Column header="Capital">
             <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
