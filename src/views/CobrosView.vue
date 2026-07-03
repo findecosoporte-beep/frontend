@@ -926,13 +926,114 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
   })
 }
 
+function coincideNumeroPrestamo(numero: string, q: string): boolean {
+  const normalizado = numero.trim().toLowerCase()
+  const criterio = q.trim().toLowerCase()
+  if (!normalizado || !criterio) return false
+  return normalizado === criterio || normalizado.includes(criterio)
+}
+
+function encontrarPrestamoEnMeta(q: string, soloExacto = false) {
+  const criterio = q.trim().toLowerCase()
+  const exacto = prestamoMeta.value.find(
+    (p) => p.numero_prestamo.trim().toLowerCase() === criterio,
+  )
+  if (exacto) return exacto
+  if (soloExacto) return undefined
+  return prestamoMeta.value.find((p) => coincideNumeroPrestamo(p.numero_prestamo, q))
+}
+
+async function buscarPrestamoEnApi(q: string): Promise<{
+  id_prestamo: number
+  id_cliente: number
+  numero_prestamo: string
+  estado: string
+  nombre: string
+  dni: string
+} | null> {
+  const { data } = await api.get<Paginated<Prestamo>>(
+    `/prestamos/?search=${encodeURIComponent(q)}&page_size=20`,
+  )
+  const criterio = q.trim().toLowerCase()
+  const exacto = data.results.find(
+    (p) => (p.numero_prestamo ?? '').trim().toLowerCase() === criterio,
+  )
+  const parcial = data.results.find((p) => coincideNumeroPrestamo(p.numero_prestamo ?? '', q))
+  const hit = exacto ?? parcial ?? null
+  if (!hit) return null
+
+  const clienteCache = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
+  if (clienteCache) {
+    return {
+      id_prestamo: hit.id_prestamo,
+      id_cliente: hit.id_cliente,
+      numero_prestamo: hit.numero_prestamo,
+      estado: hit.estado ?? '',
+      nombre: clienteCache.nombre,
+      dni: clienteCache.dni,
+    }
+  }
+
+  const resolved = await resolverClientePorPrestamo(hit.id_prestamo)
+  return {
+    id_prestamo: hit.id_prestamo,
+    id_cliente: hit.id_cliente,
+    numero_prestamo: hit.numero_prestamo,
+    estado: hit.estado ?? '',
+    nombre: resolved.nombre,
+    dni: resolved.dni,
+  }
+}
+
+async function resolverPrestamoPorBusqueda(q: string) {
+  const local = encontrarPrestamoEnMeta(q)
+  if (local) {
+    return {
+      id_prestamo: local.id_prestamo,
+      id_cliente: local.id_cliente,
+      numero_prestamo: local.numero_prestamo,
+      estado: local.estado,
+      nombre: local.nombre,
+      dni: local.dni,
+    }
+  }
+  return buscarPrestamoEnApi(q)
+}
+
+async function aplicarBusquedaPorPrestamo(hit: {
+  id_prestamo: number
+  id_cliente: number
+  numero_prestamo: string
+  estado: string
+  nombre: string
+  dni: string
+}) {
+  const cliente = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
+  searchResult.value = {
+    id_cliente: hit.id_cliente,
+    nombre: hit.nombre,
+    dni: hit.dni,
+    telefono: cliente?.telefono ?? '',
+    direccion_residencia: cliente?.direccion_residencia ?? '',
+    actividad_economica: cliente?.actividad_economica ?? '',
+    hasPrestamo: true,
+    prestamoId: hit.id_prestamo,
+    prestamoLabel: `${hit.numero_prestamo} (${hit.estado})`,
+  }
+  if (hit.estado === 'cancelado' || hit.estado === 'pagado') {
+    proximaCuotaSemanalMensaje.value = 'El préstamo no está activo para cobrar.'
+    return
+  }
+  await cargarProximaCuotaParaCobro(hit.id_prestamo)
+}
+
 async function buscarCliente() {
   const q = clienteSearch.value.trim()
   if (!q) {
     toast.add({
       severity: 'warn',
       summary: 'Buscar cliente',
-      detail: 'Ingresa el DNI o nombre del cliente.',
+      detail: 'Ingresa el DNI, nombre o número de préstamo.',
       life: 3500,
     })
     return
@@ -944,6 +1045,19 @@ async function buscarCliente() {
   proximaCuotaSemanalMensaje.value = ''
   proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
   try {
+    const prestamoExactoLocal = encontrarPrestamoEnMeta(q, true)
+    if (prestamoExactoLocal) {
+      await aplicarBusquedaPorPrestamo({
+        id_prestamo: prestamoExactoLocal.id_prestamo,
+        id_cliente: prestamoExactoLocal.id_cliente,
+        numero_prestamo: prestamoExactoLocal.numero_prestamo,
+        estado: prestamoExactoLocal.estado,
+        nombre: prestamoExactoLocal.nombre,
+        dni: prestamoExactoLocal.dni,
+      })
+      return
+    }
+
     let cliente = clienteMeta.value.find((c) => c.dni === q)
     if (!cliente) {
       cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
@@ -965,10 +1079,15 @@ async function buscarCliente() {
       }
     }
     if (!cliente) {
+      const prestamoHit = await resolverPrestamoPorBusqueda(q)
+      if (prestamoHit) {
+        await aplicarBusquedaPorPrestamo(prestamoHit)
+        return
+      }
       toast.add({
         severity: 'info',
         summary: 'Sin resultados',
-        detail: 'No se encontró un cliente con ese criterio.',
+        detail: 'No se encontró cliente ni préstamo con ese criterio.',
         life: 4000,
       })
       return
@@ -1868,8 +1987,8 @@ onMounted(async () => {
     <section v-if="canWritePagos" class="gestion-cobros-section no-print">
       <h2 class="section-title">Gestión de cobro de cuotas</h2>
       <p class="hint-text">
-        Busca un cliente por DNI o nombre, o pulsa <strong>Cobrar</strong> en la hoja de arriba para registrar el pago y
-        generar la factura.
+        Busca por DNI, nombre o número de préstamo, o pulsa <strong>Cobrar</strong> en la hoja de arriba para
+        registrar el pago y generar la factura.
       </p>
 
       <div class="transacciones-panel">
@@ -1877,7 +1996,7 @@ onMounted(async () => {
           <div class="dni-search-wrap dni-busqueda-linea">
             <InputText
               v-model="clienteSearch"
-              placeholder="DNI o nombre del cliente"
+              placeholder="DNI, nombre o número de préstamo"
               class="campo-buscar-cliente"
               @keyup.enter="buscarCliente"
             />
@@ -1892,7 +2011,7 @@ onMounted(async () => {
         </div>
 
         <p v-if="hasClientSearchExecuted && !searchResult && !buscarClienteLoading" class="gestion-sin-resultado">
-          No se encontró cliente con ese criterio.
+          No se encontró cliente ni préstamo con ese criterio.
         </p>
 
         <div v-if="searchResult" class="result-box">
