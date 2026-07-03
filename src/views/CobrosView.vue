@@ -1495,6 +1495,9 @@ async function confirmarPagoCuota() {
           if (linea.abono_capital) {
             return `Abono a capital: ${formatMoney(Number(linea.total))}`
           }
+          if (linea.parcial) {
+            return `Abono parcial cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`
+          }
           return `Cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`
         })
         .join('; ')
@@ -2172,7 +2175,7 @@ onMounted(async () => {
           {{ formatMoney(cajaPendienteCuotaTrasCobro) }} en la cuota #{{ cajaForm.cuota_numero }} (sin interés adicional).
         </p>
         <p v-else-if="cajaHayExcedente" class="caja-excedente-hint">
-          El monto recibido excede esta cuota; el sobrante se abonará a la(s) siguiente(s).
+          El monto recibido excede esta cuota; el sobrante se registrará como abono a capital.
         </p>
         <p class="caja-factura-hint">Al confirmar se registra el pago y se abre el PDF de factura para imprimir o guardar.</p>
         <div class="caja-form-grid">
