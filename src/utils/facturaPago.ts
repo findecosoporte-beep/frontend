@@ -40,6 +40,13 @@ export function buildPagoPorCuotaConFallback(
   return map
 }
 
+/** Pago secundario de un cobro repartido (sin factura propia). */
+export function esPagoFacturaSecundario(
+  pago: Pick<Pago, 'id_pago_factura'>,
+): boolean {
+  return pago.id_pago_factura != null && Number(pago.id_pago_factura) > 0
+}
+
 /** Abre el PDF de factura del pago en una pestaña nueva e invoca impresión. */
 export async function abrirFacturaPago(idPago: number, ticketFormat: '58' | '80' = '58'): Promise<void> {
   const response = await api.get(`/pagos/${idPago}/factura-pdf/?ticket=${ticketFormat}`, {

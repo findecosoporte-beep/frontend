@@ -106,6 +106,7 @@ const diasCobroLabel = Object.fromEntries(
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
 
 const dialogVisible = ref(false)
+const formularioModo = ref<'nuevo' | 'renovar'>('nuevo')
 const nuevoClienteDialogVisible = ref(false)
 const nuevoAsesorDialogVisible = ref(false)
 const nuevoCobradorDialogVisible = ref(false)
@@ -275,6 +276,35 @@ const wizardStepTitle = computed(() => {
   return 'Cálculo y guardado'
 })
 
+const esModoRenovacion = computed(() => formularioModo.value === 'renovar')
+
+const dialogPrestamoHeader = computed(() => {
+  const titulo = esModoRenovacion.value ? 'Renovar préstamo' : 'Nuevo préstamo'
+  return `${titulo} · Paso ${wizardStep.value}/${totalWizardSteps}: ${wizardStepTitle.value}`
+})
+
+function prestamosDelCliente(idCliente: number): Prestamo[] {
+  return prestamosRegistrados.value.filter((p) => p.id_cliente === idCliente)
+}
+
+const clienteOptionsPrimerPrestamo = computed(() =>
+  clienteOptions.value.filter((c) => {
+    if (clientesConPrestamoActivoIds.value.has(c.id_cliente)) return false
+    return !prestamosDelCliente(c.id_cliente).some((p) => p.estado === 'pagado')
+  }),
+)
+
+const clienteOptionsRenovacion = computed(() =>
+  clienteOptions.value.filter((c) => {
+    if (clientesConPrestamoActivoIds.value.has(c.id_cliente)) return false
+    return prestamosDelCliente(c.id_cliente).some((p) => p.estado === 'pagado')
+  }),
+)
+
+const clienteOptionsFormulario = computed(() =>
+  esModoRenovacion.value ? clienteOptionsRenovacion.value : clienteOptionsPrimerPrestamo.value,
+)
+
 const fechaVencimientoCalculada = computed(() => {
   if (!form.value.fecha_entrega || form.value.plazo <= 0) return ''
   const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
@@ -298,16 +328,6 @@ const clienteEditEtiqueta = computed(() => {
   if (!c) return nombreClienteListado(id)
   const dni = c.dni?.trim()
   return dni ? `${c.nombre} — DNI: ${dni}` : (c.nombre?.trim() || nombreClienteListado(id))
-})
-
-const clienteOptionsParaNuevoPrestamo = computed(() =>
-  clienteOptions.value.filter((c) => !clientesConPrestamoActivoIds.value.has(c.id_cliente)),
-)
-
-const clienteSeleccionadoEsRenovacion = computed(() => {
-  const id = form.value.id_cliente
-  if (id == null) return false
-  return prestamosRegistrados.value.some((p) => p.id_cliente === id && p.estado === 'pagado')
 })
 
 const ultimoPrestamoPagadoCliente = computed(() => {
@@ -964,7 +984,7 @@ async function regenerarNumeroPrestamoEdit() {
   await asignarNumeroPrestamoEditado()
 }
 
-async function openCreate() {
+async function prepararDialogoPrestamo(idCliente: number | null) {
   simulacion.value = null
   simulacionError.value = ''
   simulacionNotice.value = ''
@@ -972,7 +992,7 @@ async function openCreate() {
   await cargarPrestamosParaRenovacion()
   form.value = {
     numero_prestamo: '',
-    id_cliente: clienteOptionsParaNuevoPrestamo.value[0]?.id_cliente ?? null,
+    id_cliente: idCliente,
     id_usuario: asesorOptions.value[0]?.id_usuario ?? null,
     id_asesor: asesorOptions.value[0]?.id_usuario ?? null,
     id_cobrador: cobradorOptions.value[0]?.id_usuario ?? null,
@@ -995,6 +1015,26 @@ async function openCreate() {
   wizardStep.value = 1
   dialogVisible.value = true
   void asignarNumeroPrestamoGenerado()
+}
+
+async function openCreate() {
+  formularioModo.value = 'nuevo'
+  await prepararDialogoPrestamo(clienteOptionsPrimerPrestamo.value[0]?.id_cliente ?? null)
+}
+
+async function openRenovacion() {
+  formularioModo.value = 'renovar'
+  await cargarPrestamosParaRenovacion()
+  if (!clienteOptionsRenovacion.value.length) {
+    toast.add({
+      severity: 'info',
+      summary: 'Sin clientes para renovar',
+      detail: 'No hay clientes con un préstamo pagado y sin préstamo activo.',
+      life: 5000,
+    })
+    return
+  }
+  await prepararDialogoPrestamo(clienteOptionsRenovacion.value[0]?.id_cliente ?? null)
 }
 
 function goToNextStep() {
@@ -1370,6 +1410,30 @@ async function save() {
       return
     }
 
+    if (esModoRenovacion.value) {
+      const id = form.value.id_cliente
+      if (id == null || !clienteOptionsRenovacion.value.some((c) => c.id_cliente === id)) {
+        toast.add({
+          severity: 'warn',
+          summary: 'Renovación',
+          detail: 'Seleccione un cliente con un préstamo pagado para renovar.',
+          life: 5000,
+        })
+        return
+      }
+    } else if (
+      form.value.id_cliente != null &&
+      prestamosDelCliente(form.value.id_cliente).some((p) => p.estado === 'pagado')
+    ) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Use renovación',
+        detail: 'Este cliente ya pagó un préstamo. Use el botón «Renovar préstamo».',
+        life: 5500,
+      })
+      return
+    }
+
     const payload = buildPayload()
     await api.post('/prestamos/', payload)
     if (form.value.id_cliente != null) {
@@ -1378,7 +1442,14 @@ async function save() {
         form.value.id_cliente,
       ])
     }
-    toast.add({ severity: 'success', summary: 'Préstamo creado', life: 3000 })
+    toast.add({
+      severity: 'success',
+      summary: esModoRenovacion.value ? 'Préstamo renovado' : 'Préstamo creado',
+      detail: esModoRenovacion.value
+        ? `Se registró ${form.value.numero_prestamo} (ciclo ${form.value.ciclos}).`
+        : undefined,
+      life: 4000,
+    })
     dialogVisible.value = false
     await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
@@ -1430,7 +1501,16 @@ watch(
   <div class="page">
     <div class="prestamos-header">
       <h1 class="title">Préstamos</h1>
-      <Button v-if="canWritePrestamos" label="Nuevo préstamo" icon="pi pi-plus" @click="openCreate" />
+      <div v-if="canWritePrestamos" class="prestamos-header-actions">
+        <Button label="Nuevo préstamo" icon="pi pi-plus" @click="openCreate" />
+        <Button
+          label="Renovar préstamo"
+          icon="pi pi-replay"
+          severity="info"
+          outlined
+          @click="openRenovacion"
+        />
+      </div>
     </div>
 
     <section class="prestamos-listado">
@@ -1523,11 +1603,21 @@ watch(
 
     <Dialog
       v-model:visible="dialogVisible"
-      :header="`Nuevo préstamo · Paso ${wizardStep}/${totalWizardSteps}: ${wizardStepTitle}`"
+      :header="dialogPrestamoHeader"
       modal
       class="prestamo-dialog"
+      :class="{ 'prestamo-dialog--renovacion': esModoRenovacion }"
       :style="{ width: 'min(78rem, 98vw)' }"
     >
+      <Message
+        v-if="esModoRenovacion"
+        severity="info"
+        :closable="false"
+        class="renovacion-banner"
+      >
+        Renovación de préstamo: mismo cliente, código nuevo y plan de cuotas nuevo. El préstamo
+        anterior pagado queda en el historial.
+      </Message>
       <div class="wizard-head">
         <div :class="['wizard-pill', { active: wizardStep >= 1 }]">1. Identificación</div>
         <div :class="['wizard-pill', { active: wizardStep >= 2 }]">2. Condiciones</div>
@@ -1566,20 +1656,28 @@ watch(
               <Select
                 id="p-cliente"
                 v-model="form.id_cliente"
-                :options="clienteOptionsParaNuevoPrestamo"
+                :options="clienteOptionsFormulario"
                 option-label="label"
                 option-value="id_cliente"
                 placeholder="Buscar cliente por nombre o DNI"
                 filter
                 filter-placeholder="Buscar..."
-                empty-filter-message="No hay clientes elegibles con ese criterio."
-                empty-message="No hay clientes disponibles (todos tienen préstamo activo)."
+                :empty-filter-message="
+                  esModoRenovacion
+                    ? 'No hay clientes con préstamo pagado con ese criterio.'
+                    : 'No hay clientes elegibles con ese criterio.'
+                "
+                :empty-message="
+                  esModoRenovacion
+                    ? 'No hay clientes con préstamo pagado disponibles para renovar.'
+                    : 'No hay clientes sin préstamo activo disponibles.'
+                "
                 :show-clear="true"
                 fluid
                 class="cliente-select"
               />
               <Button
-                v-if="canWriteClientes"
+                v-if="canWriteClientes && !esModoRenovacion"
                 type="button"
                 icon="pi pi-user-plus"
                 label="Nuevo"
@@ -1590,12 +1688,8 @@ watch(
                 @click="abrirNuevoClienteModal"
               />
             </div>
-            <small class="hint-text">
-              Clientes sin préstamo activo. Si ya pagó uno anterior, puede renovar con código nuevo.
-              <template v-if="canWriteClientes"> Si no aparece, regístralo con «Nuevo».</template>
-            </small>
             <Message
-              v-if="clienteSeleccionadoEsRenovacion && ultimoPrestamoPagadoCliente"
+              v-if="esModoRenovacion && ultimoPrestamoPagadoCliente"
               severity="info"
               :closable="false"
               class="renovacion-hint"
@@ -1898,7 +1992,7 @@ watch(
         />
         <Button
           v-if="wizardStep === totalWizardSteps"
-          label="Guardar"
+          :label="esModoRenovacion ? 'Renovar préstamo' : 'Guardar'"
           icon="pi pi-check"
           :loading="saving"
           :disabled="!canSave"
@@ -2239,6 +2333,21 @@ watch(
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 1rem;
+}
+
+.prestamos-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.renovacion-banner {
+  margin-bottom: 1rem;
+}
+
+.renovacion-hint {
+  margin-top: 0.65rem;
 }
 
 .prestamos-listado {
