@@ -30,6 +30,10 @@ export function usePermissions() {
     ['administrador', 'supervisor'].includes(rol.value ?? ''),
   )
 
+  const canAnularPagos = computed(() =>
+    ['administrador', 'supervisor'].includes(rol.value ?? ''),
+  )
+
   const needsVinculo = computed(() => auth.profile?.vinculado === false)
 
   return {
@@ -42,5 +46,6 @@ export function usePermissions() {
     canWriteCobranza,
     canConfigureRutaCobranza,
     canManageUsuarios,
+    canAnularPagos,
   }
 }

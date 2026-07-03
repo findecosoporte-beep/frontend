@@ -11,7 +11,7 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
@@ -87,6 +87,7 @@ interface FilaCuotaEstado {
   estado: 'pendiente' | 'pagada'
   id_pago: number | null
   id_pago_factura: number | null
+  cobrado_en: string | null
   fecha_pago: string | null
   documento: string | null
 }
@@ -183,6 +184,7 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
         estado: pago ? 'pagada' : 'pendiente',
         id_pago: pago?.id_pago ?? null,
         id_pago_factura: pago?.id_pago_factura ?? null,
+        cobrado_en: pago?.cobrado_en ?? null,
         fecha_pago: pago?.fecha_pago ?? null,
         documento: pago?.documento ?? null,
       }
@@ -630,6 +632,11 @@ function limpiarFormulario() {
               <Column header="FECHA PAGO">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
+                </template>
+              </Column>
+              <Column header="HORA">
+                <template #body="{ data }: { data: FilaCuotaEstado }">
+                  {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
                 </template>
               </Column>
               <Column header="CUOTA">

@@ -43,6 +43,8 @@ export interface Cliente {
   actividad_economica: string | null
   /** Día de la semana preferido para cobro/visita (mismas claves que zona/cartera). */
   dia_cobro_semanal: DiaCobroCartera | null
+  /** Alta en el sistema (ISO datetime). */
+  creado_en?: string | null
   /** Cantidad de préstamos vinculados (solo en listado API). */
   total_prestamos?: number
 }
@@ -146,6 +148,8 @@ export interface Prestamo {
   categoria: string | null
   fecha_entrega: string
   fecha_vencimiento: string
+  /** Registro del préstamo en el sistema (ISO datetime). */
+  creado_en?: string | null
 }
 
 /** Respuesta de GET /prestamos/reporte-integracion/ */
@@ -193,6 +197,8 @@ export interface ReporteIntegracionResumen {
 
 export interface ReporteIntegracionResponse {
   fecha_reporte: string
+  /** Momento de generación del reporte (ISO datetime). */
+  generado_en?: string
   filas: ReporteIntegracionFila[]
   resumen: ReporteIntegracionResumen
   /** Paginación (GET reporte-integracion con page/page_size). */
@@ -204,7 +210,8 @@ export interface ReporteIntegracionResponse {
 
 /** Línea del resumen cuando POST /pagos/ reparte el cobro en varias cuotas. */
 export interface PagoDistribucionLinea {
-  cuota: number
+  cuota?: number
+  abono_capital?: boolean
   capital?: string
   interes?: string
   mora?: string
@@ -216,6 +223,8 @@ export interface Pago {
   id_pago: number
   id_prestamo: number
   fecha_pago: string
+  /** Hora del cobro (ISO datetime). */
+  cobrado_en?: string | null
   documento: string | null
   capital: string | number
   interes: string | number
@@ -256,6 +265,46 @@ export interface Servicio {
   descuento: string | number
   abono: string | number
   porcentaje: string | number
+}
+
+export interface AnularPagoResponse {
+  detail: string
+  id_pago_maestro: number
+  pagos_anulados: number[]
+  id_prestamo: number
+}
+
+export interface HistorialPagosCobrosFila {
+  id_pago: number
+  fecha_pago: string
+  hora_pago?: string
+  cobrado_en?: string | null
+  documento: string | null
+  capital: string
+  interes: string
+  mora: string
+  total: string
+  id_prestamo: number | null
+  numero_prestamo: string
+  nombre_cliente: string
+  dni_cliente: string
+  cartera_nombre: string
+}
+
+export interface HistorialPagosCobrosResponse {
+  modo: string
+  fecha_inicio: string
+  fecha_fin: string
+  generado_en?: string
+  cartera_etiqueta: string
+  filas: HistorialPagosCobrosFila[]
+  resumen: {
+    registros: number
+    total_capital: string
+    total_interes: string
+    total_mora: string
+    total_cobrado: string
+  }
 }
 
 export interface HistorialPrestamo {

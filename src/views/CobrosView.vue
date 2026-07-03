@@ -16,7 +16,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
 import {
   fechaCobroModalNegocio,
   resolverDiaCobroOperativo,
@@ -91,6 +91,7 @@ const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosFilasPrint = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosResumen = ref<ReporteIntegracionResumen | null>(null)
 const hojaCobrosFechaReporte = ref('')
+const hojaCobrosGeneradoEn = ref('')
 const hojaPreviewVisible = ref(false)
 const hojaPreviewCargando = ref(false)
 const hojaImprimiendo = ref(false)
@@ -334,6 +335,10 @@ const hojaCobrosFechaLegible = computed(() =>
   hojaCobrosFechaReporte.value ? formatFechaHojaLegible(hojaCobrosFechaReporte.value) : formatFechaHojaLegible(getTodayISO()),
 )
 
+const hojaCobrosGeneradoLegible = computed(() =>
+  hojaCobrosGeneradoEn.value ? formatDateTime(hojaCobrosGeneradoEn.value) : formatDateTime(new Date().toISOString()),
+)
+
 function formatNumeroHoja(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return ''
   const n = typeof value === 'string' ? Number.parseFloat(value) : value
@@ -422,6 +427,7 @@ async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: 
     hojaCobrosFilas.value = (data.filas ?? []).slice(0, hojaCobrosPageSize.value)
     hojaCobrosResumen.value = data.resumen ?? null
     hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
+    hojaCobrosGeneradoEn.value = data.generado_en ?? ''
     hojaCobrosTotal.value = data.count ?? data.resumen?.prestamos ?? hojaCobrosFilas.value.length
     if (typeof data.page === 'number') hojaCobrosPage.value = data.page
     hojaCobrosCargada.value = true
@@ -920,13 +926,114 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
   })
 }
 
+function coincideNumeroPrestamo(numero: string, q: string): boolean {
+  const normalizado = numero.trim().toLowerCase()
+  const criterio = q.trim().toLowerCase()
+  if (!normalizado || !criterio) return false
+  return normalizado === criterio || normalizado.includes(criterio)
+}
+
+function encontrarPrestamoEnMeta(q: string, soloExacto = false) {
+  const criterio = q.trim().toLowerCase()
+  const exacto = prestamoMeta.value.find(
+    (p) => p.numero_prestamo.trim().toLowerCase() === criterio,
+  )
+  if (exacto) return exacto
+  if (soloExacto) return undefined
+  return prestamoMeta.value.find((p) => coincideNumeroPrestamo(p.numero_prestamo, q))
+}
+
+async function buscarPrestamoEnApi(q: string): Promise<{
+  id_prestamo: number
+  id_cliente: number
+  numero_prestamo: string
+  estado: string
+  nombre: string
+  dni: string
+} | null> {
+  const { data } = await api.get<Paginated<Prestamo>>(
+    `/prestamos/?search=${encodeURIComponent(q)}&page_size=20`,
+  )
+  const criterio = q.trim().toLowerCase()
+  const exacto = data.results.find(
+    (p) => (p.numero_prestamo ?? '').trim().toLowerCase() === criterio,
+  )
+  const parcial = data.results.find((p) => coincideNumeroPrestamo(p.numero_prestamo ?? '', q))
+  const hit = exacto ?? parcial ?? null
+  if (!hit) return null
+
+  const clienteCache = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
+  if (clienteCache) {
+    return {
+      id_prestamo: hit.id_prestamo,
+      id_cliente: hit.id_cliente,
+      numero_prestamo: hit.numero_prestamo,
+      estado: hit.estado ?? '',
+      nombre: clienteCache.nombre,
+      dni: clienteCache.dni,
+    }
+  }
+
+  const resolved = await resolverClientePorPrestamo(hit.id_prestamo)
+  return {
+    id_prestamo: hit.id_prestamo,
+    id_cliente: hit.id_cliente,
+    numero_prestamo: hit.numero_prestamo,
+    estado: hit.estado ?? '',
+    nombre: resolved.nombre,
+    dni: resolved.dni,
+  }
+}
+
+async function resolverPrestamoPorBusqueda(q: string) {
+  const local = encontrarPrestamoEnMeta(q)
+  if (local) {
+    return {
+      id_prestamo: local.id_prestamo,
+      id_cliente: local.id_cliente,
+      numero_prestamo: local.numero_prestamo,
+      estado: local.estado,
+      nombre: local.nombre,
+      dni: local.dni,
+    }
+  }
+  return buscarPrestamoEnApi(q)
+}
+
+async function aplicarBusquedaPorPrestamo(hit: {
+  id_prestamo: number
+  id_cliente: number
+  numero_prestamo: string
+  estado: string
+  nombre: string
+  dni: string
+}) {
+  const cliente = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
+  searchResult.value = {
+    id_cliente: hit.id_cliente,
+    nombre: hit.nombre,
+    dni: hit.dni,
+    telefono: cliente?.telefono ?? '',
+    direccion_residencia: cliente?.direccion_residencia ?? '',
+    actividad_economica: cliente?.actividad_economica ?? '',
+    hasPrestamo: true,
+    prestamoId: hit.id_prestamo,
+    prestamoLabel: `${hit.numero_prestamo} (${hit.estado})`,
+  }
+  if (hit.estado === 'cancelado' || hit.estado === 'pagado') {
+    proximaCuotaSemanalMensaje.value = 'El préstamo no está activo para cobrar.'
+    return
+  }
+  await cargarProximaCuotaParaCobro(hit.id_prestamo)
+}
+
 async function buscarCliente() {
   const q = clienteSearch.value.trim()
   if (!q) {
     toast.add({
       severity: 'warn',
       summary: 'Buscar cliente',
-      detail: 'Ingresa el DNI o nombre del cliente.',
+      detail: 'Ingresa el DNI, nombre o número de préstamo.',
       life: 3500,
     })
     return
@@ -938,6 +1045,19 @@ async function buscarCliente() {
   proximaCuotaSemanalMensaje.value = ''
   proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
   try {
+    const prestamoExactoLocal = encontrarPrestamoEnMeta(q, true)
+    if (prestamoExactoLocal) {
+      await aplicarBusquedaPorPrestamo({
+        id_prestamo: prestamoExactoLocal.id_prestamo,
+        id_cliente: prestamoExactoLocal.id_cliente,
+        numero_prestamo: prestamoExactoLocal.numero_prestamo,
+        estado: prestamoExactoLocal.estado,
+        nombre: prestamoExactoLocal.nombre,
+        dni: prestamoExactoLocal.dni,
+      })
+      return
+    }
+
     let cliente = clienteMeta.value.find((c) => c.dni === q)
     if (!cliente) {
       cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
@@ -959,10 +1079,15 @@ async function buscarCliente() {
       }
     }
     if (!cliente) {
+      const prestamoHit = await resolverPrestamoPorBusqueda(q)
+      if (prestamoHit) {
+        await aplicarBusquedaPorPrestamo(prestamoHit)
+        return
+      }
       toast.add({
         severity: 'info',
         summary: 'Sin resultados',
-        detail: 'No se encontró un cliente con ese criterio.',
+        detail: 'No se encontró cliente ni préstamo con ese criterio.',
         life: 4000,
       })
       return
@@ -1485,7 +1610,15 @@ async function confirmarPagoCuota() {
     let detail = `Se registró la cuota #${cajaForm.value.cuota_numero}.`
     if (pagoCreado.distribucion?.length) {
       const partes = pagoCreado.distribucion
-        .map((linea) => `Cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`)
+        .map((linea) => {
+          if (linea.abono_capital) {
+            return `Abono a capital: ${formatMoney(Number(linea.total))}`
+          }
+          if (linea.parcial) {
+            return `Abono parcial cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`
+          }
+          return `Cuota #${linea.cuota}: ${formatMoney(Number(linea.total))}`
+        })
         .join('; ')
       detail = `Distribución: ${partes}`
     } else if (cajaPendienteCuotaTrasCobro.value > 0.01) {
@@ -1654,6 +1787,7 @@ onMounted(async () => {
           <h1 class="hoja-findeco-marca">FINDECO</h1>
           <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
           <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
+          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
         </header>
 
         <DataTable
@@ -1730,7 +1864,11 @@ onMounted(async () => {
               {{ formatNumeroHoja(data.saldo_actual) }}
             </template>
           </Column>
-          <Column header="ABONO" style="width: 5.5rem" />
+          <Column header="Nº PRESTAMO" style="width: 6.5rem; text-align: center">
+            <template #body="{ data }: { data: ReporteIntegracionFila }">
+              {{ data.numero_prestamo }}
+            </template>
+          </Column>
           <Column header="CELULAR" style="width: 6.5rem; text-align: center">
             <template #body="{ data }: { data: ReporteIntegracionFila }">
               {{ data.telefono?.trim() || '' }}
@@ -1785,6 +1923,7 @@ onMounted(async () => {
           />
           <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
           <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
+          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
         </header>
 
         <div class="hoja-preview-scroll">
@@ -1799,7 +1938,7 @@ onMounted(async () => {
                 <th class="col-monto">CUOTA</th>
                 <th class="col-monto">CUOTA PEND.</th>
                 <th class="col-monto">SALDO ACTUAL</th>
-                <th class="col-abono">ABONO</th>
+                <th class="col-prestamo">Nº PRESTAMO</th>
                 <th class="col-cel">CELULAR</th>
               </tr>
             </thead>
@@ -1818,7 +1957,7 @@ onMounted(async () => {
                   </span>
                 </td>
                 <td class="col-monto">{{ formatNumeroHoja(fila.saldo_actual) }}</td>
-                <td class="col-abono"></td>
+                <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
                 <td class="col-cel">{{ fila.telefono?.trim() || '' }}</td>
               </tr>
             </tbody>
@@ -1852,8 +1991,8 @@ onMounted(async () => {
     <section v-if="canWritePagos" class="gestion-cobros-section no-print">
       <h2 class="section-title">Gestión de cobro de cuotas</h2>
       <p class="hint-text">
-        Busca un cliente por DNI o nombre, o pulsa <strong>Cobrar</strong> en la hoja de arriba para registrar el pago y
-        generar la factura.
+        Busca por DNI, nombre o número de préstamo, o pulsa <strong>Cobrar</strong> en la hoja de arriba para
+        registrar el pago y generar la factura.
       </p>
 
       <div class="transacciones-panel">
@@ -1861,7 +2000,7 @@ onMounted(async () => {
           <div class="dni-search-wrap dni-busqueda-linea">
             <InputText
               v-model="clienteSearch"
-              placeholder="DNI o nombre del cliente"
+              placeholder="DNI, nombre o número de préstamo"
               class="campo-buscar-cliente"
               @keyup.enter="buscarCliente"
             />
@@ -1876,7 +2015,7 @@ onMounted(async () => {
         </div>
 
         <p v-if="hasClientSearchExecuted && !searchResult && !buscarClienteLoading" class="gestion-sin-resultado">
-          No se encontró cliente con ese criterio.
+          No se encontró cliente ni préstamo con ese criterio.
         </p>
 
         <div v-if="searchResult" class="result-box">
@@ -1998,6 +2137,9 @@ onMounted(async () => {
           <Column field="id_pago" header="ID pago" style="width: 6rem" />
           <Column header="Fecha">
             <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
+          </Column>
+          <Column header="Hora">
+            <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
           </Column>
           <Column header="Capital">
             <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
@@ -2156,7 +2298,7 @@ onMounted(async () => {
           {{ formatMoney(cajaPendienteCuotaTrasCobro) }} en la cuota #{{ cajaForm.cuota_numero }} (sin interés adicional).
         </p>
         <p v-else-if="cajaHayExcedente" class="caja-excedente-hint">
-          El monto recibido excede esta cuota; el sobrante se abonará a la(s) siguiente(s).
+          El monto recibido excede esta cuota; el sobrante se registrará como abono a capital.
         </p>
         <p class="caja-factura-hint">Al confirmar se registra el pago y se abre el PDF de factura para imprimir o guardar.</p>
         <div class="caja-form-grid">
@@ -3049,9 +3191,11 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.col-abono {
-  width: 5.5rem;
-  min-height: 1.4rem;
+.col-prestamo {
+  width: 6.5rem;
+  text-align: center;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .col-cel {
