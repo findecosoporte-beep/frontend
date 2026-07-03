@@ -159,9 +159,7 @@ export interface ResumenWhatsAppEstadoCuentaModal {
   totalPagos: number
   totalCapital: string
   totalInteres: string
-  totalMora: string
   estadoPrestamo: string
-  diasMora: number
 }
 
 export function mensajeEstadoCuentaModal(params: ResumenWhatsAppEstadoCuentaModal): string {
@@ -174,9 +172,7 @@ export function mensajeEstadoCuentaModal(params: ResumenWhatsAppEstadoCuentaModa
     `Cobros registrados: ${params.totalPagos}`,
     `Capital pagado: ${params.totalCapital}`,
     `Interés pagado: ${params.totalInteres}`,
-    `Mora pagada: ${params.totalMora}`,
     `Estado del préstamo: ${params.estadoPrestamo || 'N/A'}`,
-    `Días en mora: ${params.diasMora}`,
     '',
     'Gracias por su preferencia.',
   ].join('\n')

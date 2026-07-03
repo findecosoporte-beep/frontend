@@ -30,7 +30,7 @@ export function pendienteCuota(totalProgramado: number, abonado: number): number
   return Math.round(resto * 100) / 100
 }
 
-/** Parte del monto recibido que abona capital + interés (excluye mora). */
-export function montoAbonoCapitalInteres(montoRecibido: number, mora: number): number {
-  return Math.max(0, Math.round((montoRecibido - mora) * 100) / 100)
+/** Parte del monto recibido que abona capital + interés. */
+export function montoAbonoCapitalInteres(montoRecibido: number): number {
+  return Math.max(0, Math.round(montoRecibido * 100) / 100)
 }

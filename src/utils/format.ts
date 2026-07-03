@@ -5,8 +5,16 @@ export function formatMoney(value: string | number | null | undefined): string {
   return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
 }
 
+/** Fecha calendario (AAAA-MM-DD) sin desfase UTC; evita mostrar domingo cuando es lunes. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—'
+  const dateOnly = iso.trim().slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) {
+    const [y, m, d] = dateOnly.split('-').map(Number)
+    const local = new Date(y, m - 1, d)
+    if (Number.isNaN(local.getTime())) return iso
+    return local.toLocaleDateString('es-HN')
+  }
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString('es-HN')

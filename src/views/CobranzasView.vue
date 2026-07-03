@@ -11,7 +11,7 @@ import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
 import Panel from 'primevue/panel'
- import Toolbar from 'primevue/toolbar'
+import Toolbar from 'primevue/toolbar'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
