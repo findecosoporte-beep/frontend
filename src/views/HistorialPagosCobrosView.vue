@@ -15,11 +15,19 @@ import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import type { AnularPagoResponse, Cartera, HistorialPagosCobrosResponse, Paginated } from '@/types/api'
+import type {
+  AnularPagoResponse,
+  Cartera,
+  HistorialPagosCobrosFila,
+  HistorialPagosCobrosResponse,
+  Paginated,
+} from '@/types/api'
 
 const toast = useToast()
 const auth = useAuthStore()
 const { canAnularPagos } = usePermissions()
+
+const FILAS_POR_PAGINA = 20
 
 const MESES = [
   { label: 'Enero', value: 1 },
@@ -66,14 +74,41 @@ const reporte = ref<HistorialPagosCobrosResponse | null>(null)
 const dialogAnularVisible = ref(false)
 const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
 const motivoAnulacion = ref('')
+const busquedaCobro = ref('')
+const paginaPrimera = ref(0)
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
-const carteraOpciones = computed(() =>
-  carteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera })),
-)
+function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boolean {
+  const campos = [
+    fila.nombre_cliente,
+    fila.dni_cliente,
+    fila.numero_prestamo,
+    fila.cartera_nombre,
+    fila.documento,
+    fila.capital,
+    fila.total,
+    fila.fecha_pago,
+    fila.hora_pago,
+    String(fila.id_pago),
+  ]
+  return campos.some((c) => (c ?? '').toString().toLowerCase().includes(q))
+}
+
+const filasFiltradas = computed(() => {
+  const filas = reporte.value?.filas ?? []
+  const q = busquedaCobro.value.trim().toLowerCase()
+  if (!q) return filas
+  return filas.filter((fila) => coincideBusquedaCobro(fila, q))
+})
+
+const carteraOpciones = computed(() => [
+  { label: 'Todas', value: null as number | null },
+  ...carteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number | null })),
+])
 
 const tituloCartera = computed(() => {
+  if (carteraFiltro.value == null) return 'TODAS LAS CARTERAS'
   const c = carteras.value.find((x) => x.id_cartera === carteraFiltro.value)
   return (c?.nombre ?? 'CARTERA').toUpperCase()
 })
@@ -100,26 +135,18 @@ const anioOpciones = computed(() => {
   }))
 })
 
-function aplicarCarteraPorDefecto() {
-  if (carteraFiltro.value != null) return
-  const primera = carteras.value[0]
-  if (primera) carteraFiltro.value = primera.id_cartera
-}
-
 async function cargarCarteras() {
   try {
     if (esCobrador.value && auth.profile?.carteras?.length) {
       carteras.value = auth.profile.carteras as Cartera[]
-      aplicarCarteraPorDefecto()
       return
     }
     const { data } = await api.get<Paginated<Cartera>>('/carteras/?page_size=100')
     carteras.value = data.results
-    aplicarCarteraPorDefecto()
   } catch {
     carteras.value = []
-    carteraFiltro.value = null
   }
+  carteraFiltro.value = null
 }
 
 function buildHistorialQueryString(): string {
@@ -162,12 +189,10 @@ function fallbackNombreExport(extension: 'xlsx' | 'pdf'): string {
 
 async function consultarHistorial() {
   error.value = ''
-  if (carteraFiltro.value == null) {
-    error.value = 'Seleccione una cartera para consultar el historial.'
-    return
-  }
   loading.value = true
   reporte.value = null
+  busquedaCobro.value = ''
+  paginaPrimera.value = 0
   try {
     const { data } = await api.get<HistorialPagosCobrosResponse>(
       `/pagos/historial-cobros/?${buildHistorialQueryString()}`,
@@ -400,7 +425,7 @@ onMounted(async () => {
             option-label="label"
             option-value="value"
             class="filtro-select"
-            placeholder="Seleccione cartera"
+            placeholder="Todas"
           />
         </div>
 
@@ -410,7 +435,7 @@ onMounted(async () => {
             icon="pi pi-search"
             type="button"
             :loading="loading"
-            :disabled="loading || carteraFiltro == null || !carteras.length"
+            :disabled="loading"
             @click="consultarHistorial"
           />
           <Button
@@ -460,10 +485,26 @@ onMounted(async () => {
         <p class="historial-tipo">HISTORIAL DE PAGOS — PRÉSTAMOS</p>
       </header>
 
+      <div class="historial-buscar no-print">
+        <label class="filtro-label" for="hist-buscar">Buscar cobro</label>
+        <InputText
+          id="hist-buscar"
+          v-model="busquedaCobro"
+          class="filtro-input historial-buscar-input"
+          placeholder="Cliente, DNI, préstamo, documento, cartera…"
+          @update:model-value="paginaPrimera = 0"
+        />
+      </div>
+
       <DataTable
-        :value="reporte.filas"
+        v-model:first="paginaPrimera"
+        :value="filasFiltradas"
         :loading="loading"
         data-key="id_pago"
+        paginator
+        :rows="FILAS_POR_PAGINA"
+        paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
+        current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
         responsive-layout="scroll"
         class="historial-table no-print-table"
       >
@@ -480,9 +521,6 @@ onMounted(async () => {
         <Column field="documento" header="Documento" />
         <Column header="Capital" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-        </Column>
-        <Column header="Mora" style="text-align: right">
-          <template #body="{ data }">{{ formatMoney(data.mora) }}</template>
         </Column>
         <Column header="Total" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.total) }}</template>
@@ -551,12 +589,11 @@ onMounted(async () => {
             <th>Cartera</th>
             <th>Doc.</th>
             <th>Capital</th>
-            <th>Mora</th>
             <th>Total</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="fila in reporte.filas" :key="fila.id_pago">
+          <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
             <td>{{ formatDate(fila.fecha_pago) }}</td>
             <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
             <td>{{ fila.nombre_cliente }}</td>
@@ -565,7 +602,6 @@ onMounted(async () => {
             <td>{{ fila.cartera_nombre }}</td>
             <td>{{ fila.documento || '—' }}</td>
             <td class="num">{{ formatMoney(fila.capital) }}</td>
-            <td class="num">{{ formatMoney(fila.mora) }}</td>
             <td class="num">{{ formatMoney(fila.total) }}</td>
           </tr>
         </tbody>
@@ -573,7 +609,6 @@ onMounted(async () => {
 
       <footer class="historial-totales">
         <span><strong>Capital:</strong> {{ formatMoney(reporte.resumen.total_capital) }}</span>
-        <span><strong>Mora:</strong> {{ formatMoney(reporte.resumen.total_mora) }}</span>
         <span class="historial-total-grande"
           ><strong>Total cobrado:</strong> {{ formatMoney(reporte.resumen.total_cobrado) }}</span
         >
@@ -600,6 +635,19 @@ onMounted(async () => {
   margin: 0 0 0.25rem;
   font-size: 1.35rem;
   font-weight: 700;
+}
+
+.historial-buscar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+  max-width: 28rem;
+}
+
+.historial-buscar-input {
+  width: 100%;
+  min-width: 0;
 }
 
 .historial-subtitulo {

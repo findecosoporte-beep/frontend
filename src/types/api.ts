@@ -282,7 +282,6 @@ export interface HistorialPagosCobrosFila {
   documento: string | null
   capital: string
   interes: string
-  mora: string
   total: string
   id_prestamo: number | null
   numero_prestamo: string
@@ -302,7 +301,6 @@ export interface HistorialPagosCobrosResponse {
     registros: number
     total_capital: string
     total_interes: string
-    total_mora: string
     total_cobrado: string
   }
 }
@@ -386,4 +384,35 @@ export interface SimulacionPrestamo {
   comision_monto: number
   total_pagar: number
   amortizacion: AmortizacionItem[]
+}
+
+export type TipoGestionCobranza = 'llamada' | 'visita' | 'mensaje' | 'acuerdo' | 'judicial'
+
+/** Bitácora de gestiones de cobranza por préstamo. */
+export interface GestionCobranza {
+  id_gestion: number
+  id_prestamo: number
+  tipo_gestion: TipoGestionCobranza
+  resultado: string
+  promesa_pago_fecha: string | null
+  promesa_pago_monto: string | number | null
+  proxima_accion: string | null
+  actor: string
+  creado_en: string
+}
+
+/** Asignación de zona de ruta por día de semana (0=lunes … 6=domingo). */
+export interface UsuarioRutaCobranzaDia {
+  id_ruta_dia: number
+  id_usuario: number
+  id_zona: number
+  dia_semana: number
+  zona?: Zona | null
+}
+
+/** Ruta del cobrador autenticado para el día actual. */
+export interface RutaMiHoyResponse {
+  dia_semana: number
+  id_zona: number | null
+  zona: Zona | null
 }

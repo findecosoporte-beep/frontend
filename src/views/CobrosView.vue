@@ -17,10 +17,6 @@ import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import {
-  fechaCobroModalNegocio,
-  resolverDiaCobroOperativo,
-} from '@/utils/cobroFechas'
 import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
 import {
   abrirFacturaPago,
@@ -50,21 +46,6 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const { canWritePagos } = usePermissions()
-
-const DIA_COBRO_ETIQUETA: Record<DiaCobroCartera, string> = {
-  lunes: 'Lunes',
-  martes: 'Martes',
-  miercoles: 'Miércoles',
-  jueves: 'Jueves',
-  viernes: 'Viernes',
-  sabado: 'Sábado',
-  domingo: 'Domingo',
-}
-
-function etiquetaDiaCobro(dia: string | null | undefined): string {
-  if (!dia) return '—'
-  return DIA_COBRO_ETIQUETA[dia as DiaCobroCartera] ?? dia
-}
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 const cobradorCarteraIds = computed(
@@ -197,7 +178,6 @@ const cuotasAlertasRows = computed(() => {
     .map((item) => ({
       ...item,
       dias_atraso: Math.max(0, calculateDaysDiff(item.fecha_limite, today)),
-      mora_sugerida: Number((item.capital * 0.02).toFixed(2)),
     }))
 })
 const cajaVisible = ref(false)
@@ -208,10 +188,6 @@ const estadoCuentaResumen = ref({
   totalPagos: 0,
   totalCapital: 0,
   totalInteres: 0,
-  totalMora: 0,
-  tieneMoraVigente: false,
-  tuvoMoraPagada: false,
-  diasMora: 0,
   estadoPrestamo: '',
 })
 const cajaForm = ref({
@@ -230,7 +206,6 @@ const cajaForm = ref({
   capital: 0,
   interes: 0,
   monto_pendiente_cuota: 0,
-  mora: 0,
   saldo_inicial: 0,
   saldo_actual: 0,
   saldo: 0,
@@ -254,7 +229,6 @@ const form = ref({
   documento: '',
   capital: null as number | null,
   interes: null as number | null,
-  mora: 0,
   saldo: null as number | null,
 })
 
@@ -604,9 +578,7 @@ async function verFacturaPago(idPago: number) {
 const cuotasPagoPorPeriodo = computed(() => buildPagoPorCuotaNumero(cuotasPagosRegistrados.value))
 
 const cajaTotalCobrar = computed(() => {
-  const pendiente = Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
-  const m = Number(cajaForm.value.mora) || 0
-  return pendiente + m
+  return Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
 })
 
 const cajaCuotaPendiente = computed(() => {
@@ -619,8 +591,7 @@ const cajaCuotaPendiente = computed(() => {
 
 const cajaHayExcedente = computed(() => {
   const recibido = Number(cajaForm.value.monto_recibido) || 0
-  const mora = Number(cajaForm.value.mora) || 0
-  return recibido - mora > cajaCuotaPendiente.value + 0.001
+  return recibido > cajaCuotaPendiente.value + 0.001
 })
 
 const cajaHayPagoParcial = computed(() => {
@@ -630,9 +601,8 @@ const cajaHayPagoParcial = computed(() => {
 })
 
 const cajaPendienteCuotaTrasCobro = computed(() => {
-  const mora = Number(cajaForm.value.mora) || 0
   const recibido = Number(cajaForm.value.monto_recibido) || 0
-  const abono = montoAbonoCapitalInteres(recibido, mora)
+  const abono = montoAbonoCapitalInteres(recibido)
   const pendiente = Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
   return Math.max(0, Number((pendiente - abono).toFixed(2)))
 })
@@ -641,8 +611,7 @@ const cajaPendienteCuotaTrasCobro = computed(() => {
 const cajaSaldoPosterior = computed(() => {
   const actual = Number(cajaForm.value.saldo_actual) || 0
   const recibido = Number(cajaForm.value.monto_recibido) || 0
-  const mora = Number(cajaForm.value.mora) || 0
-  const abono = montoAbonoCapitalInteres(recibido, mora)
+  const abono = montoAbonoCapitalInteres(recibido)
   return Math.max(0, Number((actual - abono).toFixed(2)))
 })
 
@@ -654,33 +623,14 @@ function puedeCobrarCartera(idCartera: number | null | undefined): boolean {
 
 const cajaCarteraBloqueada = computed(() => !puedeCobrarCartera(cajaForm.value.id_cartera))
 
-const cajaCarteraAdvertencia = computed(() => {
-  const f = cajaForm.value
-  if (
-    f.cliente_dia_cobro_semanal &&
-    f.cartera_dia_cobro &&
-    f.cliente_dia_cobro_semanal !== f.cartera_dia_cobro
-  ) {
-    return `El día de cobro del cliente (${etiquetaDiaCobro(f.cliente_dia_cobro_semanal)}) no coincide con la cartera del préstamo (${etiquetaDiaCobro(f.cartera_dia_cobro)}).`
-  }
-  return ''
-})
-
 const cajaCarteraEtiqueta = computed(() => {
   const nombre = cajaForm.value.cartera_nombre?.trim()
   if (!nombre) return 'Sin cartera asignada'
-  const dia = etiquetaDiaCobro(cajaForm.value.cartera_dia_cobro)
-  return `${nombre} (${dia})`
+  return nombre
 })
 
-const cajaDiaCobroEtiqueta = computed(() =>
-  etiquetaDiaCobro(
-    resolverDiaCobroOperativo(cajaForm.value.cartera_dia_cobro, cajaForm.value.cliente_dia_cobro_semanal),
-  ),
-)
-
-function montoRecibidoPorDefecto(montoPendienteCuota: number, mora: number) {
-  return Number((montoPendienteCuota + mora).toFixed(2))
+function montoRecibidoPorDefecto(montoPendienteCuota: number) {
+  return Number(montoPendienteCuota.toFixed(2))
 }
 
 function montoPendienteDesdeFilaReporte(
@@ -793,7 +743,6 @@ function abrirDialogoCaja(payload: {
   capital: number
   interes: number
   monto_pendiente_cuota?: number
-  mora?: number
   saldo_inicial?: number
   saldo_actual?: number
   saldo?: number
@@ -825,21 +774,12 @@ function abrirDialogoCaja(payload: {
   }
   cajaFormError.value = ''
   cajaError.value = ''
-  const mora = payload.mora ?? 0
   const saldoActual = payload.saldo_actual ?? payload.saldo ?? 0
   const saldoInicial = payload.saldo_inicial ?? saldoActual
   const montoPendienteCuota =
     payload.monto_pendiente_cuota ?? Number((payload.capital + payload.interes).toFixed(2))
   const fechaEntrega = payload.fecha_entrega?.trim().slice(0, 10) ?? ''
-  const fechaProgramada = (payload.fecha_cuota ?? payload.fecha_pago)?.trim().slice(0, 10)
-  const fechaCuota = fechaCobroModalNegocio({
-    fecha_entrega: fechaEntrega || undefined,
-    fecha_programada: fechaProgramada || undefined,
-    cuota_numero: payload.cuota_numero,
-    cartera_dia_cobro: payload.cartera_dia_cobro,
-    cliente_dia_cobro_semanal: payload.cliente_dia_cobro_semanal,
-  })
-  const fechaPago = fechaCuota
+  const fechaPago = getTodayISO()
   cajaForm.value = {
     id_prestamo: payload.id_prestamo,
     numero_prestamo: resolverNumeroPrestamoCaja(payload.id_prestamo, payload.numero_prestamo),
@@ -851,16 +791,15 @@ function abrirDialogoCaja(payload: {
     cliente_dia_cobro_semanal: payload.cliente_dia_cobro_semanal ?? '',
     fecha_entrega: fechaEntrega,
     cuota_numero: payload.cuota_numero,
-    fecha_cuota: fechaCuota,
+    fecha_cuota: fechaPago,
     fecha_pago: fechaPago,
     capital: payload.capital,
     interes: payload.interes,
     monto_pendiente_cuota: montoPendienteCuota,
-    mora,
     saldo_inicial: saldoInicial,
     saldo_actual: saldoActual,
     saldo: saldoActual,
-    monto_recibido: montoRecibidoPorDefecto(montoPendienteCuota, mora),
+    monto_recibido: montoRecibidoPorDefecto(montoPendienteCuota),
   }
   cajaVisible.value = true
 }
@@ -874,11 +813,6 @@ async function resolverDniPrestamo(prestamoId: number): Promise<string> {
   } catch {
     return ''
   }
-}
-
-function moraSugeridaDesdeCapital(capital: number, diasMora: number): number {
-  if (diasMora <= 0 || capital <= 0) return 0
-  return Number((capital * 0.02).toFixed(2))
 }
 
 async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
@@ -920,7 +854,6 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
     capital,
     interes,
     monto_pendiente_cuota: montoPendiente,
-    mora: moraSugeridaDesdeCapital(capital, fila.dias_mora ?? 0),
     saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
     saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
   })
@@ -1161,7 +1094,6 @@ async function abrirCobroDesdeBusqueda() {
     })
     return
   }
-  let diasMora = 0
   let carteraInfo: CarteraCobroInfo = {
     id_cartera: null,
     cartera_nombre: '',
@@ -1170,11 +1102,9 @@ async function abrirCobroDesdeBusqueda() {
     fecha_entrega: '',
   }
   try {
-    const { data: pr } = await api.get<Prestamo>(`/prestamos/${pid}/`)
-    diasMora = pr.dias_mora ?? 0
     carteraInfo = await resolverCarteraCobro(pid)
   } catch {
-    diasMora = 0
+    /* sin cartera */
   }
   const saldos = await cargarSaldosReportePrestamo(pid)
   abrirDialogoCaja({
@@ -1187,7 +1117,6 @@ async function abrirCobroDesdeBusqueda() {
     capital: info.capital_programado,
     interes: info.interes_programado,
     monto_pendiente_cuota: info.monto_pendiente,
-    mora: moraSugeridaDesdeCapital(info.capital_programado, diasMora),
     saldo_inicial: saldos?.saldo_inicial ?? info.saldo_actual ?? info.saldo_capital_programado,
     saldo_actual: saldos?.saldo_actual ?? info.saldo_actual ?? info.saldo_capital_programado,
   })
@@ -1214,10 +1143,6 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
       totalPagos: pagos.length,
       totalCapital: pagos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
       totalInteres: pagos.reduce((s, p) => s + (Number(p.interes) || 0), 0),
-      totalMora: pagos.reduce((s, p) => s + (Number(p.mora) || 0), 0),
-      tieneMoraVigente: pr.estado === 'mora' || (pr.dias_mora ?? 0) > 0,
-      tuvoMoraPagada: pagos.some((p) => (Number(p.mora) || 0) > 0),
-      diasMora: pr.dias_mora ?? 0,
       estadoPrestamo: pr.estado ?? '',
     }
   } catch (e) {
@@ -1289,9 +1214,7 @@ function enviarWhatsAppEstadoCuentaModal() {
     totalPagos: r.totalPagos,
     totalCapital: formatMoney(r.totalCapital),
     totalInteres: formatMoney(r.totalInteres),
-    totalMora: formatMoney(r.totalMora),
     estadoPrestamo: r.estadoPrestamo,
-    diasMora: r.diasMora,
   })
   if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
 }
@@ -1453,7 +1376,6 @@ function openCreateFromQuery() {
     documento: '',
     capital: queryCapital,
     interes: queryInteres,
-    mora: 0,
     saldo: querySaldo,
   }
 }
@@ -1537,7 +1459,6 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
     capital,
     interes,
     monto_pendiente_cuota: montoPendiente ?? capital + interes,
-    mora: 0,
     saldo_inicial: saldos?.saldo_inicial ?? saldo ?? 0,
     saldo_actual: saldos?.saldo_actual ?? saldo ?? 0,
   })
@@ -1581,7 +1502,6 @@ async function confirmarPagoCuota() {
   if (
     cajaForm.value.capital < 0 ||
     cajaForm.value.interes < 0 ||
-    cajaForm.value.mora < 0 ||
     cajaForm.value.monto_recibido < 0
   ) {
     cajaFormError.value = 'Los montos no pueden ser negativos.'
@@ -1600,7 +1520,7 @@ async function confirmarPagoCuota() {
       documento: `Cuota ${cajaForm.value.cuota_numero}`,
       capital: cajaForm.value.capital,
       interes: cajaForm.value.interes,
-      mora: cajaForm.value.mora,
+      mora: 0,
       saldo: cajaSaldoPosterior.value,
       monto_recibido: montoRecibido.toFixed(2),
     }
@@ -1655,7 +1575,7 @@ async function confirmarPagoCuota() {
   }
 }
 
-async function aplicarMoraDesdeAlerta(alerta: { periodo: number; capital: number; interes: number; saldo: number; mora_sugerida: number }) {
+async function cobrarDesdeAlerta(alerta: { periodo: number; capital: number; interes: number; saldo: number }) {
   if (cuotasPrestamoId.value == null || !searchResult.value) return
   const saldos = await cargarSaldosReportePrestamo(cuotasPrestamoId.value)
   let carteraInfo: CarteraCobroInfo = {
@@ -1692,7 +1612,6 @@ async function aplicarMoraDesdeAlerta(alerta: { periodo: number; capital: number
     capital: alerta.capital,
     interes: alerta.interes,
     monto_pendiente_cuota: montoPendiente,
-    mora: alerta.mora_sugerida,
     saldo_inicial: saldos?.saldo_inicial ?? alerta.saldo,
     saldo_actual: saldos?.saldo_actual ?? alerta.saldo,
   })
@@ -2114,17 +2033,7 @@ onMounted(async () => {
           <div class="estado-card"><strong>Cobros registrados:</strong> {{ estadoCuentaResumen.totalPagos }}</div>
           <div class="estado-card"><strong>Capital pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalCapital) }}</div>
           <div class="estado-card"><strong>Interés pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalInteres) }}</div>
-          <div class="estado-card"><strong>Mora pagada:</strong> {{ formatMoney(estadoCuentaResumen.totalMora) }}</div>
           <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
-          <div class="estado-card"><strong>Días en mora:</strong> {{ estadoCuentaResumen.diasMora }}</div>
-          <div class="estado-card">
-            <strong>¿Tiene mora vigente?:</strong>
-            {{ estadoCuentaResumen.tieneMoraVigente ? 'Sí' : 'No' }}
-          </div>
-          <div class="estado-card">
-            <strong>¿Tuvo mora pagada?:</strong>
-            {{ estadoCuentaResumen.tuvoMoraPagada ? 'Sí' : 'No' }}
-          </div>
         </div>
         <DataTable
           :value="estadoCuentaRows"
@@ -2146,9 +2055,6 @@ onMounted(async () => {
           </Column>
           <Column header="Interés">
             <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Mora">
-            <template #body="{ data }">{{ formatMoney(data.mora) }}</template>
           </Column>
           <Column header="Saldo">
             <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
@@ -2250,7 +2156,6 @@ onMounted(async () => {
             </template>
           </Column>
         </DataTable>
-        <p class="mora-rule-note">Regla de mora aplicada: 2% del capital de la cuota vencida.</p>
         <DataTable :value="cuotasAlertasRows" responsive-layout="scroll" class="estado-table">
           <Column field="periodo" header="Cuota" style="width: 5rem" />
           <Column header="Fecha vencida">
@@ -2259,18 +2164,15 @@ onMounted(async () => {
           <Column header="Días atraso">
             <template #body="{ data }">{{ data.dias_atraso }}</template>
           </Column>
-          <Column header="Mora sugerida">
-            <template #body="{ data }">{{ formatMoney(data.mora_sugerida) }}</template>
-          </Column>
           <Column header="Acción" style="width: 9rem">
             <template #body="{ data }">
               <Button
-                label="Aplicar mora"
-                icon="pi pi-exclamation-triangle"
+                label="Cobrar"
+                icon="pi pi-wallet"
                 size="small"
-                severity="danger"
+                severity="success"
                 outlined
-                @click="aplicarMoraDesdeAlerta(data)"
+                @click="cobrarDesdeAlerta(data)"
               />
             </template>
           </Column>
@@ -2290,7 +2192,7 @@ onMounted(async () => {
         <p v-if="cajaError" class="estado-error">{{ cajaError }}</p>
         <p v-if="cajaFormError" class="estado-error">{{ cajaFormError }}</p>
         <div class="caja-total-banner">
-          <span class="caja-total-label">Total a cobrar (pendiente cuota + mora)</span>
+          <span class="caja-total-label">Total a cobrar (pendiente de cuota)</span>
           <strong class="caja-total-valor">{{ formatMoney(cajaTotalCobrar) }}</strong>
         </div>
         <p v-if="cajaHayPagoParcial" class="caja-excedente-hint">
@@ -2317,7 +2219,6 @@ onMounted(async () => {
           <p v-if="cajaCarteraBloqueada" class="estado-error">
             No puede cobrar: el préstamo no pertenece a una cartera asignada a su usuario.
           </p>
-          <p v-else-if="cajaCarteraAdvertencia" class="caja-cartera-hint">{{ cajaCarteraAdvertencia }}</p>
           <div class="result-field">
             <label class="result-label" for="cj-prestamo">Préstamo</label>
             <InputText id="cj-prestamo" :model-value="cajaForm.numero_prestamo" readonly />
@@ -2327,11 +2228,7 @@ onMounted(async () => {
             <InputText id="cj-cuota" :model-value="String(cajaForm.cuota_numero)" readonly />
           </div>
           <div class="result-field">
-            <label class="result-label" for="cj-dia-cobro">Día de cobro</label>
-            <InputText id="cj-dia-cobro" :model-value="cajaDiaCobroEtiqueta" readonly />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-fecha">Fecha de cobro ({{ cajaDiaCobroEtiqueta }})</label>
+            <label class="result-label" for="cj-fecha">Fecha de cobro</label>
             <InputText id="cj-fecha" v-model="cajaForm.fecha_pago" type="date" />
           </div>
           <div class="result-field caja-field-full">
@@ -2339,17 +2236,6 @@ onMounted(async () => {
             <InputNumber
               id="cj-recibido"
               v-model="cajaForm.monto_recibido"
-              mode="decimal"
-              :min="0"
-              :min-fraction-digits="2"
-              fluid
-            />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-mor">Mora</label>
-            <InputNumber
-              id="cj-mor"
-              v-model="cajaForm.mora"
               mode="decimal"
               :min="0"
               :min-fraction-digits="2"
@@ -2826,12 +2712,6 @@ onMounted(async () => {
   margin: 0.35rem 0 0.2rem;
   font-size: 0.95rem;
   color: #0f172a;
-}
-
-.mora-rule-note {
-  margin: 0 0 0.4rem;
-  font-size: 0.85rem;
-  color: #475569;
 }
 
 .caja-wrap {

@@ -1856,7 +1856,7 @@ watch(
             <label class="lbl" for="p-fe">Fecha inicio del préstamo</label>
             <InputText id="p-fe" v-model="form.fecha_entrega" type="date" fluid />
             <small class="hint-text">
-              Usa la fecha real del desembolso. Las cuotas se programan según el día de cobro de la cartera.
+              Usa la fecha real del desembolso. Las cuotas se programan en el día de cobro de la cartera (p. ej. todos los lunes).
             </small>
           </div>
           <Message v-if="fechaEntregaEnPasado" severity="warn" class="full" :closable="false">
