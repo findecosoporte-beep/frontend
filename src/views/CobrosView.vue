@@ -1864,7 +1864,11 @@ onMounted(async () => {
               {{ formatNumeroHoja(data.saldo_actual) }}
             </template>
           </Column>
-          <Column header="ABONO" style="width: 5.5rem" />
+          <Column header="Nº PRESTAMO" style="width: 6.5rem; text-align: center">
+            <template #body="{ data }: { data: ReporteIntegracionFila }">
+              {{ data.numero_prestamo }}
+            </template>
+          </Column>
           <Column header="CELULAR" style="width: 6.5rem; text-align: center">
             <template #body="{ data }: { data: ReporteIntegracionFila }">
               {{ data.telefono?.trim() || '' }}
@@ -1934,7 +1938,7 @@ onMounted(async () => {
                 <th class="col-monto">CUOTA</th>
                 <th class="col-monto">CUOTA PEND.</th>
                 <th class="col-monto">SALDO ACTUAL</th>
-                <th class="col-abono">ABONO</th>
+                <th class="col-prestamo">Nº PRESTAMO</th>
                 <th class="col-cel">CELULAR</th>
               </tr>
             </thead>
@@ -1953,7 +1957,7 @@ onMounted(async () => {
                   </span>
                 </td>
                 <td class="col-monto">{{ formatNumeroHoja(fila.saldo_actual) }}</td>
-                <td class="col-abono"></td>
+                <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
                 <td class="col-cel">{{ fila.telefono?.trim() || '' }}</td>
               </tr>
             </tbody>
@@ -3187,9 +3191,11 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.col-abono {
-  width: 5.5rem;
-  min-height: 1.4rem;
+.col-prestamo {
+  width: 6.5rem;
+  text-align: center;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .col-cel {
