@@ -23,9 +23,11 @@ import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import { formatDate, formatMoney } from '@/utils/format'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
+  interesTotalPctMensual,
   interesTotalPctSemanal,
   periodosDesdePlazo,
   simularPrestamo,
+  tasaMensualNegocio,
   tasaSemanalNegocio,
 } from '@/utils/prestamoCalc'
 import type {
@@ -197,6 +199,7 @@ const currentSimulationSignature = computed(() =>
 
 const tasaPeriodoLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') return 'Tasa semanal % (automática)'
+  if (form.value.forma_pago === 'mensual') return 'Tasa mensual % (automática)'
   return 'Tasa mensual %'
 })
 
@@ -206,6 +209,8 @@ const plazoFieldLabel = computed(() => {
 })
 
 const esSemanal = computed(() => form.value.forma_pago === 'semanal')
+const esMensual = computed(() => form.value.forma_pago === 'mensual')
+const esTasaAutomatica = computed(() => esSemanal.value || esMensual.value)
 
 const frecuenciaEfectoLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 1 semana por cuota (semanal).'
@@ -222,12 +227,18 @@ const frecuenciaPlazoResumen = computed(() => {
   if (form.value.forma_pago === 'quincenal') {
     return `Quincenas totales estimadas para el plazo actual: ${plazo * 2}.`
   }
+  if (form.value.forma_pago === 'mensual') {
+    return `${plazo} cuota${plazo === 1 ? '' : 's'} mensual${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctMensual(plazo)}%.`
+  }
   return `Meses del plazo: ${plazo}.`
 })
 
 const tasaConversionLabel = computed(() => {
   if (form.value.forma_pago === 'semanal') {
-    return 'La tasa semanal se aplica según el número de semanas.'
+    return 'Tasa fija 2.5% semanal · interés total = semanas × 2.5%.'
+  }
+  if (form.value.forma_pago === 'mensual') {
+    return 'Tasa fija 10% mensual · interés total = meses × 10%.'
   }
   if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
   return 'Tasa por periodo aplicada: tasa mensual.'
@@ -611,6 +622,13 @@ function aplicarReglasSemanalEdit() {
   const semanas = Math.trunc(Number(editForm.value.plazo || 0))
   if (semanas <= 0) return
   editForm.value.tasa_interes = tasaSemanalNegocio(semanas)
+}
+
+function aplicarReglasMensualEdit() {
+  if (editForm.value.forma_pago !== 'mensual') return
+  const meses = Math.trunc(Number(editForm.value.plazo || 0))
+  if (meses <= 0) return
+  editForm.value.tasa_interes = tasaMensualNegocio(meses)
 }
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
@@ -1012,6 +1030,7 @@ async function prepararDialogoPrestamo(idCliente: number | null) {
   }
   sincronizarCarteraDesdeCliente(form.value.id_cliente)
   sincronizarCiclosDesdeCliente(form.value.id_cliente)
+  aplicarReglasTasaPeriodo()
   wizardStep.value = 1
   dialogVisible.value = true
   void asignarNumeroPrestamoGenerado()
@@ -1102,6 +1121,18 @@ function aplicarReglasSemanal() {
   form.value.tasa_interes = tasaSemanalNegocio(semanas)
 }
 
+function aplicarReglasMensual() {
+  if (form.value.forma_pago !== 'mensual') return
+  const meses = Math.trunc(Number(form.value.plazo || 0))
+  if (meses <= 0) return
+  form.value.tasa_interes = tasaMensualNegocio(meses)
+}
+
+function aplicarReglasTasaPeriodo() {
+  aplicarReglasSemanal()
+  aplicarReglasMensual()
+}
+
 const fechaEntregaEnPasado = computed(() => {
   const iso = form.value.fecha_entrega?.trim()
   if (!iso) return false
@@ -1153,6 +1184,11 @@ function onFormaPagoToggle(targetValue: string, checked: boolean) {
     if (targetValue === 'semanal') {
       form.value.plazo = 6
       aplicarReglasSemanal()
+    } else if (targetValue === 'mensual') {
+      if (form.value.plazo <= 0 || form.value.plazo === 6) {
+        form.value.plazo = 12
+      }
+      aplicarReglasMensual()
     } else if (form.value.plazo <= 0 || form.value.plazo === 6) {
       form.value.plazo = 12
     }
@@ -1162,7 +1198,7 @@ function onFormaPagoToggle(targetValue: string, checked: boolean) {
 watch(
   () => [form.value.forma_pago, form.value.plazo] as const,
   () => {
-    aplicarReglasSemanal()
+    aplicarReglasTasaPeriodo()
   },
 )
 
@@ -1481,6 +1517,7 @@ watch(
   () => [editForm.value.forma_pago, editForm.value.plazo] as const,
   () => {
     aplicarReglasSemanalEdit()
+    aplicarReglasMensualEdit()
   },
 )
 
@@ -1791,7 +1828,7 @@ watch(
               :min-fraction-digits="2"
               :step="0.01"
               :use-grouping="false"
-              :readonly="esSemanal"
+              :readonly="esTasaAutomatica"
               fluid
             />
             <small class="hint-text">{{ tasaConversionLabel }}</small>
@@ -2092,13 +2129,19 @@ watch(
           <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid />
         </div>
         <div>
-          <label class="lbl" for="ep-tasa">{{ editForm.forma_pago === 'semanal' ? 'Tasa semanal %' : 'Tasa mensual %' }}</label>
+          <label class="lbl" for="ep-tasa">{{
+            editForm.forma_pago === 'semanal'
+              ? 'Tasa semanal %'
+              : editForm.forma_pago === 'mensual'
+                ? 'Tasa mensual %'
+                : 'Tasa mensual %'
+          }}</label>
           <InputNumber
             id="ep-tasa"
             v-model="editForm.tasa_interes"
             :min-fraction-digits="2"
             :max-fraction-digits="2"
-            :disabled="editForm.forma_pago === 'semanal'"
+            :disabled="editForm.forma_pago === 'semanal' || editForm.forma_pago === 'mensual'"
             fluid
           />
         </div>

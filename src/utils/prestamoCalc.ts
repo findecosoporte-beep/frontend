@@ -39,9 +39,13 @@ export function periodosDesdePlazo(plazo: number, formaPago: string): number {
   return plazo
 }
 
-/** Tasa semanal (%) según reglas FINDECO. */
-export function tasaSemanalNegocio(semanas: number): number {
-  if (semanas === 6 || semanas === 8 || semanas === 10 || semanas === 12 || semanas === 16) return 2.5
+/** Tasa semanal (%) para préstamos semanales: siempre 2.5% por semana. */
+export function tasaSemanalNegocio(_semanas: number): number {
+  return 2.5
+}
+
+/** Tasa mensual (%) para préstamos mensuales: siempre 10% por mes. */
+export function tasaMensualNegocio(_meses: number): number {
   return 10
 }
 
@@ -50,12 +54,18 @@ export function interesTotalPctSemanal(semanas: number): number {
   return tasaSemanalNegocio(semanas) * semanas
 }
 
+/** Interés total del crédito (%) para préstamos mensuales. */
+export function interesTotalPctMensual(meses: number): number {
+  return tasaMensualNegocio(meses) * meses
+}
+
 export function tasaPeriodicaParaCalculo(
   tasaNominalPct: number,
   formaPago: string,
   plazo: number,
 ): number {
   if (formaPago === 'semanal') return tasaSemanalNegocio(plazo)
+  if (formaPago === 'mensual') return tasaMensualNegocio(plazo)
   if (formaPago === 'quincenal') return tasaNominalPct / 2
   return tasaNominalPct
 }
@@ -91,19 +101,7 @@ export function totalInteresDesdeCondiciones(
 }
 
 export function etiquetaReglasTasaSemanal(semanas: number): string {
-  if (semanas === 6) {
-    return '6 semanas: 2.5% semanal (15% interés total).'
-  }
-  if (semanas === 8) {
-    return '8 semanas: 2.5% semanal (20% interés total).'
-  }
-  if (semanas === 10) {
-    return '10 semanas: 2.5% semanal (25% interés total).'
-  }
-  if (semanas === 16) {
-    return '16 semanas: 2.5% semanal (40% interés total).'
-  }
-  return `${semanas} semanas: 10% semanal (${interesTotalPctSemanal(semanas)}% interés total).`
+  return `${semanas} semana${semanas === 1 ? '' : 's'}: 2.5% semanal (${interesTotalPctSemanal(semanas)}% interés total).`
 }
 
 /** Simula cuota y tabla de amortización (misma lógica que `POST /prestamos/simular/`). */
@@ -118,9 +116,17 @@ export function simularPrestamo(params: {
   const tasaNominalPct = params.tasa_interes
 
   const tasaAplicadaPct =
-    forma_pago === 'semanal' ? tasaSemanalNegocio(plazo) : tasaNominalPct
+    forma_pago === 'semanal'
+      ? tasaSemanalNegocio(plazo)
+      : forma_pago === 'mensual'
+        ? tasaMensualNegocio(plazo)
+        : tasaNominalPct
   const tasaAnualPct =
-    forma_pago === 'semanal' ? interesTotalPctSemanal(plazo) : annualRateFromNominal(tasaNominalPct)
+    forma_pago === 'semanal'
+      ? interesTotalPctSemanal(plazo)
+      : forma_pago === 'mensual'
+        ? interesTotalPctMensual(plazo)
+        : annualRateFromNominal(tasaNominalPct)
 
   const periodos = periodosDesdePlazo(plazo, forma_pago)
   const tasaPeriodica = tasaPeriodicaParaCalculo(tasaNominalPct, forma_pago, plazo) / 100
