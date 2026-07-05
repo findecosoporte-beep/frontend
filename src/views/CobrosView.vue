@@ -1606,6 +1606,9 @@ async function confirmarPagoCuota() {
     const { data: pagoCreado } = await api.post<Pago>('/pagos/', payload)
 
     let detail = `Se registró la cuota #${cajaForm.value.cuota_numero}.`
+    if (pagoCreado.numero_factura) {
+      detail = `${detail} Factura SAR: ${pagoCreado.numero_factura}.`
+    }
     if (pagoCreado.distribucion?.length) {
       const partes = pagoCreado.distribucion
         .map((linea) => {

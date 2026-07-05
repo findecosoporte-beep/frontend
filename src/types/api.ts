@@ -238,6 +238,8 @@ export interface Pago {
   monto_recibido_cliente?: string | number | null
   /** Desglose por cuota en cobros con excedente o abono parcial. */
   detalle_distribucion?: PagoDistribucionLinea[] | null
+  /** Numero SAR asignado al cobro (XXX-XXX-XX-XXXXXXXX). */
+  numero_factura?: string | null
   /** Solo en la respuesta de creación si hubo reparto (parcial, excedente, mora). */
   distribucion?: PagoDistribucionLinea[]
 }
