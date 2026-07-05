@@ -8,7 +8,7 @@ import Select from 'primevue/select'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
-import { getApiErrorMessage } from '@/api/errors'
+import { getApiErrorMessage, getApiErrorMessageAsync } from '@/api/errors'
 import { formatMoney } from '@/utils/format'
 import {
   abrirReporteSarPdfEnNuevaPestana,
@@ -105,8 +105,8 @@ async function descargarPdf() {
     toast.add({
       severity: 'error',
       summary: 'PDF SAR',
-      detail: getApiErrorMessage(e, 'No se pudo generar el PDF.'),
-      life: 6000,
+      detail: await getApiErrorMessageAsync(e, 'No se pudo generar el PDF.'),
+      life: 8000,
     })
   } finally {
     pdfLoading.value = false
@@ -122,8 +122,8 @@ async function verPdf() {
     toast.add({
       severity: 'error',
       summary: 'PDF SAR',
-      detail: getApiErrorMessage(e, 'No se pudo abrir el PDF.'),
-      life: 6000,
+      detail: await getApiErrorMessageAsync(e, 'No se pudo abrir el PDF.'),
+      life: 8000,
     })
   } finally {
     pdfLoading.value = false

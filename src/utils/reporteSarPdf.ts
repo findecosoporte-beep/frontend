@@ -1,14 +1,22 @@
 import { api } from '@/api/client'
+import { getApiErrorMessageAsync } from '@/api/errors'
 
 import { blobPdfDesdeAxios } from '@/utils/pdfBlobFromResponse'
 
 export async function fetchReporteSarPdfBlob(trimestre: number, anio: number): Promise<Blob> {
-  const response = await api.get<Blob>('/reportes/sar/', {
-    params: { trimestre, anio, formato: 'pdf' },
-    responseType: 'blob',
-    headers: { Accept: 'application/pdf' },
-  })
-  return blobPdfDesdeAxios(response)
+  try {
+    const response = await api.get<Blob>('/reportes/sar/', {
+      params: { trimestre, anio, formato: 'pdf' },
+      responseType: 'blob',
+    })
+    return blobPdfDesdeAxios(response)
+  } catch (error) {
+    const message = await getApiErrorMessageAsync(
+      error,
+      'No se pudo generar el PDF del reporte SAR.',
+    )
+    throw new Error(message)
+  }
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -26,6 +34,10 @@ export function descargarReporteSarPdf(blob: Blob, trimestre: number, anio: numb
 
 export function abrirReporteSarPdfEnNuevaPestana(blob: Blob) {
   const url = URL.createObjectURL(blob)
-  window.open(url, '_blank', 'noopener,noreferrer')
+  const opened = window.open(url, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    URL.revokeObjectURL(url)
+    throw new Error('El navegador bloqueó la ventana emergente. Permita ventanas emergentes o use Descargar PDF.')
+  }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
