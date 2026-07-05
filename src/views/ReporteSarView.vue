@@ -10,6 +10,11 @@ import { useToast } from 'primevue/usetoast'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatMoney } from '@/utils/format'
+import {
+  abrirReporteSarPdfEnNuevaPestana,
+  descargarReporteSarPdf,
+  fetchReporteSarPdfBlob,
+} from '@/utils/reporteSarPdf'
 import type { ReporteSarTrimestral } from '@/types/api'
 
 const toast = useToast()
@@ -20,6 +25,7 @@ const trimestreActual = Math.floor(new Date().getMonth() / 3) + 1
 const trimestre = ref(trimestreActual)
 const anio = ref(anioActual)
 const loading = ref(false)
+const pdfLoading = ref(false)
 const reporte = ref<ReporteSarTrimestral | null>(null)
 
 const trimestreOptions = [
@@ -71,6 +77,40 @@ async function cargarReporte() {
 onMounted(() => {
   void cargarReporte()
 })
+
+async function descargarPdf() {
+  pdfLoading.value = true
+  try {
+    const blob = await fetchReporteSarPdfBlob(trimestre.value, anio.value)
+    descargarReporteSarPdf(blob, trimestre.value, anio.value)
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'PDF SAR',
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF.'),
+      life: 6000,
+    })
+  } finally {
+    pdfLoading.value = false
+  }
+}
+
+async function verPdf() {
+  pdfLoading.value = true
+  try {
+    const blob = await fetchReporteSarPdfBlob(trimestre.value, anio.value)
+    abrirReporteSarPdfEnNuevaPestana(blob)
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'PDF SAR',
+      detail: getApiErrorMessage(e, 'No se pudo abrir el PDF.'),
+      life: 6000,
+    })
+  } finally {
+    pdfLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -114,6 +154,24 @@ onMounted(() => {
             icon="pi pi-chart-bar"
             :loading="loading"
             @click="cargarReporte"
+          />
+          <Button
+            label="Ver PDF"
+            icon="pi pi-eye"
+            severity="secondary"
+            outlined
+            :disabled="!reporte"
+            :loading="pdfLoading"
+            @click="verPdf"
+          />
+          <Button
+            label="Descargar PDF"
+            icon="pi pi-file-pdf"
+            severity="help"
+            outlined
+            :disabled="!reporte"
+            :loading="pdfLoading"
+            @click="descargarPdf"
           />
         </div>
       </template>
