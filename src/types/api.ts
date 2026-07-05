@@ -459,16 +459,68 @@ export interface ReporteSarCarteraBloque {
   saldo: string
 }
 
+export interface ReporteSarEncabezado {
+  nombre_entidad: string
+  rtn: string | null
+  trimestre: number
+  anio: number
+  direccion: string | null
+  telefono: string | null
+  correo: string | null
+}
+
+export interface ReporteSarDetalleOperaciones {
+  total_prestamos_otorgados: number
+  monto_prestamos_otorgados: string
+  tasa_interes_promedio: string
+  tasa_interes_minima: string
+  tasa_interes_maxima: string
+  plazo_promedio: string
+  comisiones_desembolsadas: string
+}
+
+export interface ReporteSarCarteraVencida extends ReporteSarCarteraBloque {
+  por_rango_dias: {
+    hasta_30: ReporteSarCarteraBloque
+    de_31_a_60: ReporteSarCarteraBloque
+    de_61_a_90: ReporteSarCarteraBloque
+    mas_de_90: ReporteSarCarteraBloque
+  }
+}
+
+export interface ReporteSarIngresos {
+  intereses_generados: string
+  comisiones_cobradas: string
+  pagos_recibidos: string
+  total_abonos_capital: string
+  total_intereses_pagados: string
+  total_mora_pagada: string
+}
+
+export interface ReporteSarResumen {
+  cartera_total_prestamos: number
+  cartera_total_saldo: string
+  porcentaje_morosidad: string
+}
+
 /** GET /reportes/sar/?trimestre=&anio= */
 export interface ReporteSarTrimestral {
   trimestre: number
   anio: number
   fecha_inicio: string
   fecha_fin: string
-  total_prestamos_otorgados: number
-  monto_prestamos_otorgados: string
+  encabezado: ReporteSarEncabezado
+  detalle_operaciones: ReporteSarDetalleOperaciones
   cartera_vigente: ReporteSarCarteraBloque
-  cartera_vencida: ReporteSarCarteraBloque
+  cartera_vencida: ReporteSarCarteraVencida
+  ingresos: ReporteSarIngresos
+  resumen: ReporteSarResumen
+  /** @deprecated usar detalle_operaciones */
+  total_prestamos_otorgados: number
+  /** @deprecated usar detalle_operaciones */
+  monto_prestamos_otorgados: string
+  /** @deprecated usar ingresos */
   ingresos_intereses: string
+  /** @deprecated usar ingresos */
   pagos_recibidos: string
 }
