@@ -80,6 +80,11 @@ const router = createRouter({
           name: 'configuracion-facturacion-sar',
           component: () => import('@/views/ConfiguracionFacturacionView.vue'),
         },
+        {
+          path: 'reportes/sar-trimestral',
+          name: 'reporte-sar-trimestral',
+          component: () => import('@/views/ReporteSarView.vue'),
+        },
       ],
     },
     {

@@ -45,6 +45,7 @@ const editForm = ref({
   id_cliente: 0,
   nombre: '',
   dni: '',
+  rtn: '',
   telefono: '',
   direccion_residencia: '',
   direccion_negocio: '',
@@ -94,6 +95,7 @@ function abrirEditar(data: Cliente) {
     id_cliente: data.id_cliente,
     nombre: nullToEmpty(data.nombre),
     dni: nullToEmpty(data.dni),
+    rtn: nullToEmpty(data.rtn),
     telefono: nullToEmpty(data.telefono),
     direccion_residencia: nullToEmpty(data.direccion_residencia),
     direccion_negocio: nullToEmpty(data.direccion_negocio),
@@ -137,6 +139,7 @@ async function guardarEdicion() {
     const payload = {
       nombre,
       dni,
+      rtn: emptyToNull(editForm.value.rtn),
       telefono: emptyToNull(editForm.value.telefono),
       direccion_residencia: emptyToNull(editForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(editForm.value.direccion_negocio),
@@ -268,6 +271,11 @@ onMounted(() => {
             {{ textoCampo(data, 'dni') }}
           </template>
         </Column>
+        <Column header="RTN" :style="{ minWidth: '8rem', maxWidth: '10rem' }">
+          <template #body="{ data }: { data: Cliente }">
+            {{ textoCampo(data, 'rtn') }}
+          </template>
+        </Column>
         <Column header="Préstamos" :style="{ minWidth: '5.5rem', maxWidth: '6.5rem' }">
           <template #body="{ data }: { data: Cliente }">
             <span
@@ -359,6 +367,10 @@ onMounted(() => {
           <FloatLabel class="cliente-edit-cell">
             <InputText id="edit-cli-dni" v-model="editForm.dni" fluid autocomplete="off" />
             <label for="edit-cli-dni" class="lbl-mayus">DNI</label>
+          </FloatLabel>
+          <FloatLabel class="cliente-edit-cell">
+            <InputText id="edit-cli-rtn" v-model="editForm.rtn" fluid autocomplete="off" />
+            <label for="edit-cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
             <InputText id="edit-cli-tel" v-model="editForm.telefono" fluid type="tel" autocomplete="tel" />

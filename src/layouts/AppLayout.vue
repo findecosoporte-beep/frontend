@@ -100,6 +100,11 @@ const menuSections: SidebarSection[] = [
             icon: 'pi pi-file-edit',
             routeName: 'configuracion-facturacion-sar',
           },
+          {
+            label: 'Reporte SAR trimestral',
+            icon: 'pi pi-chart-bar',
+            routeName: 'reporte-sar-trimestral',
+          },
         ],
       },
     ],

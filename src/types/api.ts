@@ -34,6 +34,8 @@ export interface Cliente {
   id_cliente: number
   nombre: string
   dni: string
+  /** RTN (persona jurídica o facturación). */
+  rtn: string | null
   telefono: string | null
   direccion_residencia: string | null
   direccion_negocio: string | null
@@ -449,4 +451,24 @@ export interface ConfiguracionFacturacion {
   actualizado_en: string | null
   rango_autorizado_texto?: string
   numero_ejemplo?: string
+}
+
+/** Bloque de cartera en reporte SAR trimestral. */
+export interface ReporteSarCarteraBloque {
+  prestamos: number
+  saldo: string
+}
+
+/** GET /reportes/sar/?trimestre=&anio= */
+export interface ReporteSarTrimestral {
+  trimestre: number
+  anio: number
+  fecha_inicio: string
+  fecha_fin: string
+  total_prestamos_otorgados: number
+  monto_prestamos_otorgados: string
+  cartera_vigente: ReporteSarCarteraBloque
+  cartera_vencida: ReporteSarCarteraBloque
+  ingresos_intereses: string
+  pagos_recibidos: string
 }
