@@ -69,7 +69,7 @@ function formatPct(valor: string | number | null | undefined): string {
 }
 
 function bloqueMora(key: typeof RANGOS_MORA[number]['key']): ReporteSarCarteraBloque {
-  return reporte.value?.cartera_vencida.por_rango_dias[key] ?? { prestamos: 0, saldo: '0' }
+  return reporte.value?.cartera_vencida?.por_rango_dias?.[key] ?? { prestamos: 0, saldo: '0' }
 }
 
 async function cargarReporte() {
@@ -140,6 +140,24 @@ async function verPdf() {
           Informe regulatorio: operaciones, cartera, ingresos e indicadores de morosidad.
         </p>
       </div>
+      <div class="header-acciones">
+        <Button
+          label="Ver PDF"
+          icon="pi pi-eye"
+          severity="secondary"
+          outlined
+          :loading="pdfLoading"
+          @click="verPdf"
+        />
+        <Button
+          label="Descargar PDF"
+          icon="pi pi-file-pdf"
+          severity="danger"
+          outlined
+          :loading="pdfLoading"
+          @click="descargarPdf"
+        />
+      </div>
     </header>
 
     <Card class="filtros-card">
@@ -172,24 +190,6 @@ async function verPdf() {
             icon="pi pi-chart-bar"
             :loading="loading"
             @click="cargarReporte"
-          />
-          <Button
-            label="Ver PDF"
-            icon="pi pi-eye"
-            severity="secondary"
-            outlined
-            :disabled="!reporte"
-            :loading="pdfLoading"
-            @click="verPdf"
-          />
-          <Button
-            label="Descargar PDF"
-            icon="pi pi-file-pdf"
-            severity="help"
-            outlined
-            :disabled="!reporte"
-            :loading="pdfLoading"
-            @click="descargarPdf"
           />
         </div>
       </template>
@@ -322,6 +322,14 @@ async function verPdf() {
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.header-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .page-title {
