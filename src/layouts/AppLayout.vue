@@ -87,6 +87,17 @@ const menuSections: SidebarSection[] = [
         ],
       },
       { label: 'Usuarios', icon: 'pi pi-id-card', routeName: 'usuarios' },
+      {
+        label: 'Configuracion',
+        icon: 'pi pi-cog',
+        children: [
+          {
+            label: 'Facturacion SAR',
+            icon: 'pi pi-file-edit',
+            routeName: 'configuracion-facturacion-sar',
+          },
+        ],
+      },
     ],
   },
 ]

@@ -6,7 +6,16 @@ export function getApiErrorMessage(error: unknown, fallback = 'Error inesperado.
   const ax = error as AxiosError<{ detail?: string; error?: { message?: string }; [k: string]: unknown }>
   const data = ax.response?.data
   if (!data) return ax.message || fallback
-  if (typeof data === 'string') return data
+  if (typeof data === 'string') {
+    if (data.includes('<!doctype html') || data.includes('<html')) {
+      const status = ax.response?.status
+      if (status === 404) {
+        return 'El servidor no tiene este modulo disponible. Verifique que el backend este actualizado y desplegado.'
+      }
+      return fallback
+    }
+    return data
+  }
   if (typeof data.error === 'object' && data.error && typeof data.error.message === 'string') {
     return data.error.message
   }

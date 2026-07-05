@@ -419,3 +419,32 @@ export interface RutaMiHoyResponse {
   id_zona: number | null
   zona: Zona | null
 }
+
+/** Configuracion fiscal SAR para facturas de cobro (singleton API). */
+export interface ConfiguracionFacturacion {
+  id: number
+  razon_social: string
+  nombre_comercial: string
+  rtn: string
+  direccion: string
+  ciudad: string
+  telefono: string
+  correo: string
+  cai: string
+  fecha_limite_emision: string | null
+  establecimiento: string
+  punto_emision: string
+  tipo_documento: string
+  correlativo_desde: number
+  correlativo_hasta: number
+  correlativo_actual: number
+  usar_numeracion_sar: boolean
+  formato_ticket: '58' | '80'
+  aplicar_isv: boolean
+  porcentaje_isv: string | number
+  leyenda_exento: string
+  leyenda_pie: string
+  actualizado_en: string | null
+  rango_autorizado_texto?: string
+  numero_ejemplo?: string
+}

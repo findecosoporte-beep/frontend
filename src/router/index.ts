@@ -75,6 +75,11 @@ const router = createRouter({
           name: 'usuarios',
           component: () => import('@/views/UsuariosView.vue'),
         },
+        {
+          path: 'configuracion/facturacion-sar',
+          name: 'configuracion-facturacion-sar',
+          component: () => import('@/views/ConfiguracionFacturacionView.vue'),
+        },
       ],
     },
     {
