@@ -12,8 +12,17 @@ import { useToast } from 'primevue/usetoast'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import { abrirFacturaPago, buildPagoPorCuotaConFallback, esPagoFacturaSecundario } from '@/utils/facturaPago'
-import { cuotasCubiertasPorPagoAcumulado, totalAbonadoPrestamo } from '@/utils/cobroPago'
+import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
+import {
+  cuotaEstaPagada,
+  cuotasCubiertasPorPagoAcumulado,
+  totalAbonadoPrestamo,
+} from '@/utils/cobroPago'
+import {
+  abonadoPorCuotaDesdeMovimientos,
+  abonosCapitalDesdePagos,
+  cuotaReferenciaDesdeMovimientos,
+} from '@/utils/movimientosPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
@@ -161,8 +170,7 @@ async function compartirEstadoFinanciero() {
   }
 }
 
-/** Abonos en orden cronológico para alinear N con la secuencia de pagos. */
-const abonosOrdenados = computed(() =>
+const pagosOrdenados = computed(() =>
   [...abonos.value].sort((a, b) => {
     const ta = new Date(a.fecha_pago).getTime()
     const tb = new Date(b.fecha_pago).getTime()
@@ -171,35 +179,43 @@ const abonosOrdenados = computed(() =>
   }),
 )
 
-const pagoPorCuota = computed(() => buildPagoPorCuotaConFallback(cuotasPlan.value, abonosOrdenados.value))
+const abonadoPorCuota = computed(() => abonadoPorCuotaDesdeMovimientos(pagosOrdenados.value))
+const referenciaCuota = computed(() => cuotaReferenciaDesdeMovimientos(pagosOrdenados.value))
+const abonosCapital = computed(() => abonosCapitalDesdePagos(pagosOrdenados.value))
 
-/** Cuotas cubiertas por el acumulado total pagado (aunque el excedente haya
- * quedado como abono a capital): el cliente pudo adelantar varias cuotas de una
- * sola vez, sin necesidad de liquidar todo el préstamo. */
 const filasCuotasEstado = computed((): FilaCuotaEstado[] => {
-  const abonadoTotal = totalAbonadoPrestamo(abonosOrdenados.value)
+  const abonadoTotal = totalAbonadoPrestamo(pagosOrdenados.value)
   const cubiertasPorAcumulado = cuotasCubiertasPorPagoAcumulado(cuotasPlan.value, abonadoTotal)
-  const ultimos = abonosOrdenados.value
-  const ultimoPago = ultimos.length ? ultimos[ultimos.length - 1] : undefined
+  const ultimoPago = pagosOrdenados.value.at(-1)
 
   return [...cuotasPlan.value]
     .sort((a, b) => a.numero_cuota - b.numero_cuota)
     .map((cuota) => {
-      const pago = pagoPorCuota.value.get(cuota.numero_cuota)
-      if (pago) {
+      const abonado = abonadoPorCuota.value.get(cuota.numero_cuota) ?? 0
+      const totalProg = Number(cuota.total_programado) || 0
+      const ref = referenciaCuota.value.get(cuota.numero_cuota)
+
+      if (ref || cuotaEstaPagada(abonado, totalProg)) {
+        const fuente = ref ?? {
+          id_pago: ultimoPago?.id_pago ?? null,
+          fecha_pago: ultimoPago?.fecha_pago ?? null,
+          cobrado_en: ultimoPago?.cobrado_en ?? null,
+          documento: `Cuota ${cuota.numero_cuota}`,
+        }
         return {
           numero_cuota: cuota.numero_cuota,
           fecha_programada: cuota.fecha_programada,
           total_programado: cuota.total_programado,
           saldo_capital_programado: cuota.saldo_capital_programado,
           estado: 'pagada',
-          id_pago: pago.id_pago,
-          id_pago_factura: pago.id_pago_factura ?? null,
-          cobrado_en: pago.cobrado_en ?? null,
-          fecha_pago: pago.fecha_pago,
-          documento: pago.documento ?? null,
+          id_pago: fuente.id_pago,
+          id_pago_factura: null,
+          cobrado_en: fuente.cobrado_en,
+          fecha_pago: fuente.fecha_pago,
+          documento: fuente.documento,
         }
       }
+
       if (cubiertasPorAcumulado.has(cuota.numero_cuota) && ultimoPago) {
         return {
           numero_cuota: cuota.numero_cuota,
@@ -207,14 +223,14 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] => {
           total_programado: cuota.total_programado,
           saldo_capital_programado: cuota.saldo_capital_programado,
           estado: 'pagada',
-          // Sin factura propia: no repetir el mismo PDF en cada cuota cubierta.
-          id_pago: null,
+          id_pago: ultimoPago.id_pago,
           id_pago_factura: null,
           cobrado_en: ultimoPago.cobrado_en ?? null,
           fecha_pago: ultimoPago.fecha_pago,
-          documento: 'Cubierta por abono a capital',
+          documento: `Cuota ${cuota.numero_cuota}`,
         }
       }
+
       return {
         numero_cuota: cuota.numero_cuota,
         fecha_programada: cuota.fecha_programada,
@@ -714,6 +730,54 @@ function limpiarFormulario() {
                     @click="verFacturaPago(data.id_pago)"
                   />
                   <span v-else class="texto-muted">—</span>
+                </template>
+              </Column>
+            </DataTable>
+
+            <h2 class="subtitulo subtitulo--segundo">Abonos a capital</h2>
+            <p v-if="!loadingPlan && !abonosCapital.length" class="tabla-vacia">
+              No hay abonos a capital registrados en este préstamo.
+            </p>
+            <DataTable
+              v-else
+              :value="abonosCapital"
+              data-key="id_pago"
+              class="tabla-abonos-capital tabla-plan"
+              size="small"
+              :loading="loadingPlan"
+            >
+              <Column header="Fecha">
+                <template #body="{ data }">
+                  {{ formatDate(data.fecha_pago) }}
+                </template>
+              </Column>
+              <Column header="Hora">
+                <template #body="{ data }">
+                  {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
+                </template>
+              </Column>
+              <Column header="Monto">
+                <template #body="{ data }">
+                  {{ formatMoney(data.total) }}
+                </template>
+              </Column>
+              <Column header="Documento">
+                <template #body="{ data }">
+                  {{ data.documento || 'Abono a capital' }}
+                </template>
+              </Column>
+              <Column header="Factura">
+                <template #body="{ data }">
+                  <Button
+                    icon="pi pi-file-pdf"
+                    label="Ver factura"
+                    size="small"
+                    severity="secondary"
+                    outlined
+                    :loading="facturaAbriendoId === data.id_pago"
+                    :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
+                    @click="verFacturaPago(data.id_pago)"
+                  />
                 </template>
               </Column>
             </DataTable>

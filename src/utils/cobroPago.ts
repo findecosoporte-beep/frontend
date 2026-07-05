@@ -1,22 +1,12 @@
 import type { Pago, PrestamoCuotaRow } from '@/types/api'
 
-import { extractCuotaNumeroDocumento } from '@/utils/facturaPago'
+import { abonadoPorCuotaDesdeMovimientos } from '@/utils/movimientosPago'
 
 const CUOTA_PAGADA_TOLERANCIA = 0.01
 
-/** Suma capital + interés + mora abonado por número de cuota. */
+/** Suma capital + interés + mora abonado por número de cuota (solo movimientos tipo cuota). */
 export function abonadoPorCuotaDesdePagos(pagos: Pago[]): Map<number, number> {
-  const abonado = new Map<number, number>()
-  for (const pg of pagos) {
-    const numero = extractCuotaNumeroDocumento(pg.documento)
-    if (numero == null) continue
-    const prev = abonado.get(numero) ?? 0
-    abonado.set(
-      numero,
-      prev + (Number(pg.capital) || 0) + (Number(pg.interes) || 0) + (Number(pg.mora) || 0),
-    )
-  }
-  return abonado
+  return abonadoPorCuotaDesdeMovimientos(pagos)
 }
 
 export function cuotaEstaPagada(abonado: number, totalProgramado: number): boolean {
