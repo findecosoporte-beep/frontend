@@ -13,6 +13,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
 import { abrirFacturaPago, buildPagoPorCuotaConFallback, esPagoFacturaSecundario } from '@/utils/facturaPago'
+import { cuotasCubiertasPorPagoAcumulado, totalAbonadoPrestamo } from '@/utils/cobroPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
@@ -37,6 +38,7 @@ let carterasCargadas = false
 let carterasCargaPromise: Promise<void> | null = null
 
 const idPrestamoActivo = ref<number | null>(null)
+const estadoPrestamoActivo = ref<string | null>(null)
 const idClienteActivo = ref<number | null>(null)
 const cuotasPlan = ref<PrestamoCuotaRow[]>([])
 const abonos = ref<Pago[]>([])
@@ -171,25 +173,62 @@ const abonosOrdenados = computed(() =>
 
 const pagoPorCuota = computed(() => buildPagoPorCuotaConFallback(cuotasPlan.value, abonosOrdenados.value))
 
-const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
-  [...cuotasPlan.value]
+/** Cuotas cubiertas por el acumulado total pagado (aunque el excedente haya
+ * quedado como abono a capital): el cliente pudo adelantar varias cuotas de una
+ * sola vez, sin necesidad de liquidar todo el préstamo. */
+const filasCuotasEstado = computed((): FilaCuotaEstado[] => {
+  const abonadoTotal = totalAbonadoPrestamo(abonosOrdenados.value)
+  const cubiertasPorAcumulado = cuotasCubiertasPorPagoAcumulado(cuotasPlan.value, abonadoTotal)
+  const ultimos = abonosOrdenados.value
+  const ultimoPago = ultimos.length ? ultimos[ultimos.length - 1] : undefined
+
+  return [...cuotasPlan.value]
     .sort((a, b) => a.numero_cuota - b.numero_cuota)
     .map((cuota) => {
       const pago = pagoPorCuota.value.get(cuota.numero_cuota)
+      if (pago) {
+        return {
+          numero_cuota: cuota.numero_cuota,
+          fecha_programada: cuota.fecha_programada,
+          total_programado: cuota.total_programado,
+          saldo_capital_programado: cuota.saldo_capital_programado,
+          estado: 'pagada',
+          id_pago: pago.id_pago,
+          id_pago_factura: pago.id_pago_factura ?? null,
+          cobrado_en: pago.cobrado_en ?? null,
+          fecha_pago: pago.fecha_pago,
+          documento: pago.documento ?? null,
+        }
+      }
+      if (cubiertasPorAcumulado.has(cuota.numero_cuota) && ultimoPago) {
+        return {
+          numero_cuota: cuota.numero_cuota,
+          fecha_programada: cuota.fecha_programada,
+          total_programado: cuota.total_programado,
+          saldo_capital_programado: cuota.saldo_capital_programado,
+          estado: 'pagada',
+          // Sin factura propia: no repetir el mismo PDF en cada cuota cubierta.
+          id_pago: null,
+          id_pago_factura: null,
+          cobrado_en: ultimoPago.cobrado_en ?? null,
+          fecha_pago: ultimoPago.fecha_pago,
+          documento: 'Cubierta por abono a capital',
+        }
+      }
       return {
         numero_cuota: cuota.numero_cuota,
         fecha_programada: cuota.fecha_programada,
         total_programado: cuota.total_programado,
         saldo_capital_programado: cuota.saldo_capital_programado,
-        estado: pago ? 'pagada' : 'pendiente',
-        id_pago: pago?.id_pago ?? null,
-        id_pago_factura: pago?.id_pago_factura ?? null,
-        cobrado_en: pago?.cobrado_en ?? null,
-        fecha_pago: pago?.fecha_pago ?? null,
-        documento: pago?.documento ?? null,
+        estado: 'pendiente',
+        id_pago: null,
+        id_pago_factura: null,
+        cobrado_en: null,
+        fecha_pago: null,
+        documento: null,
       }
-    }),
-)
+    })
+})
 
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
 const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
@@ -259,6 +298,7 @@ async function seleccionarPrestamoHistorial(p: Prestamo) {
   if (p.id_prestamo === idPrestamoActivo.value) return
   await ensureCarterasCargadas()
   idPrestamoActivo.value = p.id_prestamo
+  estadoPrestamoActivo.value = p.estado ?? null
   campos.value.n = p.numero_prestamo?.trim() ?? campos.value.n
   const cartera = textoCarteraDesdePrestamo(p)
   if (cartera) campos.value.cartera = cartera
@@ -302,6 +342,7 @@ async function aplicarPrestamoYCliente(p: Prestamo, c: Cliente, avisoVarios?: st
   }
   info.value = avisoVarios ?? ''
   idPrestamoActivo.value = p.id_prestamo
+  estadoPrestamoActivo.value = p.estado ?? null
   idClienteActivo.value = p.id_cliente
   void cargarPlanYPagos(p.id_prestamo)
   void cargarHistorialPrestamos(p.id_cliente)
@@ -469,6 +510,7 @@ async function buscarPorCampo(campo: CampoBusqueda) {
   error.value = ''
   info.value = ''
   idPrestamoActivo.value = null
+  estadoPrestamoActivo.value = null
   idClienteActivo.value = null
   cuotasPlan.value = []
   abonos.value = []
@@ -498,6 +540,7 @@ function limpiarFormulario() {
   error.value = ''
   info.value = ''
   idPrestamoActivo.value = null
+  estadoPrestamoActivo.value = null
   idClienteActivo.value = null
   cuotasPlan.value = []
   abonos.value = []

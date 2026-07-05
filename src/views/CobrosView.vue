@@ -17,7 +17,11 @@ import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
+import {
+  cuotasCubiertasPorPagoAcumulado,
+  montoAbonoCapitalInteres,
+  totalAbonadoPrestamo,
+} from '@/utils/cobroPago'
 import {
   abrirFacturaPago,
   buildPagoPorCuotaNumero,
@@ -1159,21 +1163,58 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
       return da !== 0 ? da : b.id_pago - a.id_pago
     })
     const pagoPorCuota = buildPagoPorCuotaNumero(pagosVigentes)
+    // Cuotas cubiertas por el acumulado total pagado (aunque el excedente haya
+    // quedado como abono a capital): el cliente pudo adelantar varias cuotas de
+    // una sola vez, sin necesidad de liquidar todo el préstamo.
+    const abonadoTotal = totalAbonadoPrestamo(pagosVigentes)
+    const cubiertasPorAcumulado = cuotasCubiertasPorPagoAcumulado(cuotas, abonadoTotal)
+    const ultimoPago = pagosVigentes.length
+      ? [...pagosVigentes].sort((a, b) => a.fecha_pago.localeCompare(b.fecha_pago) || a.id_pago - b.id_pago).at(-1)
+      : undefined
     estadoCuentaPlanRows.value = [...cuotas]
       .sort((a, b) => a.numero_cuota - b.numero_cuota)
       .map((cuota) => {
         const pago = pagoPorCuota.get(cuota.numero_cuota)
+        if (pago) {
+          return {
+            numero_cuota: cuota.numero_cuota,
+            fecha_programada: cuota.fecha_programada,
+            fecha_cancelo: pago.fecha_pago,
+            hora_pago: null,
+            cobrado_en: pago.cobrado_en ?? null,
+            total_programado: Number(cuota.total_programado) || 0,
+            estado: 'Pagada',
+            documento: pago.documento ?? null,
+            id_pago: pago.id_pago,
+            id_pago_factura: pago.id_pago_factura ?? null,
+          }
+        }
+        if (cubiertasPorAcumulado.has(cuota.numero_cuota) && ultimoPago) {
+          return {
+            numero_cuota: cuota.numero_cuota,
+            fecha_programada: cuota.fecha_programada,
+            fecha_cancelo: ultimoPago.fecha_pago,
+            hora_pago: null,
+            cobrado_en: ultimoPago.cobrado_en ?? null,
+            total_programado: Number(cuota.total_programado) || 0,
+            estado: 'Pagada',
+            documento: 'Cubierta por abono a capital',
+            // Sin factura propia: no repetir el mismo PDF en cada cuota cubierta.
+            id_pago: null,
+            id_pago_factura: null,
+          }
+        }
         return {
           numero_cuota: cuota.numero_cuota,
           fecha_programada: cuota.fecha_programada,
-          fecha_cancelo: pago?.fecha_pago ?? null,
+          fecha_cancelo: null,
           hora_pago: null,
-          cobrado_en: pago?.cobrado_en ?? null,
+          cobrado_en: null,
           total_programado: Number(cuota.total_programado) || 0,
-          estado: pago ? 'Pagada' : 'Pendiente',
-          documento: pago?.documento ?? null,
-          id_pago: pago?.id_pago ?? null,
-          id_pago_factura: pago?.id_pago_factura ?? null,
+          estado: 'Pendiente',
+          documento: null,
+          id_pago: null,
+          id_pago_factura: null,
         }
       })
     estadoCuentaResumen.value = {
