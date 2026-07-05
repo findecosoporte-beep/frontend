@@ -258,6 +258,10 @@ function getTodayISO(): string {
 }
 
 const hojaCarteras = ref<Cartera[]>([])
+let carterasHojaCache: Cartera[] | null = null
+
+const prestamosCatalogoReady = ref(false)
+const prestamosCatalogoCargando = ref(false)
 
 const carteraHojaOpciones = computed(() =>
   hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number })),
@@ -515,6 +519,15 @@ watch(hojaCobrosEstadoFiltro, () => {
 
 async function cargarCatalogoCarterasHoja() {
   try {
+    const asignadas = auth.profile?.carteras ?? []
+    if (esCobrador.value && asignadas.length > 0) {
+      hojaCarteras.value = [...asignadas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+      return
+    }
+    if (carterasHojaCache?.length) {
+      hojaCarteras.value = carterasHojaCache
+      return
+    }
     const todos: Cartera[] = []
     let nextUrl: string | null = '/carteras/?page_size=100'
     while (nextUrl) {
@@ -523,15 +536,8 @@ async function cargarCatalogoCarterasHoja() {
       todos.push(...pg.results)
       nextUrl = pg.next
     }
-    const asignadas = auth.profile?.carteras ?? []
-    if (esCobrador.value && asignadas.length > 0) {
-      const ids = new Set(asignadas.map((c) => c.id_cartera))
-      hojaCarteras.value = todos
-        .filter((c) => ids.has(c.id_cartera))
-        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-      return
-    }
-    hojaCarteras.value = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    carterasHojaCache = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    hojaCarteras.value = carterasHojaCache
   } catch {
     hojaCarteras.value = []
   }
@@ -996,7 +1002,9 @@ async function buscarCliente() {
   proximaCuotaSemanalMensaje.value = ''
   proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
   try {
-    const prestamoExactoLocal = encontrarPrestamoEnMeta(q, true)
+    const prestamoExactoLocal = prestamosCatalogoReady.value
+      ? encontrarPrestamoEnMeta(q, true)
+      : undefined
     if (prestamoExactoLocal) {
       await aplicarBusquedaPorPrestamo({
         id_prestamo: prestamoExactoLocal.id_prestamo,
@@ -1009,8 +1017,10 @@ async function buscarCliente() {
       return
     }
 
-    let cliente = clienteMeta.value.find((c) => c.dni === q)
-    if (!cliente) {
+    let cliente = prestamosCatalogoReady.value
+      ? clienteMeta.value.find((c) => c.dni === q)
+      : undefined
+    if (!cliente && prestamosCatalogoReady.value) {
       cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
     }
     if (!cliente) {
@@ -1043,12 +1053,32 @@ async function buscarCliente() {
       })
       return
     }
-    const prestamos = prestamoMeta.value.filter(
-      (p) =>
-        p.id_cliente === cliente.id_cliente &&
-        p.estado !== 'cancelado' &&
-        p.estado !== 'pagado',
-    )
+    let prestamos = prestamosCatalogoReady.value
+      ? prestamoMeta.value.filter(
+          (p) =>
+            p.id_cliente === cliente!.id_cliente &&
+            p.estado !== 'cancelado' &&
+            p.estado !== 'pagado',
+        )
+      : []
+    if (!prestamos.length) {
+      const { data: prestamosApi } = await api.get<Paginated<Prestamo>>(
+        `/prestamos/?id_cliente=${cliente.id_cliente}&page_size=50`,
+      )
+      prestamos = prestamosApi.results
+        .filter((p) => p.estado !== 'cancelado' && p.estado !== 'pagado')
+        .map((p) => ({
+          id_prestamo: p.id_prestamo,
+          id_cliente: p.id_cliente,
+          id_zona: p.id_zona ?? null,
+          dni: cliente!.dni,
+          nombre: cliente!.nombre,
+          zona: (p.zona?.nombre ?? p.sucursal ?? '').trim(),
+          forma_pago: p.forma_pago ?? 'mensual',
+          numero_prestamo: p.numero_prestamo ?? '',
+          estado: p.estado ?? '',
+        }))
+    }
     const activo =
       prestamos.find((p) => p.estado === 'activo' || p.estado === 'mora') ?? prestamos[0] ?? null
     searchResult.value = {
@@ -1410,6 +1440,23 @@ async function loadPrestamos() {
       label: `${prestamo.numero_prestamo} (#${prestamo.id_prestamo}) - ${nombre} [DNI: ${dni}]`,
     }
   })
+  prestamosCatalogoReady.value = true
+}
+
+async function ensurePrestamosCatalogo(): Promise<void> {
+  if (prestamosCatalogoReady.value) return
+  if (prestamosCatalogoCargando.value) {
+    while (prestamosCatalogoCargando.value) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return
+  }
+  prestamosCatalogoCargando.value = true
+  try {
+    await loadPrestamos()
+  } finally {
+    prestamosCatalogoCargando.value = false
+  }
 }
 
 function resetClienteForm() {
@@ -1706,14 +1753,10 @@ onMounted(async () => {
   resetClienteForm()
   resetPrestamoForm()
 
-  const prestamosTask = loadPrestamos().catch((e) => {
-    toast.add({ severity: 'warn', summary: 'Préstamos', detail: getApiErrorMessage(e), life: 5000 })
-  })
-
   await consumirDeepLinkIntegracionEnQuery()
 
   if (route.query.fromPrestamo === '1' && canWritePagos.value) {
-    await prestamosTask
+    await ensurePrestamosCatalogo()
     openCreateFromQuery()
     const cleanedQuery = { ...route.query }
     delete cleanedQuery.fromPrestamo
