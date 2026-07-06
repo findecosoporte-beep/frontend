@@ -17,8 +17,24 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import RtnHondurasInput from '@/components/RtnHondurasInput.vue'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import { usePermissions } from '@/composables/usePermissions'
+import {
+  esDniHnValido,
+  esRtnHnValidoOpcional,
+  mensajeDniHnInvalido,
+  mensajeRtnHnInvalido,
+  normalizarDniHn,
+  normalizarRtnHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import type { Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
@@ -94,13 +110,13 @@ function abrirEditar(data: Cliente) {
   editForm.value = {
     id_cliente: data.id_cliente,
     nombre: nullToEmpty(data.nombre),
-    dni: nullToEmpty(data.dni),
-    rtn: nullToEmpty(data.rtn),
-    telefono: nullToEmpty(data.telefono),
+    dni: normalizarDniHn(nullToEmpty(data.dni)),
+    rtn: normalizarRtnHn(nullToEmpty(data.rtn)),
+    telefono: normalizarTelefonoHn(nullToEmpty(data.telefono)),
     direccion_residencia: nullToEmpty(data.direccion_residencia),
     direccion_negocio: nullToEmpty(data.direccion_negocio),
     referencia_parentesco: nullToEmpty(data.referencia_parentesco),
-    referencia_telefono: nullToEmpty(data.referencia_telefono),
+    referencia_telefono: normalizarTelefonoHn(nullToEmpty(data.referencia_telefono)),
     referencia: nullToEmpty(data.referencia),
     actividad_economica: nullToEmpty(data.actividad_economica),
     dia_cobro_semanal: data.dia_cobro_semanal ?? null,
@@ -114,13 +130,32 @@ function cerrarEditar() {
 
 async function guardarEdicion() {
   const nombre = editForm.value.nombre.trim()
-  const dni = editForm.value.dni.trim()
+  const dni = normalizarDniHn(editForm.value.dni)
   const id = editForm.value.id_cliente
   if (!nombre || !dni || !id) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+  const rtn = normalizarRtnHn(editForm.value.rtn)
+  if (!esRtnHnValidoOpcional(rtn)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'RTN inválido',
+      detail: mensajeRtnHnInvalido(),
       life: 4500,
     })
     return
@@ -134,17 +169,28 @@ async function guardarEdicion() {
     })
     return
   }
+  const telefono = normalizarTelefonoHn(editForm.value.telefono)
+  const referenciaTelefono = normalizarTelefonoHn(editForm.value.referencia_telefono)
+  if (!esTelefonoHnValidoOpcional(telefono) || !esTelefonoHnValidoOpcional(referenciaTelefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
   savingEdit.value = true
   try {
     const payload = {
       nombre,
       dni,
-      rtn: emptyToNull(editForm.value.rtn),
-      telefono: emptyToNull(editForm.value.telefono),
+      rtn: rtn || null,
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(editForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(editForm.value.direccion_negocio),
       referencia_parentesco: emptyToNull(editForm.value.referencia_parentesco),
-      referencia_telefono: emptyToNull(editForm.value.referencia_telefono),
+      referencia_telefono: referenciaTelefono || null,
       referencia: emptyToNull(editForm.value.referencia),
       actividad_economica: emptyToNull(editForm.value.actividad_economica),
       dia_cobro_semanal: editForm.value.dia_cobro_semanal,
@@ -365,15 +411,15 @@ onMounted(() => {
             <label for="edit-cli-nombre" class="lbl-mayus">Nombre</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-dni" v-model="editForm.dni" fluid autocomplete="off" />
+            <DniHondurasInput id="edit-cli-dni" v-model="editForm.dni" />
             <label for="edit-cli-dni" class="lbl-mayus">DNI</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-rtn" v-model="editForm.rtn" fluid autocomplete="off" />
+            <RtnHondurasInput id="edit-cli-rtn" v-model="editForm.rtn" />
             <label for="edit-cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-tel" v-model="editForm.telefono" fluid type="tel" autocomplete="tel" />
+            <TelefonoHondurasInput id="edit-cli-tel" v-model="editForm.telefono" />
             <label for="edit-cli-tel" class="lbl-mayus">Teléfono</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
@@ -404,12 +450,9 @@ onMounted(() => {
                   <label for="edit-cli-ref-parentesco" class="lbl-mayus">Parentesco</label>
                 </FloatLabel>
                 <FloatLabel class="ref-mini-cell">
-                  <InputText
+                  <TelefonoHondurasInput
                     id="edit-cli-ref-tel"
                     v-model="editForm.referencia_telefono"
-                    fluid
-                    type="tel"
-                    autocomplete="tel"
                   />
                   <label for="edit-cli-ref-tel" class="lbl-mayus">Teléfono referencia</label>
                 </FloatLabel>

@@ -11,6 +11,10 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
+import { esDniHnValido, mensajeDniHnInvalido, normalizarDniHn } from '@/utils/documentoHonduras'
+import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import { formatDate, formatMoney, formatTime } from '@/utils/format'
 import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import { pendienteCuota } from '@/utils/cobroPago'
@@ -22,8 +26,6 @@ import {
   abonadoPorCuotaDesdeMovimientos,
   abonosCapitalDesdePagos,
 } from '@/utils/movimientosPago'
-import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
-import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
 import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
 
 const toast = useToast()
@@ -594,7 +596,12 @@ async function buscarPorCliente() {
 async function buscarPorIdentidad() {
   const v = requiereValor(campos.value.identidad, 'IDENTIDAD')
   if (v == null) return
-  const { data } = await api.get<Paginated<Cliente>>(`/clientes/?dni=${encodeURIComponent(v)}&page_size=5`)
+  const dni = normalizarDniHn(v)
+  if (!esDniHnValido(dni)) {
+    error.value = mensajeDniHnInvalido()
+    return
+  }
+  const { data } = await api.get<Paginated<Cliente>>(`/clientes/?dni=${encodeURIComponent(dni)}&page_size=5`)
   if (!data.results.length) {
     error.value = 'No se encontró cliente con esa identidad.'
     return
@@ -744,7 +751,7 @@ function limpiarFormulario() {
           </div>
           <div class="fila-busqueda">
             <span class="ficha-label">IDENTIDAD:</span>
-            <InputText v-model="campos.identidad" class="fila-input" placeholder="DNI / identidad" :disabled="loading" />
+            <DniHondurasInput v-model="campos.identidad" class="fila-input" placeholder="DNI / identidad" :disabled="loading" />
           </div>
           <div class="fila-busqueda">
             <span class="ficha-label">TELEFONO:</span>

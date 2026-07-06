@@ -16,8 +16,24 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import RtnHondurasInput from '@/components/RtnHondurasInput.vue'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
+import {
+  esDniHnValido,
+  esRtnHnValidoOpcional,
+  mensajeDniHnInvalido,
+  mensajeRtnHnInvalido,
+  normalizarDniHn,
+  normalizarRtnHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import type { Cartera, Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
@@ -257,12 +273,31 @@ async function guardarCartera() {
 
 async function guardarCliente() {
   const nombre = clienteForm.value.nombre.trim()
-  const dni = clienteForm.value.dni.trim()
+  const dni = normalizarDniHn(clienteForm.value.dni)
   if (!nombre || !dni) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+  const rtn = normalizarRtnHn(clienteForm.value.rtn)
+  if (!esRtnHnValidoOpcional(rtn)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'RTN inválido',
+      detail: mensajeRtnHnInvalido(),
       life: 4500,
     })
     return
@@ -276,17 +311,28 @@ async function guardarCliente() {
     })
     return
   }
+  const telefono = normalizarTelefonoHn(clienteForm.value.telefono)
+  const referenciaTelefono = normalizarTelefonoHn(clienteForm.value.referencia_telefono)
+  if (!esTelefonoHnValidoOpcional(telefono) || !esTelefonoHnValidoOpcional(referenciaTelefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
   savingCliente.value = true
   try {
     const payload = {
       nombre,
       dni,
-      rtn: emptyToNull(clienteForm.value.rtn),
-      telefono: emptyToNull(clienteForm.value.telefono),
+      rtn: rtn || null,
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(clienteForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(clienteForm.value.direccion_negocio),
       referencia_parentesco: emptyToNull(clienteForm.value.referencia_parentesco),
-      referencia_telefono: emptyToNull(clienteForm.value.referencia_telefono),
+      referencia_telefono: referenciaTelefono || null,
       referencia: emptyToNull(clienteForm.value.referencia),
       actividad_economica: emptyToNull(clienteForm.value.actividad_economica),
       dia_cobro_semanal: clienteForm.value.dia_cobro_semanal,
@@ -437,15 +483,15 @@ onMounted(() => void cargarCarteras())
             <label for="cli-nombre" class="lbl-mayus">Nombre</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-dni" v-model="clienteForm.dni" fluid autocomplete="off" />
+            <DniHondurasInput id="cli-dni" v-model="clienteForm.dni" />
             <label for="cli-dni" class="lbl-mayus">DNI</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-rtn" v-model="clienteForm.rtn" fluid autocomplete="off" />
+            <RtnHondurasInput id="cli-rtn" v-model="clienteForm.rtn" />
             <label for="cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-tel" v-model="clienteForm.telefono" fluid type="tel" autocomplete="tel" />
+            <TelefonoHondurasInput id="cli-tel" v-model="clienteForm.telefono" />
             <label for="cli-tel" class="lbl-mayus">Teléfono</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
@@ -476,12 +522,9 @@ onMounted(() => void cargarCarteras())
                   <label for="cli-ref-parentesco" class="lbl-mayus">Parentesco</label>
                 </FloatLabel>
                 <FloatLabel class="ref-mini-cell">
-                  <InputText
+                  <TelefonoHondurasInput
                     id="cli-ref-tel"
                     v-model="clienteForm.referencia_telefono"
-                    fluid
-                    type="tel"
-                    autocomplete="tel"
                   />
                   <label for="cli-ref-tel" class="lbl-mayus">Teléfono referencia</label>
                 </FloatLabel>

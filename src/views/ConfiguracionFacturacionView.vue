@@ -14,8 +14,14 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import RtnHondurasInput from '@/components/RtnHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { invalidateConfiguracionFacturacion, setConfiguracionFacturacionCache } from '@/composables/useConfiguracionFacturacion'
+import {
+  esRtnHnValidoOpcional,
+  mensajeRtnHnInvalido,
+  normalizarRtnHn,
+} from '@/utils/documentoHonduras'
 import type { ConfiguracionFacturacion } from '@/types/api'
 
 const toast = useToast()
@@ -82,7 +88,7 @@ async function cargar() {
   error.value = ''
   try {
     const { data } = await api.get<ConfiguracionFacturacion>('/configuracion/facturacion/')
-    form.value = data
+    form.value = { ...data, rtn: normalizarRtnHn(data.rtn) }
     fechaLimite.value = parseFecha(data.fecha_limite_emision)
     setConfiguracionFacturacionCache(data)
   } catch (e) {
@@ -94,11 +100,17 @@ async function cargar() {
 
 async function guardar() {
   if (soloLectura.value) return
+  const rtn = normalizarRtnHn(form.value.rtn)
+  if (!esRtnHnValidoOpcional(rtn)) {
+    error.value = mensajeRtnHnInvalido()
+    return
+  }
   saving.value = true
   error.value = ''
   try {
     const payload = {
       ...form.value,
+      rtn,
       fecha_limite_emision: fechaToIso(fechaLimite.value),
       porcentaje_isv: String(form.value.porcentaje_isv),
     }
@@ -106,7 +118,7 @@ async function guardar() {
       '/configuracion/facturacion/',
       payload,
     )
-    form.value = data
+    form.value = { ...data, rtn: normalizarRtnHn(data.rtn) }
     fechaLimite.value = parseFecha(data.fecha_limite_emision)
     setConfiguracionFacturacionCache(data)
     toast.add({
@@ -172,7 +184,7 @@ onMounted(() => {
             </div>
             <div class="field">
               <label for="cf-rtn">RTN</label>
-              <InputText id="cf-rtn" v-model="form.rtn" fluid :disabled="soloLectura" />
+              <RtnHondurasInput id="cf-rtn" v-model="form.rtn" :disabled="soloLectura" />
             </div>
             <div class="field">
               <label for="cf-direccion">Direccion</label>

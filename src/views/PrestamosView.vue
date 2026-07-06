@@ -18,9 +18,21 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import { formatDate, formatMoney } from '@/utils/format'
+import {
+  esDniHnValido,
+  mensajeDniHnInvalido,
+  normalizarDniHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
   interesTotalPctMensual,
@@ -689,12 +701,21 @@ function abrirNuevoClienteModal() {
 
 async function guardarNuevoCliente() {
   const nombre = nuevoClienteForm.value.nombre.trim()
-  const dni = nuevoClienteForm.value.dni.trim()
+  const dni = normalizarDniHn(nuevoClienteForm.value.dni)
   if (!nombre || !dni) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
       life: 4500,
     })
     return
@@ -709,12 +730,23 @@ async function guardarNuevoCliente() {
     return
   }
 
+  const telefono = normalizarTelefonoHn(nuevoClienteForm.value.telefono)
+  if (!esTelefonoHnValidoOpcional(telefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+
   savingNuevoCliente.value = true
   try {
     const payload = {
       nombre,
       dni,
-      telefono: emptyToNull(nuevoClienteForm.value.telefono),
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(nuevoClienteForm.value.direccion_residencia),
       direccion_negocio: null,
       referencia_parentesco: null,
@@ -2208,11 +2240,11 @@ watch(
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-dni">DNI</label>
-          <InputText id="np-cli-dni" v-model="nuevoClienteForm.dni" fluid autocomplete="off" />
+          <DniHondurasInput id="np-cli-dni" v-model="nuevoClienteForm.dni" />
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-tel">Teléfono</label>
-          <InputText id="np-cli-tel" v-model="nuevoClienteForm.telefono" fluid type="tel" autocomplete="tel" />
+          <TelefonoHondurasInput id="np-cli-tel" v-model="nuevoClienteForm.telefono" />
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-dia">Día de cobro semanal</label>
