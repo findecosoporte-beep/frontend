@@ -91,9 +91,24 @@ function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boole
     fila.fecha_programada,
     fila.fecha_pago,
     fila.hora_pago,
+    fila.registrado_en,
+    fila.registrado_por_etiqueta,
+    fila.registrado_por_nombre,
+    fila.registrado_por != null ? String(fila.registrado_por) : '',
     String(fila.id_pago),
   ]
   return campos.some((c) => (c ?? '').toString().toLowerCase().includes(q))
+}
+
+function nombreUsuarioCobro(fila: HistorialPagosCobrosFila): string {
+  const nombre = fila.registrado_por_nombre?.trim()
+  if (nombre) return nombre
+  if (fila.registrado_por != null) return `Usuario #${fila.registrado_por}`
+  return '—'
+}
+
+function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
+  return fila.registrado_en || formatDateTime(fila.cobrado_en) || '—'
 }
 
 const filasFiltradas = computed(() => {
@@ -492,7 +507,7 @@ onMounted(async () => {
           id="hist-buscar"
           v-model="busquedaCobro"
           class="filtro-input historial-buscar-input"
-          placeholder="Cliente, DNI, préstamo, documento, cartera…"
+          placeholder="Cliente, DNI, préstamo, usuario, documento, cartera…"
           @update:model-value="paginaPrimera = 0"
         />
       </div>
@@ -519,6 +534,17 @@ onMounted(async () => {
         </Column>
         <Column header="Hora">
           <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
+        </Column>
+        <Column header="Usuario" :style="{ minWidth: '10rem' }">
+          <template #body="{ data }">
+            <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
+            <span v-if="data.registrado_por != null" class="auditoria-id">ID {{ data.registrado_por }}</span>
+          </template>
+        </Column>
+        <Column header="Fecha registro" :style="{ minWidth: '10rem' }">
+          <template #body="{ data }">
+            <span class="auditoria-celda">{{ fechaRegistroCobro(data) }}</span>
+          </template>
         </Column>
         <Column field="nombre_cliente" header="Cliente" />
         <Column field="dni_cliente" header="DNI" />
@@ -590,6 +616,9 @@ onMounted(async () => {
             <th>F. programada</th>
             <th>F. canceló</th>
             <th>Hora</th>
+            <th>Usuario</th>
+            <th>ID usuario</th>
+            <th>Fecha registro</th>
             <th>Cliente</th>
             <th>DNI</th>
             <th>Préstamo</th>
@@ -604,6 +633,9 @@ onMounted(async () => {
             <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
             <td>{{ formatDate(fila.fecha_pago) }}</td>
             <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
+            <td>{{ nombreUsuarioCobro(fila) }}</td>
+            <td>{{ fila.registrado_por ?? '—' }}</td>
+            <td>{{ fechaRegistroCobro(fila) }}</td>
             <td>{{ fila.nombre_cliente }}</td>
             <td>{{ fila.dni_cliente }}</td>
             <td>{{ fila.numero_prestamo }}</td>
@@ -785,6 +817,25 @@ onMounted(async () => {
 .historial-print-table .num {
   text-align: right;
   white-space: nowrap;
+}
+
+.auditoria-celda {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.auditoria-nombre {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.auditoria-id {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color, #64748b);
 }
 
 @media (max-width: 767px) {

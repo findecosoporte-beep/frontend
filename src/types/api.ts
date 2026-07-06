@@ -292,6 +292,10 @@ export interface HistorialPagosCobrosFila {
   fecha_pago: string
   hora_pago?: string
   cobrado_en?: string | null
+  registrado_en?: string
+  registrado_por?: number | null
+  registrado_por_nombre?: string
+  registrado_por_etiqueta?: string
   documento: string | null
   capital: string
   interes: string
