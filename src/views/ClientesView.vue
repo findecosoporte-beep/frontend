@@ -64,6 +64,7 @@ async function cargarCarteras() {
 const clienteForm = ref({
   nombre: '',
   dni: '',
+  rtn: '',
   telefono: '',
   direccion_residencia: '',
   direccion_negocio: '',
@@ -280,6 +281,7 @@ async function guardarCliente() {
     const payload = {
       nombre,
       dni,
+      rtn: emptyToNull(clienteForm.value.rtn),
       telefono: emptyToNull(clienteForm.value.telefono),
       direccion_residencia: emptyToNull(clienteForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(clienteForm.value.direccion_negocio),
@@ -299,6 +301,7 @@ async function guardarCliente() {
     clienteForm.value = {
       nombre: '',
       dni: '',
+      rtn: '',
       telefono: '',
       direccion_residencia: '',
       direccion_negocio: '',
@@ -436,6 +439,10 @@ onMounted(() => void cargarCarteras())
           <FloatLabel class="cliente-cell">
             <InputText id="cli-dni" v-model="clienteForm.dni" fluid autocomplete="off" />
             <label for="cli-dni" class="lbl-mayus">DNI</label>
+          </FloatLabel>
+          <FloatLabel class="cliente-cell">
+            <InputText id="cli-rtn" v-model="clienteForm.rtn" fluid autocomplete="off" />
+            <label for="cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
             <InputText id="cli-tel" v-model="clienteForm.telefono" fluid type="tel" autocomplete="tel" />

@@ -17,16 +17,16 @@ import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
 import {
-  cuotasCubiertasPorPagoAcumulado,
-  montoAbonoCapitalInteres,
-  totalAbonadoPrestamo,
-} from '@/utils/cobroPago'
-import {
-  abrirFacturaPago,
-  buildPagoPorCuotaNumero,
-  esPagoFacturaSecundario,
-} from '@/utils/facturaPago'
+  buildFilasCuotaEstado,
+  filasCuotaEstadoAModalPlan,
+  ordenarPagosPrestamo,
+  pagosVigentes,
+  pagoPorCuotaDesdeFilas,
+  type FilaCuotaEstado,
+} from '@/utils/estadoCuotaFilas'
+import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import {
   abrirWhatsAppConMensaje,
   mensajeConsultaClienteCobros,
@@ -176,26 +176,40 @@ const cuotasRows = ref<Array<{ periodo: number; fecha_limite: string; capital: n
 )
 const cuotasPagosRegistrados = ref<Pago[]>([])
 const cuotasPrestamoId = ref<number | null>(null)
+const filasCalendarioEstado = ref<FilaCuotaEstado[]>([])
 const cuotasTotal = computed(() => cuotasRows.value.length)
-const cuotasPagadasRows = computed(() => {
-  const paidPeriods = new Set<number>()
-  for (const pago of cuotasPagosRegistrados.value) {
-    const match = (pago.documento ?? '').match(/cuota\s*(\d+)/i)
-    if (match) paidPeriods.add(Number.parseInt(match[1], 10))
-  }
-  if (!paidPeriods.size) {
-    return cuotasRows.value.slice(0, cuotasPagosRegistrados.value.length)
-  }
-  return cuotasRows.value.filter((item) => paidPeriods.has(item.periodo))
-})
+
+interface FilaCalendarioCobros {
+  periodo: number
+  fecha_limite: string
+  capital: number
+  interes: number
+  saldo: number
+  estado: string
+}
+
+const cuotasCalendarioFilas = computed((): FilaCalendarioCobros[] =>
+  filasCalendarioEstado.value.map((fila) => ({
+    periodo: fila.numero_cuota,
+    fecha_limite: fila.fecha_programada,
+    capital: Number(fila.capital_programado) || 0,
+    interes: Number(fila.interes_programado) || 0,
+    saldo: Number(fila.saldo_capital_programado) || 0,
+    estado: fila.estado === 'pagada' ? 'Pagada' : 'Pendiente',
+  })),
+)
+
+const cuotasPagadasRows = computed(() =>
+  cuotasCalendarioFilas.value.filter((fila) => fila.estado === 'Pagada'),
+)
+
 const cuotasAlertasRows = computed(() => {
-  const paidPeriods = new Set(cuotasPagadasRows.value.map((item) => item.periodo))
   const today = getTodayISO()
-  return cuotasRows.value
-    .filter((item) => !paidPeriods.has(item.periodo) && item.fecha_limite < today)
-    .map((item) => ({
-      ...item,
-      dias_atraso: Math.max(0, calculateDaysDiff(item.fecha_limite, today)),
+  return cuotasCalendarioFilas.value
+    .filter((fila) => fila.estado === 'Pendiente' && fila.fecha_limite.slice(0, 10) < today)
+    .map((fila) => ({
+      ...fila,
+      dias_atraso: Math.max(0, calculateDaysDiff(fila.fecha_limite.slice(0, 10), today)),
     }))
 })
 const cajaVisible = ref(false)
@@ -258,6 +272,10 @@ function getTodayISO(): string {
 }
 
 const hojaCarteras = ref<Cartera[]>([])
+let carterasHojaCache: Cartera[] | null = null
+
+const prestamosCatalogoReady = ref(false)
+const prestamosCatalogoCargando = ref(false)
 
 const carteraHojaOpciones = computed(() =>
   hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number })),
@@ -515,6 +533,15 @@ watch(hojaCobrosEstadoFiltro, () => {
 
 async function cargarCatalogoCarterasHoja() {
   try {
+    const asignadas = auth.profile?.carteras ?? []
+    if (esCobrador.value && asignadas.length > 0) {
+      hojaCarteras.value = [...asignadas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+      return
+    }
+    if (carterasHojaCache?.length) {
+      hojaCarteras.value = carterasHojaCache
+      return
+    }
     const todos: Cartera[] = []
     let nextUrl: string | null = '/carteras/?page_size=100'
     while (nextUrl) {
@@ -523,15 +550,8 @@ async function cargarCatalogoCarterasHoja() {
       todos.push(...pg.results)
       nextUrl = pg.next
     }
-    const asignadas = auth.profile?.carteras ?? []
-    if (esCobrador.value && asignadas.length > 0) {
-      const ids = new Set(asignadas.map((c) => c.id_cartera))
-      hojaCarteras.value = todos
-        .filter((c) => ids.has(c.id_cartera))
-        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-      return
-    }
-    hojaCarteras.value = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    carterasHojaCache = todos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    hojaCarteras.value = carterasHojaCache
   } catch {
     hojaCarteras.value = []
   }
@@ -593,7 +613,9 @@ async function verFacturaPago(idPago: number) {
   }
 }
 
-const cuotasPagoPorPeriodo = computed(() => buildPagoPorCuotaNumero(cuotasPagosRegistrados.value))
+const cuotasPagoPorPeriodo = computed(() =>
+  pagoPorCuotaDesdeFilas(filasCalendarioEstado.value, cuotasPagosRegistrados.value),
+)
 
 const cajaTotalCobrar = computed(() => {
   return Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
@@ -996,7 +1018,9 @@ async function buscarCliente() {
   proximaCuotaSemanalMensaje.value = ''
   proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
   try {
-    const prestamoExactoLocal = encontrarPrestamoEnMeta(q, true)
+    const prestamoExactoLocal = prestamosCatalogoReady.value
+      ? encontrarPrestamoEnMeta(q, true)
+      : undefined
     if (prestamoExactoLocal) {
       await aplicarBusquedaPorPrestamo({
         id_prestamo: prestamoExactoLocal.id_prestamo,
@@ -1009,8 +1033,10 @@ async function buscarCliente() {
       return
     }
 
-    let cliente = clienteMeta.value.find((c) => c.dni === q)
-    if (!cliente) {
+    let cliente = prestamosCatalogoReady.value
+      ? clienteMeta.value.find((c) => c.dni === q)
+      : undefined
+    if (!cliente && prestamosCatalogoReady.value) {
       cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
     }
     if (!cliente) {
@@ -1043,12 +1069,32 @@ async function buscarCliente() {
       })
       return
     }
-    const prestamos = prestamoMeta.value.filter(
-      (p) =>
-        p.id_cliente === cliente.id_cliente &&
-        p.estado !== 'cancelado' &&
-        p.estado !== 'pagado',
-    )
+    let prestamos = prestamosCatalogoReady.value
+      ? prestamoMeta.value.filter(
+          (p) =>
+            p.id_cliente === cliente!.id_cliente &&
+            p.estado !== 'cancelado' &&
+            p.estado !== 'pagado',
+        )
+      : []
+    if (!prestamos.length) {
+      const { data: prestamosApi } = await api.get<Paginated<Prestamo>>(
+        `/prestamos/?id_cliente=${cliente.id_cliente}&page_size=50`,
+      )
+      prestamos = prestamosApi.results
+        .filter((p) => p.estado !== 'cancelado' && p.estado !== 'pagado')
+        .map((p) => ({
+          id_prestamo: p.id_prestamo,
+          id_cliente: p.id_cliente,
+          id_zona: p.id_zona ?? null,
+          dni: cliente!.dni,
+          nombre: cliente!.nombre,
+          zona: (p.zona?.nombre ?? p.sucursal ?? '').trim(),
+          forma_pago: p.forma_pago ?? 'mensual',
+          numero_prestamo: p.numero_prestamo ?? '',
+          estado: p.estado ?? '',
+        }))
+    }
     const activo =
       prestamos.find((p) => p.estado === 'activo' || p.estado === 'mora') ?? prestamos[0] ?? null
     searchResult.value = {
@@ -1157,70 +1203,14 @@ async function abrirEstadoCuenta(prestamoId?: number | null) {
       ),
       api.get<Prestamo>(`/prestamos/${pid}/`),
     ])
-    const pagosVigentes = pagos.filter((p) => !p.anulado)
-    estadoCuentaRows.value = pagosVigentes.sort((a, b) => {
-      const da = a.fecha_pago.localeCompare(b.fecha_pago)
-      return da !== 0 ? da : b.id_pago - a.id_pago
-    })
-    const pagoPorCuota = buildPagoPorCuotaNumero(pagosVigentes)
-    // Cuotas cubiertas por el acumulado total pagado (aunque el excedente haya
-    // quedado como abono a capital): el cliente pudo adelantar varias cuotas de
-    // una sola vez, sin necesidad de liquidar todo el préstamo.
-    const abonadoTotal = totalAbonadoPrestamo(pagosVigentes)
-    const cubiertasPorAcumulado = cuotasCubiertasPorPagoAcumulado(cuotas, abonadoTotal)
-    const ultimoPago = pagosVigentes.length
-      ? [...pagosVigentes].sort((a, b) => a.fecha_pago.localeCompare(b.fecha_pago) || a.id_pago - b.id_pago).at(-1)
-      : undefined
-    estadoCuentaPlanRows.value = [...cuotas]
-      .sort((a, b) => a.numero_cuota - b.numero_cuota)
-      .map((cuota) => {
-        const pago = pagoPorCuota.get(cuota.numero_cuota)
-        if (pago) {
-          return {
-            numero_cuota: cuota.numero_cuota,
-            fecha_programada: cuota.fecha_programada,
-            fecha_cancelo: pago.fecha_pago,
-            hora_pago: null,
-            cobrado_en: pago.cobrado_en ?? null,
-            total_programado: Number(cuota.total_programado) || 0,
-            estado: 'Pagada',
-            documento: pago.documento ?? null,
-            id_pago: pago.id_pago,
-            id_pago_factura: pago.id_pago_factura ?? null,
-          }
-        }
-        if (cubiertasPorAcumulado.has(cuota.numero_cuota) && ultimoPago) {
-          return {
-            numero_cuota: cuota.numero_cuota,
-            fecha_programada: cuota.fecha_programada,
-            fecha_cancelo: ultimoPago.fecha_pago,
-            hora_pago: null,
-            cobrado_en: ultimoPago.cobrado_en ?? null,
-            total_programado: Number(cuota.total_programado) || 0,
-            estado: 'Pagada',
-            documento: 'Cubierta por abono a capital',
-            // Sin factura propia: no repetir el mismo PDF en cada cuota cubierta.
-            id_pago: null,
-            id_pago_factura: null,
-          }
-        }
-        return {
-          numero_cuota: cuota.numero_cuota,
-          fecha_programada: cuota.fecha_programada,
-          fecha_cancelo: null,
-          hora_pago: null,
-          cobrado_en: null,
-          total_programado: Number(cuota.total_programado) || 0,
-          estado: 'Pendiente',
-          documento: null,
-          id_pago: null,
-          id_pago_factura: null,
-        }
-      })
+    const pagosActivos = pagosVigentes(pagos)
+    estadoCuentaRows.value = [...ordenarPagosPrestamo(pagosActivos)].reverse()
+    const filasEstado = buildFilasCuotaEstado(cuotas, pagos)
+    estadoCuentaPlanRows.value = filasCuotaEstadoAModalPlan(filasEstado)
     estadoCuentaResumen.value = {
-      totalPagos: pagosVigentes.length,
-      totalCapital: pagosVigentes.reduce((s, p) => s + (Number(p.capital) || 0), 0),
-      totalInteres: pagosVigentes.reduce((s, p) => s + (Number(p.interes) || 0), 0),
+      totalPagos: pagosActivos.length,
+      totalCapital: pagosActivos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
+      totalInteres: pagosActivos.reduce((s, p) => s + (Number(p.interes) || 0), 0),
       estadoPrestamo: pr.estado ?? '',
     }
   } catch (e) {
@@ -1306,6 +1296,7 @@ async function abrirCuotas(prestamoId?: number | null) {
   cuotasError.value = ''
   cuotasRows.value = []
   cuotasPagosRegistrados.value = []
+  filasCalendarioEstado.value = []
   cuotasPrestamoId.value = pid
   try {
     const [cuotas, pagos] = await Promise.all([
@@ -1322,6 +1313,7 @@ async function abrirCuotas(prestamoId?: number | null) {
       saldo: Number(c.saldo_capital_programado),
     }))
     cuotasPagosRegistrados.value = pagos
+    filasCalendarioEstado.value = buildFilasCuotaEstado(cuotas, pagos)
   } catch (e) {
     cuotasError.value = getApiErrorMessage(e, 'No se pudo cargar el calendario de cuotas.')
   } finally {
@@ -1410,6 +1402,23 @@ async function loadPrestamos() {
       label: `${prestamo.numero_prestamo} (#${prestamo.id_prestamo}) - ${nombre} [DNI: ${dni}]`,
     }
   })
+  prestamosCatalogoReady.value = true
+}
+
+async function ensurePrestamosCatalogo(): Promise<void> {
+  if (prestamosCatalogoReady.value) return
+  if (prestamosCatalogoCargando.value) {
+    while (prestamosCatalogoCargando.value) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return
+  }
+  prestamosCatalogoCargando.value = true
+  try {
+    await loadPrestamos()
+  } finally {
+    prestamosCatalogoCargando.value = false
+  }
 }
 
 function resetClienteForm() {
@@ -1606,6 +1615,9 @@ async function confirmarPagoCuota() {
     const { data: pagoCreado } = await api.post<Pago>('/pagos/', payload)
 
     let detail = `Se registró la cuota #${cajaForm.value.cuota_numero}.`
+    if (pagoCreado.numero_factura) {
+      detail = `${detail} Factura SAR: ${pagoCreado.numero_factura}.`
+    }
     if (pagoCreado.distribucion?.length) {
       const partes = pagoCreado.distribucion
         .map((linea) => {
@@ -1703,14 +1715,10 @@ onMounted(async () => {
   resetClienteForm()
   resetPrestamoForm()
 
-  const prestamosTask = loadPrestamos().catch((e) => {
-    toast.add({ severity: 'warn', summary: 'Préstamos', detail: getApiErrorMessage(e), life: 5000 })
-  })
-
   await consumirDeepLinkIntegracionEnQuery()
 
   if (route.query.fromPrestamo === '1' && canWritePagos.value) {
-    await prestamosTask
+    await ensurePrestamosCatalogo()
     openCreateFromQuery()
     const cleanedQuery = { ...route.query }
     delete cleanedQuery.fromPrestamo
@@ -2185,7 +2193,7 @@ onMounted(async () => {
           <strong>Total de cuotas:</strong> {{ cuotasTotal }}
         </div>
         <DataTable
-          :value="cuotasRows"
+          :value="cuotasCalendarioFilas"
           :loading="cuotasLoading"
           responsive-layout="scroll"
           class="estado-table"
@@ -2193,6 +2201,9 @@ onMounted(async () => {
           <Column field="periodo" header="Cuota" style="width: 5rem" />
           <Column header="Fecha programada">
             <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
+          </Column>
+          <Column header="Estado" style="width: 7rem">
+            <template #body="{ data }">{{ data.estado }}</template>
           </Column>
           <Column header="Fecha canceló">
             <template #body="{ data }">
@@ -2330,7 +2341,11 @@ onMounted(async () => {
           </div>
           <div class="result-field">
             <label class="result-label" for="cj-fecha">Fecha de cobro</label>
-            <InputText id="cj-fecha" v-model="cajaForm.fecha_pago" type="date" />
+            <InputText
+              id="cj-fecha"
+              :model-value="cajaForm.fecha_pago ? formatDate(cajaForm.fecha_pago) : '—'"
+              readonly
+            />
           </div>
           <div class="result-field caja-field-full">
             <label class="result-label" for="cj-recibido">Monto recibido del cliente</label>

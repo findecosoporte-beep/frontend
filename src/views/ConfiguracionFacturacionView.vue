@@ -15,6 +15,7 @@ import { useToast } from 'primevue/usetoast'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
+import { invalidateConfiguracionFacturacion, setConfiguracionFacturacionCache } from '@/composables/useConfiguracionFacturacion'
 import type { ConfiguracionFacturacion } from '@/types/api'
 
 const toast = useToast()
@@ -83,6 +84,7 @@ async function cargar() {
     const { data } = await api.get<ConfiguracionFacturacion>('/configuracion/facturacion/')
     form.value = data
     fechaLimite.value = parseFecha(data.fecha_limite_emision)
+    setConfiguracionFacturacionCache(data)
   } catch (e) {
     error.value = getApiErrorMessage(e, 'No se pudo cargar la configuracion de facturacion.')
   } finally {
@@ -106,6 +108,7 @@ async function guardar() {
     )
     form.value = data
     fechaLimite.value = parseFecha(data.fecha_limite_emision)
+    setConfiguracionFacturacionCache(data)
     toast.add({
       severity: 'success',
       summary: 'Configuracion guardada',
@@ -129,10 +132,6 @@ onMounted(() => {
     <div class="page-header">
       <div>
         <h1 class="page-title">Facturacion SAR</h1>
-        <p class="page-subtitle">
-          Parametros fiscales para facturas de cobro segun requisitos de SAR (Honduras): RTN, CAI,
-          rango autorizado y numeracion correlativa.
-        </p>
       </div>
       <Button
         v-if="canManageConfiguracion"

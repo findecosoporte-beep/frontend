@@ -1,6 +1,7 @@
 import { api } from '@/api/client'
 import type { Pago } from '@/types/api'
 
+import { fetchConfiguracionFacturacion, resolveFormatoTicketFactura } from '@/composables/useConfiguracionFacturacion'
 /** Extrae el número de cuota del documento del pago (ej. «Cuota 3»). */
 export function extractCuotaNumeroDocumento(documento: string | null | undefined): number | null {
   if (!documento) return null
@@ -48,8 +49,9 @@ export function esPagoFacturaSecundario(
 }
 
 /** Abre el PDF de factura del pago en una pestaña nueva e invoca impresión. */
-export async function abrirFacturaPago(idPago: number, ticketFormat: '58' | '80' = '58'): Promise<void> {
-  const response = await api.get(`/pagos/${idPago}/factura-pdf/?ticket=${ticketFormat}`, {
+export async function abrirFacturaPago(idPago: number, ticketFormat?: '58' | '80'): Promise<void> {
+  const ticket = await resolveFormatoTicketFactura(ticketFormat)
+  const response = await api.get(`/pagos/${idPago}/factura-pdf/?ticket=${ticket}`, {
     responseType: 'blob',
   })
   const pdfBlob = new Blob([response.data], { type: 'application/pdf' })
@@ -63,3 +65,11 @@ export async function abrirFacturaPago(idPago: number, ticketFormat: '58' | '80'
   }
   setTimeout(() => URL.revokeObjectURL(pdfUrl), 15000)
 }
+
+export {
+  fetchConfiguracionFacturacion,
+  invalidateConfiguracionFacturacion,
+  resolveFormatoTicketFactura,
+  setConfiguracionFacturacionCache,
+  tieneDatosEmisorSar,
+} from '@/composables/useConfiguracionFacturacion'
