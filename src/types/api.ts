@@ -524,3 +524,40 @@ export interface ReporteSarTrimestral {
   /** @deprecated usar ingresos */
   pagos_recibidos: string
 }
+
+export interface FacturasContabilidadFila {
+  id_pago: number
+  numero_factura: string
+  fecha_pago: string
+  hora_pago: string
+  nombre_cliente: string
+  dni_cliente: string
+  rtn_cliente: string
+  numero_prestamo: string
+  cartera_nombre: string
+  capital: string
+  interes: string
+  mora: string
+  total: string
+  monto_recibido: string
+  anulado: boolean
+  estado: string
+}
+
+/** GET /reportes/facturas-contabilidad/?modo=&fecha=&mes=&anio= */
+export interface FacturasContabilidadResponse {
+  modo: string
+  fecha_inicio: string
+  fecha_fin: string
+  generado_en?: string
+  cartera_etiqueta: string
+  incluir_anuladas: boolean
+  filas: FacturasContabilidadFila[]
+  resumen: {
+    registros: number
+    total_capital: string
+    total_interes: string
+    total_mora: string
+    total_cobrado: string
+  }
+}

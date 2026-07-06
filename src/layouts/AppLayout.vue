@@ -105,6 +105,11 @@ const menuSections: SidebarSection[] = [
             icon: 'pi pi-chart-bar',
             routeName: 'reporte-sar-trimestral',
           },
+          {
+            label: 'Facturas contabilidad',
+            icon: 'pi pi-receipt',
+            routeName: 'facturas-contabilidad',
+          },
         ],
       },
     ],

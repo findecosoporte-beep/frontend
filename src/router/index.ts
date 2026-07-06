@@ -85,6 +85,11 @@ const router = createRouter({
           name: 'reporte-sar-trimestral',
           component: () => import('@/views/ReporteSarView.vue'),
         },
+        {
+          path: 'reportes/facturas-contabilidad',
+          name: 'facturas-contabilidad',
+          component: () => import('@/views/FacturasContabilidadView.vue'),
+        },
       ],
     },
     {
