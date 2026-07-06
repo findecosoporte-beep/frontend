@@ -132,10 +132,6 @@ onMounted(() => {
     <div class="page-header">
       <div>
         <h1 class="page-title">Facturacion SAR</h1>
-        <p class="page-subtitle">
-          Parametros fiscales para facturas de cobro segun requisitos de SAR (Honduras): RTN, CAI,
-          rango autorizado y numeracion correlativa.
-        </p>
       </div>
       <Button
         v-if="canManageConfiguracion"

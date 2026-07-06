@@ -2376,7 +2376,11 @@ onMounted(async () => {
           </div>
           <div class="result-field">
             <label class="result-label" for="cj-fecha">Fecha de cobro</label>
-            <InputText id="cj-fecha" v-model="cajaForm.fecha_pago" type="date" />
+            <InputText
+              id="cj-fecha"
+              :model-value="cajaForm.fecha_pago ? formatDate(cajaForm.fecha_pago) : '—'"
+              readonly
+            />
           </div>
           <div class="result-field caja-field-full">
             <label class="result-label" for="cj-recibido">Monto recibido del cliente</label>

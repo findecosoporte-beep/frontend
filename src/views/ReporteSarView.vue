@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -91,10 +91,6 @@ async function cargarReporte() {
     loading.value = false
   }
 }
-
-onMounted(() => {
-  void cargarReporte()
-})
 
 async function descargarPdf() {
   pdfLoading.value = true
