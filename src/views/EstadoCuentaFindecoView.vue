@@ -13,16 +13,14 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { formatDate, formatMoney, formatTime } from '@/utils/format'
 import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
+import { pendienteCuota } from '@/utils/cobroPago'
 import {
-  cuotaEstaPagada,
-  cuotasCubiertasPorPagoAcumulado,
-  pendienteCuota,
-  totalAbonadoPrestamo,
-} from '@/utils/cobroPago'
+  buildFilasCuotaEstado,
+  type FilaCuotaEstado,
+} from '@/utils/estadoCuotaFilas'
 import {
   abonadoPorCuotaDesdeMovimientos,
   abonosCapitalDesdePagos,
-  cuotaReferenciaDesdeMovimientos,
 } from '@/utils/movimientosPago'
 import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
 import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
@@ -92,19 +90,6 @@ const historialPrestamosOrdenado = computed(() =>
     return b.id_prestamo - a.id_prestamo
   }),
 )
-
-interface FilaCuotaEstado {
-  numero_cuota: number
-  fecha_programada: string
-  total_programado: string | number
-  saldo_capital_programado: string | number
-  estado: 'pendiente' | 'pagada'
-  id_pago: number | null
-  id_pago_factura: number | null
-  cobrado_en: string | null
-  fecha_pago: string | null
-  documento: string | null
-}
 
 async function verFacturaPago(idPago: number) {
   facturaAbriendoId.value = idPago
@@ -183,74 +168,27 @@ const pagosOrdenados = computed(() =>
 )
 
 const abonadoPorCuota = computed(() => abonadoPorCuotaDesdeMovimientos(pagosOrdenados.value))
-const referenciaCuota = computed(() => cuotaReferenciaDesdeMovimientos(pagosOrdenados.value))
 const abonosCapital = computed(() => abonosCapitalDesdePagos(pagosOrdenados.value))
 
-const filasCuotasEstado = computed((): FilaCuotaEstado[] => {
-  const abonadoTotal = totalAbonadoPrestamo(pagosOrdenados.value)
-  const cubiertasPorAcumulado = cuotasCubiertasPorPagoAcumulado(cuotasPlan.value, abonadoTotal)
-  const ultimoPago = pagosOrdenados.value.at(-1)
-
-  return [...cuotasPlan.value]
-    .sort((a, b) => a.numero_cuota - b.numero_cuota)
-    .map((cuota) => {
-      const abonado = abonadoPorCuota.value.get(cuota.numero_cuota) ?? 0
-      const totalProg = Number(cuota.total_programado) || 0
-      const ref = referenciaCuota.value.get(cuota.numero_cuota)
-
-      if (ref || cuotaEstaPagada(abonado, totalProg)) {
-        const fuente = ref ?? {
-          id_pago: ultimoPago?.id_pago ?? null,
-          fecha_pago: ultimoPago?.fecha_pago ?? null,
-          cobrado_en: ultimoPago?.cobrado_en ?? null,
-          documento: `Cuota ${cuota.numero_cuota}`,
-        }
-        return {
-          numero_cuota: cuota.numero_cuota,
-          fecha_programada: cuota.fecha_programada,
-          total_programado: cuota.total_programado,
-          saldo_capital_programado: cuota.saldo_capital_programado,
-          estado: 'pagada',
-          id_pago: fuente.id_pago,
-          id_pago_factura: null,
-          cobrado_en: fuente.cobrado_en,
-          fecha_pago: fuente.fecha_pago,
-          documento: fuente.documento,
-        }
-      }
-
-      if (cubiertasPorAcumulado.has(cuota.numero_cuota) && ultimoPago) {
-        return {
-          numero_cuota: cuota.numero_cuota,
-          fecha_programada: cuota.fecha_programada,
-          total_programado: cuota.total_programado,
-          saldo_capital_programado: cuota.saldo_capital_programado,
-          estado: 'pagada',
-          id_pago: ultimoPago.id_pago,
-          id_pago_factura: null,
-          cobrado_en: ultimoPago.cobrado_en ?? null,
-          fecha_pago: ultimoPago.fecha_pago,
-          documento: `Cuota ${cuota.numero_cuota}`,
-        }
-      }
-
-      return {
-        numero_cuota: cuota.numero_cuota,
-        fecha_programada: cuota.fecha_programada,
-        total_programado: cuota.total_programado,
-        saldo_capital_programado: cuota.saldo_capital_programado,
-        estado: 'pendiente',
-        id_pago: null,
-        id_pago_factura: null,
-        cobrado_en: null,
-        fecha_pago: null,
-        documento: null,
-      }
-    })
-})
+const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
+  buildFilasCuotaEstado(cuotasPlan.value, abonos.value),
+)
 
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
 const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
+
+const totalesPlanDesembolso = computed(() => {
+  let capital = 0
+  let interes = 0
+  for (const cuota of cuotasPlan.value) {
+    capital += numMonto(cuota.capital_programado)
+    interes += numMonto(cuota.interes_programado)
+  }
+  return {
+    capital: Math.round(capital * 100) / 100,
+    interes: Math.round(interes * 100) / 100,
+  }
+})
 
 const ETIQUETAS_FORMA_PAGO: Record<string, string> = {
   semanal: 'SEMANAL',
@@ -897,6 +835,10 @@ function limpiarFormulario() {
                   </span>
                 </div>
                 <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Monto desembolsado:</span>
+                  <span class="ec-ficha-valor">{{ formatMoney(prestamoActivo?.monto ?? 0) }}</span>
+                </div>
+                <div class="ec-ficha-row">
                   <span class="ec-ficha-label">Forma Desembolso:</span>
                   <span class="ec-ficha-valor">{{ etiquetaFormaDesembolso(prestamoActivo?.forma_desembolso) }}</span>
                 </div>
@@ -918,6 +860,10 @@ function limpiarFormulario() {
                 <div class="ec-ficha-row">
                   <span class="ec-ficha-label">Producto:</span>
                   <span class="ec-ficha-valor">{{ prestamoActivo?.producto?.trim() || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Interés planificado:</span>
+                  <span class="ec-ficha-valor">{{ formatMoney(totalesPlanDesembolso.interes) }}</span>
                 </div>
                 <div class="ec-ficha-row">
                   <span class="ec-ficha-label">Tasa de Interés:</span>

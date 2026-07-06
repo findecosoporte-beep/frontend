@@ -36,11 +36,12 @@ export interface DesembolsosFindecoPdfData {
 }
 
 const MARGIN = 12
-const ROW_H = 5.2
+const ROW_H_MIN = 5.5
 const FONT_BODY = 8
 const FONT_SMALL = 7
 const FONT_TITLE = 13
 const FONT_SECTION = 10
+const CELL_PAD = 1.4
 
 type Align = 'left' | 'right' | 'center'
 
@@ -48,6 +49,30 @@ interface TableColumn {
   header: string
   width: number
   align?: Align
+}
+
+function lineHeightForFont(fontSize: number): number {
+  return fontSize * 0.42
+}
+
+function wrapCellLines(doc: jsPDF, text: string, width: number, fontSize: number): string[] {
+  const innerW = Math.max(4, width - CELL_PAD * 2)
+  doc.setFontSize(fontSize)
+  return doc.splitTextToSize(text, innerW) as string[]
+}
+
+function measureCellHeight(doc: jsPDF, text: string, width: number, fontSize: number): number {
+  const lines = wrapCellLines(doc, text, width, fontSize)
+  const lh = lineHeightForFont(fontSize)
+  return CELL_PAD * 2 + lines.length * lh
+}
+
+function scaledColumnWidths(doc: jsPDF, columns: TableColumn[]): number[] {
+  const pageW = doc.internal.pageSize.getWidth()
+  const tableW = pageW - MARGIN * 2
+  const totalDefined = columns.reduce((sum, col) => sum + col.width, 0)
+  const scale = tableW / totalDefined
+  return columns.map((col) => col.width * scale)
 }
 
 function applyReportStyle(doc: jsPDF) {
@@ -78,14 +103,14 @@ function drawTextCell(
 ) {
   doc.setFont('helvetica', bold ? 'bold' : 'normal')
   doc.setFontSize(fontSize)
-  const padding = 1.2
-  const lines = doc.splitTextToSize(text, width - padding * 2) as string[]
-  const lineHeight = fontSize * 0.38
-  let textY = y + padding + lineHeight
+  const lines = wrapCellLines(doc, text, width, fontSize)
+  const lineHeight = lineHeightForFont(fontSize)
+  const blockH = lines.length * lineHeight
+  let textY = y + Math.max(CELL_PAD, (height - blockH) / 2 + lineHeight * 0.85)
   for (const line of lines) {
-    let textX = x + padding
+    let textX = x + CELL_PAD
     if (align === 'right') {
-      textX = x + width - padding - doc.getTextWidth(line)
+      textX = x + width - CELL_PAD - doc.getTextWidth(line)
     } else if (align === 'center') {
       textX = x + (width - doc.getTextWidth(line)) / 2
     }
@@ -99,51 +124,71 @@ function drawTable(
   startY: number,
   columns: TableColumn[],
   rows: string[][],
-  options?: { headerFill?: boolean },
+  options?: { headerFill?: boolean; bodyFontSize?: number },
 ): number {
   const pageW = doc.internal.pageSize.getWidth()
   const tableW = pageW - MARGIN * 2
-  const colWidths = columns.map((c) => c.width)
-  const totalDefined = colWidths.reduce((a, b) => a + b, 0)
-  const scale = tableW / totalDefined
-  const scaledWidths = colWidths.map((w) => w * scale)
+  const scaledWidths = scaledColumnWidths(doc, columns)
+  const bodyFontSize = options?.bodyFontSize ?? FONT_BODY
 
   let y = startY
 
+  const measureRowHeight = (cells: string[], header = false): number => {
+    const fontSize = header ? FONT_SMALL : bodyFontSize
+    let rowH = ROW_H_MIN
+    cells.forEach((cell, i) => {
+      rowH = Math.max(rowH, measureCellHeight(doc, cell, scaledWidths[i], fontSize))
+    })
+    return rowH
+  }
+
   const drawHeader = () => {
-    y = ensureSpace(doc, y, ROW_H + 2)
+    const headerCells = columns.map((col) => col.header)
+    const headerH = measureRowHeight(headerCells, true)
+    y = ensureSpace(doc, y, headerH + 2)
     let x = MARGIN
     if (options?.headerFill !== false) {
       doc.setFillColor(235, 235, 235)
-      doc.rect(MARGIN, y, tableW, ROW_H, 'FD')
+      doc.rect(MARGIN, y, tableW, headerH, 'FD')
     } else {
-      doc.rect(MARGIN, y, tableW, ROW_H, 'D')
+      doc.rect(MARGIN, y, tableW, headerH, 'D')
     }
     columns.forEach((col, i) => {
       if (i > 0) {
-        doc.line(x, y, x, y + ROW_H)
+        doc.line(x, y, x, y + headerH)
       }
-      drawTextCell(doc, col.header, x, y, scaledWidths[i], ROW_H, col.align ?? 'left', true, FONT_SMALL)
+      drawTextCell(doc, col.header, x, y, scaledWidths[i], headerH, col.align ?? 'left', true, FONT_SMALL)
       x += scaledWidths[i]
     })
-    y += ROW_H
+    y += headerH
   }
 
   drawHeader()
 
   for (const row of rows) {
-    y = ensureSpace(doc, y, ROW_H + 2)
+    const rowH = measureRowHeight(row)
+    y = ensureSpace(doc, y, rowH + 2)
     let x = MARGIN
     doc.setFillColor(255, 255, 255)
-    doc.rect(MARGIN, y, tableW, ROW_H, 'D')
+    doc.rect(MARGIN, y, tableW, rowH, 'D')
     row.forEach((cell, i) => {
       if (i > 0) {
-        doc.line(x, y, x, y + ROW_H)
+        doc.line(x, y, x, y + rowH)
       }
-      drawTextCell(doc, cell, x, y, scaledWidths[i], ROW_H, columns[i]?.align ?? 'left')
+      drawTextCell(
+        doc,
+        cell,
+        x,
+        y,
+        scaledWidths[i],
+        rowH,
+        columns[i]?.align ?? 'left',
+        false,
+        bodyFontSize,
+      )
       x += scaledWidths[i]
     })
-    y += ROW_H
+    y += rowH
   }
 
   return y + 3
@@ -169,7 +214,7 @@ function drawSubtitle(doc: jsPDF, y: number, text: string): number {
 }
 
 export function generateDesembolsosFindecoPdf(data: DesembolsosFindecoPdfData): Blob {
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' })
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' })
   applyReportStyle(doc)
 
   const pageW = doc.internal.pageSize.getWidth()
@@ -234,14 +279,14 @@ export function generateDesembolsosFindecoPdf(data: DesembolsosFindecoPdfData): 
       doc,
       y,
       [
-        { header: 'N', width: 8, align: 'right' },
+        { header: 'N', width: 8, align: 'center' },
         { header: 'Nº préstamo', width: 22, align: 'left' },
-        { header: 'Nombre', width: 38, align: 'left' },
-        { header: 'Entrega', width: 20, align: 'left' },
-        { header: 'Monto', width: 22, align: 'right' },
-        { header: 'Tasa', width: 16, align: 'right' },
-        { header: 'Plazo', width: 14, align: 'right' },
-        { header: 'Interés', width: 22, align: 'right' },
+        { header: 'Nombre', width: 72, align: 'left' },
+        { header: 'Entrega', width: 18, align: 'center' },
+        { header: 'Monto', width: 24, align: 'right' },
+        { header: 'Tasa', width: 14, align: 'right' },
+        { header: 'Plazo', width: 12, align: 'center' },
+        { header: 'Interés', width: 24, align: 'right' },
       ],
       bloque.prestamos.map((p) => [
         String(p.numero),
@@ -253,6 +298,7 @@ export function generateDesembolsosFindecoPdf(data: DesembolsosFindecoPdfData): 
         p.plazo,
         p.interes,
       ]),
+      { bodyFontSize: FONT_SMALL },
     )
   }
 

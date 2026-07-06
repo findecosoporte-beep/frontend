@@ -115,6 +115,11 @@ function prestamoCoincideFiltroFecha(p: Prestamo): boolean {
   return true
 }
 
+/** Solo préstamos efectivamente desembolsados (excluye pendientes de aprobación y cancelados). */
+function prestamoCuentaComoDesembolso(p: Prestamo): boolean {
+  return p.estado === 'activo' || p.estado === 'mora' || p.estado === 'pagado'
+}
+
 function nombreCarteraPrestamo(p: Prestamo): string {
   const embebido = p.cartera?.nombre?.trim()
   if (embebido) return embebido
@@ -191,7 +196,7 @@ interface BloqueCartera {
 }
 
 const prestamosFiltrados = computed(() =>
-  prestamos.value.filter((p) => prestamoCoincideFiltroFecha(p)),
+  prestamos.value.filter((p) => prestamoCoincideFiltroFecha(p) && prestamoCuentaComoDesembolso(p)),
 )
 
 const bloquesPorCartera = computed((): BloqueCartera[] => {
@@ -659,8 +664,10 @@ onBeforeUnmount(() => {
             <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ codigoPrestamo(data) }}</template>
             </Column>
-            <Column header="Nombre" :style="{ minWidth: '14rem' }">
-              <template #body="{ data }: { data: Prestamo }">{{ nombreCliente(data.id_cliente) }}</template>
+            <Column header="Nombre" :style="{ minWidth: '16rem', maxWidth: '22rem' }">
+              <template #body="{ data }: { data: Prestamo }">
+                <span class="celda-nombre-cliente">{{ nombreCliente(data.id_cliente) }}</span>
+              </template>
             </Column>
             <Column header="Entrega" :style="{ minWidth: '9rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
@@ -902,6 +909,15 @@ onBeforeUnmount(() => {
 
 .datatable-desembolso :deep(.p-datatable-tbody > tr > td) {
   font-size: 0.875rem;
+  vertical-align: top;
+}
+
+.celda-nombre-cliente {
+  display: block;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .pdf-modal-body {
