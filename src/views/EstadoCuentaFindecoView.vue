@@ -107,6 +107,11 @@ async function verFacturaPago(idPago: number) {
   }
 }
 
+async function verEstadoFinancieroPdf() {
+  if (idPrestamoActivo.value == null) return
+  pdfEstadoCuentaVisible.value = true
+}
+
 async function compartirEstadoFinanciero() {
   const idPrestamo = idPrestamoActivo.value
   if (idPrestamo == null) return
@@ -772,17 +777,29 @@ function limpiarFormulario() {
                 :value="etiquetaEstadoPrestamo(estadoPrestamoActivo)"
               />
             </div>
-            <Button
-              label="Compartir estado financiero"
-              icon="pi pi-share-alt"
-              type="button"
-              severity="secondary"
-              outlined
-              size="small"
-              :loading="pdfCompartiendo"
-              :disabled="loadingPlan || pdfCompartiendo"
-              @click="compartirEstadoFinanciero"
-            />
+            <div class="ec-toolbar-acciones">
+              <Button
+                label="Ver estado financiero"
+                icon="pi pi-file-pdf"
+                type="button"
+                severity="danger"
+                outlined
+                size="small"
+                :disabled="loadingPlan"
+                @click="verEstadoFinancieroPdf"
+              />
+              <Button
+                label="Compartir"
+                icon="pi pi-whatsapp"
+                type="button"
+                severity="success"
+                outlined
+                size="small"
+                :loading="pdfCompartiendo"
+                :disabled="loadingPlan || pdfCompartiendo || !campos.telefono?.trim()"
+                @click="compartirEstadoFinanciero"
+              />
+            </div>
           </div>
 
           <section class="ec-ficha" aria-label="Datos del préstamo y cliente">
@@ -1231,6 +1248,13 @@ function limpiarFormulario() {
 
 .ec-toolbar-estado {
   font-size: 0.75rem;
+}
+
+.ec-toolbar-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .ec-ficha {

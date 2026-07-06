@@ -29,7 +29,6 @@ import {
 import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import {
   abrirWhatsAppConMensaje,
-  mensajeConsultaClienteCobros,
   mensajeEstadoCuentaModal,
 } from '@/utils/whatsappCliente'
 import type {
@@ -1238,35 +1237,6 @@ function avisoWhatsAppNumeroInvalido() {
   })
 }
 
-function enviarWhatsAppConsultaCliente() {
-  const cliente = searchResult.value
-  if (!cliente) return
-  const telefono = cliente.telefono?.trim()
-  if (!telefono) {
-    avisoWhatsAppSinTelefono()
-    return
-  }
-  const info = proximaCuotaSemanalInfo.value
-  let cuotasAtrasadas: string | undefined
-  if (proximaCuotaAtrasadas.value.count > 0) {
-    cuotasAtrasadas = `${proximaCuotaAtrasadas.value.count} cuota(s) vencida(s) sin cobro (#${proximaCuotaAtrasadas.value.numeros.replace(/,\s*/g, ', #')})`
-  }
-  const mensaje = mensajeConsultaClienteCobros({
-    nombre: cliente.nombre,
-    dni: cliente.dni || '—',
-    prestamoLabel: cliente.prestamoLabel,
-    cuotaNumero: info?.numero_cuota,
-    cuotaMonto: info ? formatMoney(info.monto_pendiente) : undefined,
-    cuotaFecha: info?.fecha_programada ? formatDate(info.fecha_programada) : undefined,
-    saldoActual: info
-      ? formatMoney(info.saldo_actual ?? info.saldo_inicial ?? 0)
-      : undefined,
-    cuotasAtrasadas,
-    notaCuota: proximaCuotaSemanalMensaje.value || undefined,
-  })
-  if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
-}
-
 function enviarWhatsAppEstadoCuentaModal() {
   const cliente = searchResult.value
   if (!cliente) return
@@ -2092,15 +2062,6 @@ onMounted(async () => {
               outlined
               :disabled="!searchResult.prestamoId"
               @click="() => abrirCuotas()"
-            />
-            <Button
-              label="Enviar por WhatsApp"
-              icon="pi pi-whatsapp"
-              type="button"
-              severity="success"
-              outlined
-              :disabled="!searchResult.telefono?.trim()"
-              @click="enviarWhatsAppConsultaCliente"
             />
           </div>
         </div>

@@ -1,12 +1,22 @@
 import { api } from '@/api/client'
+import { getApiErrorMessageAsync } from '@/api/errors'
 import { abrirWhatsAppConMensaje, telefonoParaWhatsApp } from '@/utils/whatsappCliente'
+import { blobPdfDesdeAxios } from '@/utils/pdfBlobFromResponse'
 
 /** Obtiene el PDF de estado de cuenta del préstamo como Blob. */
 export async function fetchEstadoCuentaPdfBlob(idPrestamo: number): Promise<Blob> {
-  const response = await api.get(`/prestamos/${idPrestamo}/estado-cuenta-pdf/`, {
-    responseType: 'blob',
-  })
-  return new Blob([response.data], { type: 'application/pdf' })
+  try {
+    const response = await api.get(`/prestamos/${idPrestamo}/estado-cuenta-pdf/`, {
+      responseType: 'blob',
+    })
+    return blobPdfDesdeAxios(response)
+  } catch (error) {
+    const message = await getApiErrorMessageAsync(
+      error,
+      'No se pudo generar el PDF del estado de cuenta.',
+    )
+    throw new Error(message)
+  }
 }
 
 function mensajeCompartirEstadoCuenta(nombreCliente: string, numeroPrestamo?: string | null): string {
