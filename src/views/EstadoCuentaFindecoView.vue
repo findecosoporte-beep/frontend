@@ -11,11 +11,12 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
-import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { formatDate, formatMoney, formatTime } from '@/utils/format'
 import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
 import {
   cuotaEstaPagada,
   cuotasCubiertasPorPagoAcumulado,
+  pendienteCuota,
   totalAbonadoPrestamo,
 } from '@/utils/cobroPago'
 import {
@@ -49,6 +50,8 @@ let carterasCargaPromise: Promise<void> | null = null
 const idPrestamoActivo = ref<number | null>(null)
 const estadoPrestamoActivo = ref<string | null>(null)
 const idClienteActivo = ref<number | null>(null)
+const prestamoActivo = ref<Prestamo | null>(null)
+const clienteActivo = ref<Cliente | null>(null)
 const cuotasPlan = ref<PrestamoCuotaRow[]>([])
 const abonos = ref<Pago[]>([])
 const historialPrestamos = ref<Prestamo[]>([])
@@ -249,6 +252,200 @@ const filasCuotasEstado = computed((): FilaCuotaEstado[] => {
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
 const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
 
+const ETIQUETAS_FORMA_PAGO: Record<string, string> = {
+  semanal: 'SEMANAL',
+  quincenal: 'QUINCENAL',
+  mensual: 'MENSUAL',
+}
+
+const ETIQUETAS_FORMA_DESEMBOLSO: Record<string, string> = {
+  efectivo: 'Efectivo (E)',
+  transferencia: 'Transferencia (T)',
+  cheque: 'Cheque (C)',
+}
+
+function numMonto(value: string | number | null | undefined): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function desgloseCuota(cuota: PrestamoCuotaRow) {
+  return {
+    capital: numMonto(cuota.capital_programado),
+    intereses: numMonto(cuota.interes_programado),
+    servicios: numMonto(cuota.servicios_programado) + numMonto(cuota.otros_programado),
+    moratorios: 0,
+  }
+}
+
+function desglosePendienteCuota(cuota: PrestamoCuotaRow, abonado: number) {
+  const base = desgloseCuota(cuota)
+  const total = base.capital + base.intereses + base.servicios
+  const pendiente = pendienteCuota(total, abonado)
+  if (pendiente <= 0 || total <= 0) {
+    return { capital: 0, intereses: 0, servicios: 0, moratorios: 0 }
+  }
+  const ratio = pendiente / total
+  return {
+    capital: Math.round(base.capital * ratio * 100) / 100,
+    intereses: Math.round(base.intereses * ratio * 100) / 100,
+    servicios: Math.round(base.servicios * ratio * 100) / 100,
+    moratorios: 0,
+  }
+}
+
+function sumarDesglose(
+  a: { capital: number; intereses: number; servicios: number; moratorios: number },
+  b: { capital: number; intereses: number; servicios: number; moratorios: number },
+) {
+  return {
+    capital: Math.round((a.capital + b.capital) * 100) / 100,
+    intereses: Math.round((a.intereses + b.intereses) * 100) / 100,
+    servicios: Math.round((a.servicios + b.servicios) * 100) / 100,
+    moratorios: Math.round((a.moratorios + b.moratorios) * 100) / 100,
+  }
+}
+
+function restarDesglose(
+  inicial: { capital: number; intereses: number; servicios: number; moratorios: number },
+  abonos: { capital: number; intereses: number; servicios: number; moratorios: number },
+) {
+  return {
+    capital: Math.max(0, Math.round((inicial.capital - abonos.capital) * 100) / 100),
+    intereses: Math.max(0, Math.round((inicial.intereses - abonos.intereses) * 100) / 100),
+    servicios: Math.max(0, Math.round((inicial.servicios - abonos.servicios) * 100) / 100),
+    moratorios: Math.max(0, Math.round((inicial.moratorios - abonos.moratorios) * 100) / 100),
+  }
+}
+
+function totalDesglose(d: { capital: number; intereses: number; servicios: number; moratorios: number }) {
+  return Math.round((d.capital + d.intereses + d.servicios + d.moratorios) * 100) / 100
+}
+
+function etiquetaFormaPago(forma: string | null | undefined): string {
+  if (!forma) return '—'
+  return ETIQUETAS_FORMA_PAGO[forma] ?? forma.toUpperCase()
+}
+
+function etiquetaFormaDesembolso(forma: string | null | undefined): string {
+  if (!forma) return '—'
+  return ETIQUETAS_FORMA_DESEMBOLSO[forma] ?? forma
+}
+
+function textoClienteFicha(cliente: Cliente | null, fallbackNombre: string): string {
+  if (!cliente) return fallbackNombre || '—'
+  const nombre = (cliente.nombre ?? fallbackNombre).trim()
+  return `${cliente.id_cliente}-${nombre}`
+}
+
+function hoyLocalIso(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+interface FilaResumenSaldos {
+  etiqueta: string
+  inicial: number
+  abonos: number
+  actual: number
+  vencido: number
+  esTotal?: boolean
+}
+
+const resumenSaldos = computed((): { filas: FilaResumenSaldos[]; fechaPagoVencido: string | null } => {
+  const cuotas = cuotasPlan.value
+  const pagos = pagosOrdenados.value.filter((p) => !p.anulado)
+  const hoy = hoyLocalIso()
+
+  let inicial = { capital: 0, intereses: 0, servicios: 0, moratorios: 0 }
+  for (const cuota of cuotas) {
+    inicial = sumarDesglose(inicial, desgloseCuota(cuota))
+  }
+
+  let abonosSum = { capital: 0, intereses: 0, servicios: 0, moratorios: 0 }
+  for (const pago of pagos) {
+    abonosSum.capital += numMonto(pago.capital)
+    abonosSum.intereses += numMonto(pago.interes)
+    abonosSum.moratorios += numMonto(pago.mora)
+  }
+  abonosSum.capital = Math.round(abonosSum.capital * 100) / 100
+  abonosSum.intereses = Math.round(abonosSum.intereses * 100) / 100
+  abonosSum.moratorios = Math.round(abonosSum.moratorios * 100) / 100
+
+  for (const fila of filasCuotasEstado.value) {
+    if (fila.estado !== 'pagada') continue
+    const cuota = cuotas.find((c) => c.numero_cuota === fila.numero_cuota)
+    if (!cuota) continue
+    const serv = numMonto(cuota.servicios_programado) + numMonto(cuota.otros_programado)
+    abonosSum.servicios = Math.round((abonosSum.servicios + serv) * 100) / 100
+  }
+
+  const actual = restarDesglose(inicial, abonosSum)
+
+  let vencido = { capital: 0, intereses: 0, servicios: 0, moratorios: 0 }
+  let fechaPagoVencido: string | null = null
+  for (const fila of cuotasPendientes.value) {
+    const fecha = fila.fecha_programada.slice(0, 10)
+    if (fecha > hoy) continue
+    const cuota = cuotas.find((c) => c.numero_cuota === fila.numero_cuota)
+    if (!cuota) continue
+    const abonado = abonadoPorCuota.value.get(fila.numero_cuota) ?? 0
+    vencido = sumarDesglose(vencido, desglosePendienteCuota(cuota, abonado))
+    if (!fechaPagoVencido || fecha < fechaPagoVencido) fechaPagoVencido = fecha
+  }
+
+  if (!fechaPagoVencido) {
+    const proxima = [...cuotasPendientes.value].sort((a, b) =>
+      a.fecha_programada.localeCompare(b.fecha_programada),
+    )[0]
+    fechaPagoVencido = proxima?.fecha_programada?.slice(0, 10) ?? null
+  }
+
+  const filas: FilaResumenSaldos[] = [
+    {
+      etiqueta: 'Capital',
+      inicial: inicial.capital,
+      abonos: abonosSum.capital,
+      actual: actual.capital,
+      vencido: vencido.capital,
+    },
+    {
+      etiqueta: 'Intereses',
+      inicial: inicial.intereses,
+      abonos: abonosSum.intereses,
+      actual: actual.intereses,
+      vencido: vencido.intereses,
+    },
+    {
+      etiqueta: 'Servicios',
+      inicial: inicial.servicios,
+      abonos: abonosSum.servicios,
+      actual: actual.servicios,
+      vencido: vencido.servicios,
+    },
+    {
+      etiqueta: 'Intereses Moratorios',
+      inicial: inicial.moratorios,
+      abonos: abonosSum.moratorios,
+      actual: actual.moratorios,
+      vencido: vencido.moratorios,
+    },
+    {
+      etiqueta: 'Total',
+      inicial: totalDesglose(inicial),
+      abonos: totalDesglose(abonosSum),
+      actual: totalDesglose(actual),
+      vencido: totalDesglose(vencido),
+      esTotal: true,
+    },
+  ]
+
+  return { filas, fechaPagoVencido }
+})
+
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
   let nextUrl: string | null = initialPath
@@ -315,6 +512,7 @@ async function seleccionarPrestamoHistorial(p: Prestamo) {
   await ensureCarterasCargadas()
   idPrestamoActivo.value = p.id_prestamo
   estadoPrestamoActivo.value = p.estado ?? null
+  prestamoActivo.value = p
   campos.value.n = p.numero_prestamo?.trim() ?? campos.value.n
   const cartera = textoCarteraDesdePrestamo(p)
   if (cartera) campos.value.cartera = cartera
@@ -360,6 +558,8 @@ async function aplicarPrestamoYCliente(p: Prestamo, c: Cliente, avisoVarios?: st
   idPrestamoActivo.value = p.id_prestamo
   estadoPrestamoActivo.value = p.estado ?? null
   idClienteActivo.value = p.id_cliente
+  prestamoActivo.value = p
+  clienteActivo.value = c
   void cargarPlanYPagos(p.id_prestamo)
   void cargarHistorialPrestamos(p.id_cliente)
 }
@@ -528,6 +728,8 @@ async function buscarPorCampo(campo: CampoBusqueda) {
   idPrestamoActivo.value = null
   estadoPrestamoActivo.value = null
   idClienteActivo.value = null
+  prestamoActivo.value = null
+  clienteActivo.value = null
   cuotasPlan.value = []
   abonos.value = []
   historialPrestamos.value = []
@@ -558,6 +760,8 @@ function limpiarFormulario() {
   idPrestamoActivo.value = null
   estadoPrestamoActivo.value = null
   idClienteActivo.value = null
+  prestamoActivo.value = null
+  clienteActivo.value = null
   cuotasPlan.value = []
   abonos.value = []
   historialPrestamos.value = []
@@ -620,12 +824,15 @@ function limpiarFormulario() {
 
       <div class="bloque-resultados">
         <template v-if="idPrestamoActivo != null">
-          <div class="cliente-info-bar">
-            <div class="cliente-info-datos">
-              <strong>{{ campos.cliente || 'Cliente' }}</strong>
-              <span v-if="campos.identidad"> · DNI {{ campos.identidad }}</span>
-              <span v-if="campos.telefono"> · {{ campos.telefono }}</span>
-              <span v-else class="cliente-sin-tel"> · Sin teléfono</span>
+          <div class="ec-toolbar">
+            <div class="ec-toolbar-titulo">
+              <strong>Préstamo {{ campos.n || idPrestamoActivo }}</strong>
+              <Tag
+                v-if="estadoPrestamoActivo"
+                class="ec-toolbar-estado"
+                :severity="severidadEstadoPrestamo(estadoPrestamoActivo)"
+                :value="etiquetaEstadoPrestamo(estadoPrestamoActivo)"
+              />
             </div>
             <Button
               label="Compartir estado financiero"
@@ -639,6 +846,130 @@ function limpiarFormulario() {
               @click="compartirEstadoFinanciero"
             />
           </div>
+
+          <section class="ec-ficha" aria-label="Datos del préstamo y cliente">
+            <div class="ec-ficha-grid">
+              <div class="ec-ficha-col">
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Cliente:</span>
+                  <span class="ec-ficha-valor">{{ textoClienteFicha(clienteActivo, campos.cliente) }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Identidad:</span>
+                  <span class="ec-ficha-valor">{{ campos.identidad || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Supervisor:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.supervisor?.trim() || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Asesor:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.asesor?.trim() || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Garantía:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.tipo_garantia?.trim() || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Ciclos:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.ciclos ?? '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Teléfonos:</span>
+                  <span class="ec-ficha-valor ec-ficha-telefonos">
+                    Casa: {{ '—' }} Negocio: {{ '—' }} Celular: {{ campos.telefono || '—' }}
+                  </span>
+                </div>
+                <div v-if="clienteActivo?.direccion_residencia" class="ec-ficha-row">
+                  <span class="ec-ficha-label">Dirección:</span>
+                  <span class="ec-ficha-valor">{{ clienteActivo.direccion_residencia }}</span>
+                </div>
+                <div v-if="clienteActivo?.referencia" class="ec-ficha-row">
+                  <span class="ec-ficha-label">Referencia:</span>
+                  <span class="ec-ficha-valor">
+                    {{ clienteActivo.referencia }}
+                    <template v-if="clienteActivo.referencia_parentesco">
+                      ({{ clienteActivo.referencia_parentesco }})
+                    </template>
+                    <template v-if="clienteActivo.referencia_telefono">
+                      · {{ clienteActivo.referencia_telefono }}
+                    </template>
+                  </span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Forma Desembolso:</span>
+                  <span class="ec-ficha-valor">{{ etiquetaFormaDesembolso(prestamoActivo?.forma_desembolso) }}</span>
+                </div>
+              </div>
+
+              <div class="ec-ficha-col">
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Forma Pago:</span>
+                  <span class="ec-ficha-valor">{{ etiquetaFormaPago(prestamoActivo?.forma_pago) }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Fecha Entrega:</span>
+                  <span class="ec-ficha-valor">{{ formatDate(prestamoActivo?.fecha_entrega) }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Fecha Vencimiento:</span>
+                  <span class="ec-ficha-valor">{{ formatDate(prestamoActivo?.fecha_vencimiento) }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Producto:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.producto?.trim() || '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Tasa de Interés:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.tasa_interes ?? '—' }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Días Mora:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.dias_mora ?? 0 }}</span>
+                </div>
+                <div class="ec-ficha-row">
+                  <span class="ec-ficha-label">Categoría:</span>
+                  <span class="ec-ficha-valor">{{ prestamoActivo?.categoria?.trim() || '—' }}</span>
+                </div>
+                <div v-if="prestamoActivo?.categoria_crediticia" class="ec-ficha-row ec-ficha-row--calificacion">
+                  <span class="ec-ficha-valor ec-ficha-calificacion">{{ prestamoActivo.categoria_crediticia }}</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="ec-tabla-saldos-wrap">
+            <table class="ec-tabla-saldos">
+              <thead>
+                <tr>
+                  <th class="ec-th-etiqueta"></th>
+                  <th>Saldo Inicial</th>
+                  <th>Abonos</th>
+                  <th>Saldo Actual</th>
+                  <th class="ec-th-vencido">
+                    Pago Vencido
+                    <template v-if="resumenSaldos.fechaPagoVencido">
+                      al {{ formatDate(resumenSaldos.fechaPagoVencido) }}
+                    </template>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="fila in resumenSaldos.filas"
+                  :key="fila.etiqueta"
+                  :class="{ 'ec-fila-total': fila.esTotal }"
+                >
+                  <th scope="row" class="ec-th-etiqueta">{{ fila.etiqueta }}</th>
+                  <td class="ec-monto">{{ formatMoney(fila.inicial) }}</td>
+                  <td class="ec-monto">{{ formatMoney(fila.abonos) }}</td>
+                  <td class="ec-monto">{{ formatMoney(fila.actual) }}</td>
+                  <td class="ec-monto ec-col-vencido">{{ formatMoney(fila.vencido) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           <div class="seccion-tablas">
             <h2 class="subtitulo">Cuotas pendientes</h2>
             <p v-if="!loadingPlan && !cuotasPendientes.length" class="tabla-vacia">
@@ -934,26 +1265,123 @@ function limpiarFormulario() {
   margin-top: 0.15rem;
 }
 
-.cliente-info-bar {
+.ec-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem 1rem;
-  margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
+  margin-bottom: 0.85rem;
 }
 
-.cliente-info-datos {
-  font-size: 0.9rem;
+.ec-toolbar-titulo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.95rem;
   color: #0f172a;
 }
 
-.cliente-sin-tel {
-  color: #64748b;
+.ec-toolbar-estado {
+  font-size: 0.75rem;
+}
+
+.ec-ficha {
+  margin-bottom: 0.85rem;
+  padding: 0.35rem 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.ec-ficha-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 2rem;
+}
+
+.ec-ficha-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.ec-ficha-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 9.5rem) minmax(0, 1fr);
+  gap: 0.35rem 0.5rem;
+  align-items: baseline;
+}
+
+.ec-ficha-row--calificacion {
+  grid-template-columns: 1fr;
+  margin-top: 0.15rem;
+}
+
+.ec-ficha-label {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ec-ficha-valor {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.ec-ficha-telefonos {
+  font-size: 0.8rem;
+}
+
+.ec-ficha-calificacion {
+  font-weight: 700;
+}
+
+.ec-tabla-saldos-wrap {
+  margin-bottom: 1.15rem;
+  overflow-x: auto;
+}
+
+.ec-tabla-saldos {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  color: #0f172a;
+}
+
+.ec-tabla-saldos th,
+.ec-tabla-saldos td {
+  border: 1px solid #0f172a;
+  padding: 0.28rem 0.45rem;
+}
+
+.ec-tabla-saldos thead th {
+  font-weight: 700;
+  text-align: center;
+  background: #fff;
+}
+
+.ec-th-etiqueta {
+  text-align: left;
+  font-weight: 700;
+  background: #fff;
+}
+
+.ec-monto {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ec-th-vencido,
+.ec-col-vencido {
+  background: #e2e8f0;
+}
+
+.ec-fila-total th,
+.ec-fila-total td {
+  font-weight: 700;
 }
 
 .placeholder-resultados {
@@ -1122,5 +1550,12 @@ function limpiarFormulario() {
 
 .tabla-historial-prestamos :deep(.p-datatable-tbody > tr.fila-prestamo-activo > td) {
   background: #eff6ff;
+}
+
+@media (max-width: 768px) {
+  .ec-ficha-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
 }
 </style>
