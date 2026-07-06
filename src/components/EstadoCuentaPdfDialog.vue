@@ -28,6 +28,7 @@ const sharing = ref(false)
 const error = ref('')
 const pdfUrl = ref<string | null>(null)
 const pdfBlob = ref<Blob | null>(null)
+const pdfFrameRef = ref<HTMLIFrameElement | null>(null)
 
 const telefonoValido = computed(() => (props.telefono ?? '').trim().length > 0)
 
@@ -99,6 +100,13 @@ function descargar() {
   descargarEstadoCuentaPdf(pdfBlob.value, props.numeroPrestamo)
 }
 
+function imprimir() {
+  const frame = pdfFrameRef.value
+  if (!frame?.contentWindow) return
+  frame.contentWindow.focus()
+  frame.contentWindow.print()
+}
+
 watch(
   () => [visible.value, props.prestamoId] as const,
   ([abierto, prestamoId]) => {
@@ -131,12 +139,21 @@ defineExpose({ cargarPdf, compartir })
       <p v-else-if="error" class="pdf-modal-error">{{ error }}</p>
       <iframe
         v-else-if="pdfUrl"
+        ref="pdfFrameRef"
         :src="pdfUrl"
         class="pdf-modal-frame"
         title="Estado de cuenta PDF"
       />
     </div>
     <template #footer>
+      <Button
+        v-if="pdfUrl"
+        label="Imprimir"
+        icon="pi pi-print"
+        severity="secondary"
+        outlined
+        @click="imprimir"
+      />
       <Button
         v-if="pdfUrl && telefonoValido"
         label="Enviar por WhatsApp"
