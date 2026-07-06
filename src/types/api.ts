@@ -152,6 +152,12 @@ export interface Prestamo {
   fecha_vencimiento: string
   /** Registro del préstamo en el sistema (ISO datetime). */
   creado_en?: string | null
+  /** Usuario operativo que registró el préstamo (no confundir con id_usuario = asesor). */
+  creado_por?: number | null
+  creado_por_nombre?: string | null
+  modificado_por?: number | null
+  modificado_por_nombre?: string | null
+  actualizado_en?: string | null
 }
 
 /** Respuesta de GET /prestamos/reporte-integracion/ */

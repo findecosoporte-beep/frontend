@@ -22,7 +22,7 @@ import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import DniHondurasInput from '@/components/DniHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import {
   esDniHnValido,
   mensajeDniHnInvalido,
@@ -70,6 +70,14 @@ const listFirst = computed(() => (listPage.value - 1) * listPageSize.value)
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
 const editingPrestamoId = ref<number | null>(null)
+const editAuditoria = ref<{
+  creado_en: string | null
+  creado_por: number | null
+  creado_por_nombre: string | null
+  actualizado_en: string | null
+  modificado_por: number | null
+  modificado_por_nombre: string | null
+} | null>(null)
 const editForm = ref({
   numero_prestamo: '',
   id_cliente: null as number | null,
@@ -443,6 +451,29 @@ function formatTasaPct(value: string | number | null | undefined): string {
   return `${n.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }
 
+function textoUsuarioAuditoria(
+  idUsuario: number | null | undefined,
+  nombre: string | null | undefined,
+): string {
+  if (idUsuario == null) return '—'
+  const etiqueta = nombre?.trim() || `Usuario #${idUsuario}`
+  return `${etiqueta} (ID ${idUsuario})`
+}
+
+function textoRegistroPrestamo(p: Prestamo): string {
+  if (!p.creado_en && p.creado_por == null) return '—'
+  const fecha = formatDateTime(p.creado_en)
+  const quien = textoUsuarioAuditoria(p.creado_por, p.creado_por_nombre)
+  return quien === '—' ? fecha : `${fecha} · ${quien}`
+}
+
+function textoUltimaModificacionPrestamo(p: Prestamo): string {
+  if (!p.actualizado_en && p.modificado_por == null) return '—'
+  const fecha = formatDateTime(p.actualizado_en)
+  const quien = textoUsuarioAuditoria(p.modificado_por, p.modificado_por_nombre)
+  return quien === '—' ? fecha : `${fecha} · ${quien}`
+}
+
 function resolveCobradorIdFromPrestamo(p: Prestamo): number | null {
   const nombre = (p.supervisor ?? '').trim().toLowerCase()
   if (!nombre) return null
@@ -486,6 +517,14 @@ function onListSearch() {
 
 function openEditPrestamo(row: Prestamo) {
   editingPrestamoId.value = row.id_prestamo
+  editAuditoria.value = {
+    creado_en: row.creado_en ?? null,
+    creado_por: row.creado_por ?? null,
+    creado_por_nombre: row.creado_por_nombre ?? null,
+    actualizado_en: row.actualizado_en ?? null,
+    modificado_por: row.modificado_por ?? null,
+    modificado_por_nombre: row.modificado_por_nombre ?? null,
+  }
   editForm.value = {
     numero_prestamo: row.numero_prestamo?.trim() ?? '',
     id_cliente: row.id_cliente,
@@ -601,6 +640,7 @@ async function saveEditPrestamo() {
     await api.patch(`/prestamos/${editingPrestamoId.value}/`, buildEditPayload())
     toast.add({ severity: 'success', summary: 'Préstamo actualizado', life: 3000 })
     editDialogVisible.value = false
+    editAuditoria.value = null
     await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
@@ -1645,6 +1685,16 @@ watch(
         <Column header="Entrega" :style="{ minWidth: '8rem' }">
           <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
         </Column>
+        <Column header="Registrado" :style="{ minWidth: '11rem' }">
+          <template #body="{ data }: { data: Prestamo }">
+            <span class="auditoria-celda">{{ textoRegistroPrestamo(data) }}</span>
+          </template>
+        </Column>
+        <Column header="Última modificación" :style="{ minWidth: '11rem' }">
+          <template #body="{ data }: { data: Prestamo }">
+            <span class="auditoria-celda">{{ textoUltimaModificacionPrestamo(data) }}</span>
+          </template>
+        </Column>
         <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }">
           <template #body="{ data }: { data: Prestamo }">
             <div class="acciones-tabla">
@@ -2101,6 +2151,31 @@ watch(
             />
           </div>
           <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+        </div>
+        <div class="full prestamo-auditoria-panel">
+          <p class="auditoria-titulo">Trazabilidad</p>
+          <div class="auditoria-grid">
+            <div>
+              <span class="auditoria-label">Creado</span>
+              <span class="auditoria-valor">{{ formatDateTime(editAuditoria?.creado_en) }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Creado por</span>
+              <span class="auditoria-valor">{{
+                textoUsuarioAuditoria(editAuditoria?.creado_por, editAuditoria?.creado_por_nombre)
+              }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Última modificación</span>
+              <span class="auditoria-valor">{{ formatDateTime(editAuditoria?.actualizado_en) }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Modificado por</span>
+              <span class="auditoria-valor">{{
+                textoUsuarioAuditoria(editAuditoria?.modificado_por, editAuditoria?.modificado_por_nombre)
+              }}</span>
+            </div>
+          </div>
         </div>
         <div>
           <label class="lbl" for="ep-estado">Estado</label>
@@ -2666,6 +2741,49 @@ watch(
 
 .sim-table :deep(.p-datatable-table) {
   min-width: 36rem;
+}
+
+.auditoria-celda {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.prestamo-auditoria-panel {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--p-content-border-color, #e2e8f0);
+  border-radius: 8px;
+  background: var(--p-surface-50, #f8fafc);
+}
+
+.auditoria-titulo {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.auditoria-grid {
+  display: grid;
+  gap: 0.55rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.auditoria-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.auditoria-valor {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--p-text-color, #0f172a);
 }
 
 @media (max-width: 1100px) {
