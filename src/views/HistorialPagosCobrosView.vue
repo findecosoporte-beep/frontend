@@ -14,7 +14,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import type {
   AnularPagoResponse,
   Cartera,
@@ -90,7 +90,6 @@ function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boole
     fila.total,
     fila.fecha_programada,
     fila.fecha_pago,
-    fila.hora_pago,
     fila.registrado_en,
     fila.registrado_por_etiqueta,
     fila.registrado_por_nombre,
@@ -532,9 +531,6 @@ onMounted(async () => {
         <Column header="Fecha canceló">
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
         </Column>
-        <Column header="Hora">
-          <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
-        </Column>
         <Column header="Usuario" :style="{ minWidth: '10rem' }">
           <template #body="{ data }">
             <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
@@ -615,7 +611,6 @@ onMounted(async () => {
           <tr>
             <th>F. programada</th>
             <th>F. canceló</th>
-            <th>Hora</th>
             <th>Usuario</th>
             <th>ID usuario</th>
             <th>Fecha registro</th>
@@ -632,7 +627,6 @@ onMounted(async () => {
           <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
             <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
             <td>{{ formatDate(fila.fecha_pago) }}</td>
-            <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
             <td>{{ nombreUsuarioCobro(fila) }}</td>
             <td>{{ fila.registrado_por ?? '—' }}</td>
             <td>{{ fechaRegistroCobro(fila) }}</td>
