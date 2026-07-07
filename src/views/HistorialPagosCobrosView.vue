@@ -795,9 +795,16 @@ onMounted(async () => {
   font-size: 0.72rem;
 }
 
-.historial-print-table th,
+.historial-print-table th {
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
+  padding: 0.25rem 0.35rem;
+  text-align: left;
+}
+
 .historial-print-table td {
-  border: 1px solid #333;
+  border: 1px solid #1a1a1a;
   padding: 0.25rem 0.35rem;
   text-align: left;
 }
