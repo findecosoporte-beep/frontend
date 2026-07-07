@@ -100,10 +100,7 @@ function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boole
 }
 
 function nombreUsuarioCobro(fila: HistorialPagosCobrosFila): string {
-  const nombre = fila.registrado_por_nombre?.trim()
-  if (nombre) return nombre
-  if (fila.registrado_por != null) return `Usuario #${fila.registrado_por}`
-  return '—'
+  return fila.registrado_por_nombre?.trim() || '—'
 }
 
 function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
@@ -523,6 +520,11 @@ onMounted(async () => {
         responsive-layout="scroll"
         class="historial-table no-print-table"
       >
+        <Column field="cartera_nombre" header="Cartera" />
+        <Column field="nombre_cliente" header="Cliente" />
+        <Column field="dni_cliente" header="DNI" />
+        <Column field="numero_prestamo" header="Préstamo" />
+        <Column field="documento" header="Documento" />
         <Column header="Fecha programada">
           <template #body="{ data }">
             {{ data.fecha_programada ? formatDate(data.fecha_programada) : '—' }}
@@ -534,7 +536,6 @@ onMounted(async () => {
         <Column header="Usuario" :style="{ minWidth: '10rem' }">
           <template #body="{ data }">
             <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
-            <span v-if="data.registrado_por != null" class="auditoria-id">ID {{ data.registrado_por }}</span>
           </template>
         </Column>
         <Column header="Fecha registro" :style="{ minWidth: '10rem' }">
@@ -542,11 +543,6 @@ onMounted(async () => {
             <span class="auditoria-celda">{{ fechaRegistroCobro(data) }}</span>
           </template>
         </Column>
-        <Column field="nombre_cliente" header="Cliente" />
-        <Column field="dni_cliente" header="DNI" />
-        <Column field="numero_prestamo" header="Préstamo" />
-        <Column field="cartera_nombre" header="Cartera" />
-        <Column field="documento" header="Documento" />
         <Column header="Capital" style="text-align: right">
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
         </Column>
@@ -609,32 +605,30 @@ onMounted(async () => {
       <table class="historial-print-table" aria-hidden="true">
         <thead>
           <tr>
-            <th>F. programada</th>
-            <th>F. canceló</th>
-            <th>Usuario</th>
-            <th>ID usuario</th>
-            <th>Fecha registro</th>
+            <th>Cartera</th>
             <th>Cliente</th>
             <th>DNI</th>
             <th>Préstamo</th>
-            <th>Cartera</th>
             <th>Doc.</th>
+            <th>F. programada</th>
+            <th>F. canceló</th>
+            <th>Usuario</th>
+            <th>Fecha registro</th>
             <th>Capital</th>
             <th>Total</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
-            <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
-            <td>{{ formatDate(fila.fecha_pago) }}</td>
-            <td>{{ nombreUsuarioCobro(fila) }}</td>
-            <td>{{ fila.registrado_por ?? '—' }}</td>
-            <td>{{ fechaRegistroCobro(fila) }}</td>
+            <td>{{ fila.cartera_nombre }}</td>
             <td>{{ fila.nombre_cliente }}</td>
             <td>{{ fila.dni_cliente }}</td>
             <td>{{ fila.numero_prestamo }}</td>
-            <td>{{ fila.cartera_nombre }}</td>
             <td>{{ fila.documento || '—' }}</td>
+            <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
+            <td>{{ formatDate(fila.fecha_pago) }}</td>
+            <td>{{ nombreUsuarioCobro(fila) }}</td>
+            <td>{{ fechaRegistroCobro(fila) }}</td>
             <td class="num">{{ formatMoney(fila.capital) }}</td>
             <td class="num">{{ formatMoney(fila.total) }}</td>
           </tr>
@@ -824,12 +818,6 @@ onMounted(async () => {
   display: block;
   font-weight: 600;
   line-height: 1.35;
-}
-
-.auditoria-id {
-  display: block;
-  font-size: 0.78rem;
-  color: var(--p-text-muted-color, #64748b);
 }
 
 @media (max-width: 767px) {
