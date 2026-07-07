@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import type { DataTableFilterEvent } from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
@@ -74,29 +76,53 @@ const reporte = ref<HistorialPagosCobrosResponse | null>(null)
 const dialogAnularVisible = ref(false)
 const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
 const motivoAnulacion = ref('')
-const busquedaCobro = ref('')
 const paginaPrimera = ref(0)
+const filasImpresion = ref<HistorialPagosCobrosFila[]>([])
+
+const CAMPOS_FILTRO_TABLA = [
+  'cartera_nombre',
+  'nombre_cliente',
+  'dni_cliente',
+  'numero_prestamo',
+  'documento',
+  'fecha_programada',
+  'fecha_pago',
+  'registrado_por_nombre',
+  'registrado_en',
+  'capital',
+  'total',
+] as const
+
+function crearFiltrosVacios() {
+  const filtros: Record<string, { value: string | null; matchMode: string }> = {
+    global: { value: null, matchMode: FilterMatchMode.CONTAINS },
+  }
+  for (const campo of CAMPOS_FILTRO_TABLA) {
+    filtros[campo] = { value: null, matchMode: FilterMatchMode.CONTAINS }
+  }
+  return filtros
+}
+
+const filtrosTabla = ref(crearFiltrosVacios())
+
+const globalFilterFields = [
+  ...CAMPOS_FILTRO_TABLA,
+  'registrado_por_etiqueta',
+  'registrado_por',
+  'id_pago',
+]
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
-function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boolean {
-  const campos = [
-    fila.nombre_cliente,
-    fila.dni_cliente,
-    fila.numero_prestamo,
-    fila.cartera_nombre,
-    fila.documento,
-    fila.capital,
-    fila.total,
-    fila.fecha_programada,
-    fila.fecha_pago,
-    fila.registrado_en,
-    fila.registrado_por_etiqueta,
-    fila.registrado_por_nombre,
-    fila.registrado_por != null ? String(fila.registrado_por) : '',
-    String(fila.id_pago),
-  ]
-  return campos.some((c) => (c ?? '').toString().toLowerCase().includes(q))
+function reiniciarFiltrosTabla() {
+  filtrosTabla.value = crearFiltrosVacios()
+  filasImpresion.value = reporte.value?.filas ?? []
+  paginaPrimera.value = 0
+}
+
+function onTablaFiltrada(event: DataTableFilterEvent) {
+  filasImpresion.value = (event.filteredValue as HistorialPagosCobrosFila[]) ?? []
+  paginaPrimera.value = 0
 }
 
 function nombreUsuarioCobro(fila: HistorialPagosCobrosFila): string {
@@ -107,12 +133,7 @@ function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
   return fila.registrado_en || formatDateTime(fila.cobrado_en) || '—'
 }
 
-const filasFiltradas = computed(() => {
-  const filas = reporte.value?.filas ?? []
-  const q = busquedaCobro.value.trim().toLowerCase()
-  if (!q) return filas
-  return filas.filter((fila) => coincideBusquedaCobro(fila, q))
-})
+const filasHistorial = computed(() => reporte.value?.filas ?? [])
 
 const carteraOpciones = computed(() => [
   { label: 'Todas', value: null as number | null },
@@ -203,13 +224,15 @@ async function consultarHistorial() {
   error.value = ''
   loading.value = true
   reporte.value = null
-  busquedaCobro.value = ''
+  reiniciarFiltrosTabla()
+  filasImpresion.value = []
   paginaPrimera.value = 0
   try {
     const { data } = await api.get<HistorialPagosCobrosResponse>(
       `/pagos/historial-cobros/?${buildHistorialQueryString()}`,
     )
     reporte.value = data
+    filasImpresion.value = data.filas
     if (!data.filas.length) {
       toast.add({
         severity: 'info',
@@ -498,55 +521,119 @@ onMounted(async () => {
       </header>
 
       <div class="historial-buscar no-print">
-        <label class="filtro-label" for="hist-buscar">Buscar cobro</label>
-        <InputText
-          id="hist-buscar"
-          v-model="busquedaCobro"
-          class="filtro-input historial-buscar-input"
-          placeholder="Cliente, DNI, préstamo, usuario, documento, cartera…"
-          @update:model-value="paginaPrimera = 0"
-        />
+        <label class="filtro-label" for="hist-buscar">Buscar en todo</label>
+        <div class="historial-buscar-fila">
+          <InputText
+            id="hist-buscar"
+            v-model="filtrosTabla.global.value"
+            class="filtro-input historial-buscar-input"
+            placeholder="Cliente, DNI, préstamo, cartera, usuario…"
+            @update:model-value="paginaPrimera = 0"
+          />
+          <Button
+            label="Limpiar filtros"
+            icon="pi pi-filter-slash"
+            severity="secondary"
+            outlined
+            size="small"
+            type="button"
+            @click="reiniciarFiltrosTabla"
+          />
+        </div>
       </div>
 
       <DataTable
+        v-model:filters="filtrosTabla"
         v-model:first="paginaPrimera"
-        :value="filasFiltradas"
+        :value="filasHistorial"
+        :global-filter-fields="globalFilterFields"
         :loading="loading"
         data-key="id_pago"
+        filter-display="row"
         paginator
         :rows="FILAS_POR_PAGINA"
         paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
         current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
+        removable-sort
         responsive-layout="scroll"
         class="historial-table no-print-table"
+        @filter="onTablaFiltrada"
       >
-        <Column field="cartera_nombre" header="Cartera" />
-        <Column field="nombre_cliente" header="Cliente" />
-        <Column field="dni_cliente" header="DNI" />
-        <Column field="numero_prestamo" header="Préstamo" />
-        <Column field="documento" header="Documento" />
-        <Column header="Fecha programada">
+        <Column
+          field="cartera_nombre"
+          header="Cartera"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="nombre_cliente"
+          header="Cliente"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        />
+        <Column field="dni_cliente" header="DNI" sortable filter filter-placeholder="Filtrar" />
+        <Column field="numero_prestamo" header="Préstamo" sortable filter filter-placeholder="Filtrar" />
+        <Column field="documento" header="Documento" sortable filter filter-placeholder="Filtrar" />
+        <Column
+          field="fecha_programada"
+          header="Fecha programada"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+        >
           <template #body="{ data }">
             {{ data.fecha_programada ? formatDate(data.fecha_programada) : '—' }}
           </template>
         </Column>
-        <Column header="Fecha canceló">
+        <Column field="fecha_pago" header="Fecha canceló" sortable filter filter-placeholder="Filtrar">
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
         </Column>
-        <Column header="Usuario" :style="{ minWidth: '10rem' }">
+        <Column
+          field="registrado_por_nombre"
+          header="Usuario"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        >
           <template #body="{ data }">
             <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
           </template>
         </Column>
-        <Column header="Fecha registro" :style="{ minWidth: '10rem' }">
+        <Column
+          field="registrado_en"
+          header="Fecha registro"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        >
           <template #body="{ data }">
             <span class="auditoria-celda">{{ fechaRegistroCobro(data) }}</span>
           </template>
         </Column>
-        <Column header="Capital" style="text-align: right">
+        <Column
+          field="capital"
+          header="Capital"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          style="text-align: right"
+        >
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
         </Column>
-        <Column header="Total" style="text-align: right">
+        <Column
+          field="total"
+          header="Total"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          style="text-align: right"
+        >
           <template #body="{ data }">{{ formatMoney(data.total) }}</template>
         </Column>
         <Column v-if="canAnularPagos" header="Acciones" class="no-print-col">
@@ -619,7 +706,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
+          <tr v-for="fila in filasImpresion" :key="fila.id_pago">
             <td>{{ fila.cartera_nombre }}</td>
             <td>{{ fila.nombre_cliente }}</td>
             <td>{{ fila.dni_cliente }}</td>
@@ -670,12 +757,30 @@ onMounted(async () => {
   flex-direction: column;
   gap: 0.35rem;
   margin-bottom: 0.85rem;
-  max-width: 28rem;
+  max-width: 36rem;
+}
+
+.historial-buscar-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .historial-buscar-input {
-  width: 100%;
+  flex: 1;
+  min-width: 14rem;
+}
+
+.historial-table :deep(.p-datatable-filter-row .p-inputtext) {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.45rem;
   min-width: 0;
+  width: 100%;
+}
+
+.historial-table :deep(.p-datatable-thead > tr > th) {
+  white-space: nowrap;
 }
 
 .historial-subtitulo {
