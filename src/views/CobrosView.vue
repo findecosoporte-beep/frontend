@@ -16,27 +16,14 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
-import {
-  buildFilasCuotaEstado,
-  filasCuotaEstadoAModalPlan,
-  ordenarPagosPrestamo,
-  pagosVigentes,
-  pagoPorCuotaDesdeFilas,
-  type FilaCuotaEstado,
-} from '@/utils/estadoCuotaFilas'
-import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
-import {
-  abrirWhatsAppConMensaje,
-  mensajeEstadoCuentaModal,
-} from '@/utils/whatsappCliente'
+import { abrirFacturaPago } from '@/utils/facturaPago'
 import type {
   Cliente,
   Pago,
   Paginated,
   Prestamo,
-  PrestamoCuotaRow,
   ReporteIntegracionFila,
   ReporteIntegracionResumen,
   ReporteIntegracionResponse,
@@ -82,145 +69,10 @@ const hojaImprimiendo = ref(false)
 
 const hojaTableFirst = computed(() => (hojaCobrosPage.value - 1) * hojaCobrosPageSize.value)
 
-const clienteSearch = ref('')
-
-const prestamoOptions = ref<{ id_prestamo: number; label: string }[]>([])
-const usuarioOptions = ref<{ id_usuario: number; nombre: string }[]>([])
-const prestamoMeta = ref<
-  Array<{
-    id_prestamo: number
-    id_cliente: number
-    id_zona: number | null
-    dni: string
-    nombre: string
-    zona: string
-    forma_pago: string
-    numero_prestamo: string
-    estado: string
-  }>
->([])
-
-const proximaCuotaSemanalLoading = ref(false)
-const proximaCuotaSemanalInfo = ref<{
-  numero_cuota: number
-  fecha_programada: string
-  capital_programado: number
-  interes_programado: number
-  total_programado: number
-  monto_pendiente: number
-  saldo_capital_programado: number
-  saldo_inicial?: number
-  saldo_actual?: number
-} | null>(null)
-const proximaCuotaSemanalMensaje = ref('')
-const proximaCuotaAtrasadas = ref({ count: 0, numeros: '' })
-const buscarClienteLoading = ref(false)
-const clienteMeta = ref<
-  Array<{
-    id_cliente: number
-    dni: string
-    nombre: string
-    telefono: string
-    direccion_residencia: string
-    actividad_economica: string
-  }>
->([])
-
-const clienteForm = ref({
-  nombre: '',
-  dni: '',
-  telefono: '',
-  direccion_residencia: '',
-  actividad_economica: '',
-})
-
-const prestamoForm = ref({
-  numero_prestamo: '',
-  id_cliente: null as number | null,
-  id_usuario: null as number | null,
-  monto: null as number | null,
-  plazo: 12,
-  tasa_interes: null as number | null,
-  forma_pago: 'mensual',
-  forma_desembolso: 'efectivo',
-  comision: 0,
-  fecha_entrega: '',
-  estado: 'activo',
-})
-
-const hasClientSearchExecuted = ref(false)
-const estadoCuentaVisible = ref(false)
-const estadoCuentaLoading = ref(false)
-const estadoCuentaError = ref('')
-const estadoCuentaRows = ref<Pago[]>([])
-const estadoCuentaPlanRows = ref<
-  Array<{
-    numero_cuota: number
-    fecha_programada: string
-    fecha_cancelo: string | null
-    hora_pago: string | null
-    cobrado_en: string | null
-    total_programado: number
-    estado: string
-    documento: string | null
-    id_pago: number | null
-    id_pago_factura: number | null
-  }>
->([])
-const cuotasVisible = ref(false)
-const cuotasLoading = ref(false)
-const cuotasError = ref('')
-const cuotasRows = ref<Array<{ periodo: number; fecha_limite: string; capital: number; interes: number; saldo: number }>>(
-  [],
-)
-const cuotasPagosRegistrados = ref<Pago[]>([])
-const cuotasPrestamoId = ref<number | null>(null)
-const filasCalendarioEstado = ref<FilaCuotaEstado[]>([])
-const cuotasTotal = computed(() => cuotasRows.value.length)
-
-interface FilaCalendarioCobros {
-  periodo: number
-  fecha_limite: string
-  capital: number
-  interes: number
-  saldo: number
-  estado: string
-}
-
-const cuotasCalendarioFilas = computed((): FilaCalendarioCobros[] =>
-  filasCalendarioEstado.value.map((fila) => ({
-    periodo: fila.numero_cuota,
-    fecha_limite: fila.fecha_programada,
-    capital: Number(fila.capital_programado) || 0,
-    interes: Number(fila.interes_programado) || 0,
-    saldo: Number(fila.saldo_capital_programado) || 0,
-    estado: fila.estado === 'pagada' ? 'Pagada' : 'Pendiente',
-  })),
-)
-
-const cuotasPagadasRows = computed(() =>
-  cuotasCalendarioFilas.value.filter((fila) => fila.estado === 'Pagada'),
-)
-
-const cuotasAlertasRows = computed(() => {
-  const today = getTodayISO()
-  return cuotasCalendarioFilas.value
-    .filter((fila) => fila.estado === 'Pendiente' && fila.fecha_limite.slice(0, 10) < today)
-    .map((fila) => ({
-      ...fila,
-      dias_atraso: Math.max(0, calculateDaysDiff(fila.fecha_limite.slice(0, 10), today)),
-    }))
-})
 const cajaVisible = ref(false)
 const cajaLoading = ref(false)
 const cajaSaving = ref(false)
 const cajaError = ref('')
-const estadoCuentaResumen = ref({
-  totalPagos: 0,
-  totalCapital: 0,
-  totalInteres: 0,
-  estadoPrestamo: '',
-})
 const cajaForm = ref({
   id_prestamo: null as number | null,
   numero_prestamo: '',
@@ -243,25 +95,6 @@ const cajaForm = ref({
   monto_recibido: 0,
 })
 const cajaFormError = ref('')
-const searchResult = ref<{
-  id_cliente: number
-  nombre: string
-  dni: string
-  telefono: string
-  direccion_residencia: string
-  actividad_economica: string
-  hasPrestamo: boolean
-  prestamoId: number | null
-  prestamoLabel: string | null
-} | null>(null)
-const form = ref({
-  id_prestamo: null as number | null,
-  fecha_pago: '',
-  documento: '',
-  capital: null as number | null,
-  interes: null as number | null,
-  saldo: null as number | null,
-})
 
 function getTodayISO(): string {
   const now = new Date()
@@ -272,9 +105,6 @@ function getTodayISO(): string {
 
 const hojaCarteras = ref<Cartera[]>([])
 let carterasHojaCache: Cartera[] | null = null
-
-const prestamosCatalogoReady = ref(false)
-const prestamosCatalogoCargando = ref(false)
 
 const carteraHojaOpciones = computed(() =>
   hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number })),
@@ -587,35 +417,6 @@ async function resolverCarteraCobro(prestamoId: number): Promise<CarteraCobroInf
   return carteraDesdePrestamo(pr, clienteDia)
 }
 
-function calculateDaysDiff(fromISO: string, toISO: string): number {
-  const from = new Date(`${fromISO}T00:00:00`)
-  const to = new Date(`${toISO}T00:00:00`)
-  const diff = to.getTime() - from.getTime()
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
-}
-
-const facturaAbriendoId = ref<number | null>(null)
-
-async function verFacturaPago(idPago: number) {
-  facturaAbriendoId.value = idPago
-  try {
-    await abrirFacturaPago(idPago)
-  } catch (e) {
-    toast.add({
-      severity: 'error',
-      summary: 'Factura',
-      detail: getApiErrorMessage(e),
-      life: 5000,
-    })
-  } finally {
-    facturaAbriendoId.value = null
-  }
-}
-
-const cuotasPagoPorPeriodo = computed(() =>
-  pagoPorCuotaDesdeFilas(filasCalendarioEstado.value, cuotasPagosRegistrados.value),
-)
-
 const cajaTotalCobrar = computed(() => {
   return Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
 })
@@ -701,70 +502,9 @@ async function cargarSaldosReportePrestamo(
   }
 }
 
-async function cargarProximaCuotaParaCobro(prestamoId: number | null) {
-  proximaCuotaSemanalInfo.value = null
-  proximaCuotaSemanalMensaje.value = ''
-  proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
-  if (prestamoId == null) return
-
-  proximaCuotaSemanalLoading.value = true
-  try {
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?id_prestamo=${prestamoId}&all=1`,
-    )
-    const fila = data.filas?.[0]
-    if (!fila?.cuota_siguiente_numero) {
-      proximaCuotaSemanalMensaje.value = 'Todas las cuotas de este préstamo ya figuran pagadas.'
-      return
-    }
-    const capital = Number.parseFloat(fila.cuota_siguiente_capital ?? '') || 0
-    const interes = Number.parseFloat(fila.cuota_siguiente_interes ?? '') || 0
-    const montoPendiente = montoPendienteDesdeFilaReporte(fila)
-    proximaCuotaSemanalInfo.value = {
-      numero_cuota: fila.cuota_siguiente_numero,
-      fecha_programada: fila.cuota_siguiente_fecha ?? '',
-      capital_programado: capital,
-      interes_programado: interes,
-      total_programado: montoPendiente,
-      monto_pendiente: montoPendiente,
-      saldo_capital_programado: Number.parseFloat(fila.cuota_siguiente_saldo_capital ?? '') || 0,
-      saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
-      saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
-    }
-    proximaCuotaAtrasadas.value = {
-      count: fila.cuotas_atrasadas ?? 0,
-      numeros: fila.cuotas_atrasadas_numeros ?? '',
-    }
-  } catch (e) {
-    proximaCuotaSemanalMensaje.value = getApiErrorMessage(e, 'No se pudo cargar la cuota pendiente.')
-  } finally {
-    proximaCuotaSemanalLoading.value = false
-  }
-}
-
-function ensureSearchContextFromPrestamo(prestamoId: number) {
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === prestamoId)
-  if (!meta) return
-  const cliente = clienteMeta.value.find((c) => c.id_cliente === meta.id_cliente)
-  searchResult.value = {
-    id_cliente: meta.id_cliente,
-    nombre: meta.nombre,
-    dni: meta.dni,
-    telefono: cliente?.telefono ?? '',
-    direccion_residencia: cliente?.direccion_residencia ?? '',
-    actividad_economica: cliente?.actividad_economica ?? '',
-    hasPrestamo: true,
-    prestamoId: meta.id_prestamo,
-    prestamoLabel: `${meta.numero_prestamo} (${meta.estado})`,
-  }
-}
-
 function resolverNumeroPrestamoCaja(idPrestamo: number, numero?: string | null): string {
   const directo = (numero ?? '').trim()
   if (directo) return directo
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === idPrestamo)
-  const desdeMeta = meta?.numero_prestamo?.trim()
-  if (desdeMeta) return desdeMeta
   return String(idPrestamo)
 }
 
@@ -844,8 +584,6 @@ function abrirDialogoCaja(payload: {
 }
 
 async function resolverDniPrestamo(prestamoId: number): Promise<string> {
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === prestamoId)
-  if (meta?.dni) return meta.dni
   try {
     const resolved = await resolverClientePorPrestamo(prestamoId)
     return resolved.dni
@@ -898,398 +636,6 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
   })
 }
 
-function coincideNumeroPrestamo(numero: string, q: string): boolean {
-  const normalizado = numero.trim().toLowerCase()
-  const criterio = q.trim().toLowerCase()
-  if (!normalizado || !criterio) return false
-  return normalizado === criterio || normalizado.includes(criterio)
-}
-
-function encontrarPrestamoEnMeta(q: string, soloExacto = false) {
-  const criterio = q.trim().toLowerCase()
-  const exacto = prestamoMeta.value.find(
-    (p) => p.numero_prestamo.trim().toLowerCase() === criterio,
-  )
-  if (exacto) return exacto
-  if (soloExacto) return undefined
-  return prestamoMeta.value.find((p) => coincideNumeroPrestamo(p.numero_prestamo, q))
-}
-
-async function buscarPrestamoEnApi(q: string): Promise<{
-  id_prestamo: number
-  id_cliente: number
-  numero_prestamo: string
-  estado: string
-  nombre: string
-  dni: string
-} | null> {
-  const { data } = await api.get<Paginated<Prestamo>>(
-    `/prestamos/?search=${encodeURIComponent(q)}&page_size=20`,
-  )
-  const criterio = q.trim().toLowerCase()
-  const exacto = data.results.find(
-    (p) => (p.numero_prestamo ?? '').trim().toLowerCase() === criterio,
-  )
-  const parcial = data.results.find((p) => coincideNumeroPrestamo(p.numero_prestamo ?? '', q))
-  const hit = exacto ?? parcial ?? null
-  if (!hit) return null
-
-  const clienteCache = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
-  if (clienteCache) {
-    return {
-      id_prestamo: hit.id_prestamo,
-      id_cliente: hit.id_cliente,
-      numero_prestamo: hit.numero_prestamo,
-      estado: hit.estado ?? '',
-      nombre: clienteCache.nombre,
-      dni: clienteCache.dni,
-    }
-  }
-
-  const resolved = await resolverClientePorPrestamo(hit.id_prestamo)
-  return {
-    id_prestamo: hit.id_prestamo,
-    id_cliente: hit.id_cliente,
-    numero_prestamo: hit.numero_prestamo,
-    estado: hit.estado ?? '',
-    nombre: resolved.nombre,
-    dni: resolved.dni,
-  }
-}
-
-async function resolverPrestamoPorBusqueda(q: string) {
-  const local = encontrarPrestamoEnMeta(q)
-  if (local) {
-    return {
-      id_prestamo: local.id_prestamo,
-      id_cliente: local.id_cliente,
-      numero_prestamo: local.numero_prestamo,
-      estado: local.estado,
-      nombre: local.nombre,
-      dni: local.dni,
-    }
-  }
-  return buscarPrestamoEnApi(q)
-}
-
-async function aplicarBusquedaPorPrestamo(hit: {
-  id_prestamo: number
-  id_cliente: number
-  numero_prestamo: string
-  estado: string
-  nombre: string
-  dni: string
-}) {
-  const cliente = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
-  searchResult.value = {
-    id_cliente: hit.id_cliente,
-    nombre: hit.nombre,
-    dni: hit.dni,
-    telefono: cliente?.telefono ?? '',
-    direccion_residencia: cliente?.direccion_residencia ?? '',
-    actividad_economica: cliente?.actividad_economica ?? '',
-    hasPrestamo: true,
-    prestamoId: hit.id_prestamo,
-    prestamoLabel: `${hit.numero_prestamo} (${hit.estado})`,
-  }
-  if (hit.estado === 'cancelado' || hit.estado === 'pagado') {
-    proximaCuotaSemanalMensaje.value = 'El préstamo no está activo para cobrar.'
-    return
-  }
-  await cargarProximaCuotaParaCobro(hit.id_prestamo)
-}
-
-async function buscarCliente() {
-  const q = clienteSearch.value.trim()
-  if (!q) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Buscar cliente',
-      detail: 'Ingresa el DNI, nombre o número de préstamo.',
-      life: 3500,
-    })
-    return
-  }
-  buscarClienteLoading.value = true
-  hasClientSearchExecuted.value = true
-  searchResult.value = null
-  proximaCuotaSemanalInfo.value = null
-  proximaCuotaSemanalMensaje.value = ''
-  proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
-  try {
-    const prestamoExactoLocal = prestamosCatalogoReady.value
-      ? encontrarPrestamoEnMeta(q, true)
-      : undefined
-    if (prestamoExactoLocal) {
-      await aplicarBusquedaPorPrestamo({
-        id_prestamo: prestamoExactoLocal.id_prestamo,
-        id_cliente: prestamoExactoLocal.id_cliente,
-        numero_prestamo: prestamoExactoLocal.numero_prestamo,
-        estado: prestamoExactoLocal.estado,
-        nombre: prestamoExactoLocal.nombre,
-        dni: prestamoExactoLocal.dni,
-      })
-      return
-    }
-
-    let cliente = prestamosCatalogoReady.value
-      ? clienteMeta.value.find((c) => c.dni === q)
-      : undefined
-    if (!cliente && prestamosCatalogoReady.value) {
-      cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
-    }
-    if (!cliente) {
-      const { data } = await api.get<Paginated<Cliente>>(
-        `/clientes/?search=${encodeURIComponent(q)}&page_size=10`,
-      )
-      const hit = data.results[0]
-      if (hit) {
-        cliente = {
-          id_cliente: hit.id_cliente,
-          dni: hit.dni ?? '',
-          nombre: hit.nombre ?? 'Cliente',
-          telefono: hit.telefono ?? '',
-          direccion_residencia: hit.direccion_residencia ?? '',
-          actividad_economica: hit.actividad_economica ?? '',
-        }
-      }
-    }
-    if (!cliente) {
-      const prestamoHit = await resolverPrestamoPorBusqueda(q)
-      if (prestamoHit) {
-        await aplicarBusquedaPorPrestamo(prestamoHit)
-        return
-      }
-      toast.add({
-        severity: 'info',
-        summary: 'Sin resultados',
-        detail: 'No se encontró cliente ni préstamo con ese criterio.',
-        life: 4000,
-      })
-      return
-    }
-    let prestamos = prestamosCatalogoReady.value
-      ? prestamoMeta.value.filter(
-          (p) =>
-            p.id_cliente === cliente!.id_cliente &&
-            p.estado !== 'cancelado' &&
-            p.estado !== 'pagado',
-        )
-      : []
-    if (!prestamos.length) {
-      const { data: prestamosApi } = await api.get<Paginated<Prestamo>>(
-        `/prestamos/?id_cliente=${cliente.id_cliente}&page_size=50`,
-      )
-      prestamos = prestamosApi.results
-        .filter((p) => p.estado !== 'cancelado' && p.estado !== 'pagado')
-        .map((p) => ({
-          id_prestamo: p.id_prestamo,
-          id_cliente: p.id_cliente,
-          id_zona: p.id_zona ?? null,
-          dni: cliente!.dni,
-          nombre: cliente!.nombre,
-          zona: (p.zona?.nombre ?? p.sucursal ?? '').trim(),
-          forma_pago: p.forma_pago ?? 'mensual',
-          numero_prestamo: p.numero_prestamo ?? '',
-          estado: p.estado ?? '',
-        }))
-    }
-    const activo =
-      prestamos.find((p) => p.estado === 'activo' || p.estado === 'mora') ?? prestamos[0] ?? null
-    searchResult.value = {
-      id_cliente: cliente.id_cliente,
-      nombre: cliente.nombre,
-      dni: cliente.dni,
-      telefono: cliente.telefono,
-      direccion_residencia: cliente.direccion_residencia,
-      actividad_economica: cliente.actividad_economica,
-      hasPrestamo: prestamos.length > 0,
-      prestamoId: activo?.id_prestamo ?? null,
-      prestamoLabel: activo ? `${activo.numero_prestamo} (${activo.estado})` : null,
-    }
-    if (activo?.id_prestamo) {
-      await cargarProximaCuotaParaCobro(activo.id_prestamo)
-    } else {
-      proximaCuotaSemanalMensaje.value = 'El cliente no tiene préstamos activos para cobrar.'
-    }
-  } catch (e) {
-    toast.add({
-      severity: 'error',
-      summary: 'Buscar cliente',
-      detail: getApiErrorMessage(e),
-      life: 6000,
-    })
-  } finally {
-    buscarClienteLoading.value = false
-  }
-}
-
-async function abrirCobroDesdeBusqueda() {
-  if (!canWritePagos.value) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Cobros',
-      detail: 'Tu rol no puede registrar cobros.',
-      life: 4000,
-    })
-    return
-  }
-  const pid = searchResult.value?.prestamoId
-  if (pid == null) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Cobros',
-      detail: 'El cliente no tiene un préstamo seleccionable.',
-      life: 4000,
-    })
-    return
-  }
-  if (!proximaCuotaSemanalInfo.value) {
-    await cargarProximaCuotaParaCobro(pid)
-  }
-  const info = proximaCuotaSemanalInfo.value
-  if (!info) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Sin cuota pendiente',
-      detail: proximaCuotaSemanalMensaje.value || 'No hay cuota pendiente por cobrar.',
-      life: 4500,
-    })
-    return
-  }
-  let carteraInfo: CarteraCobroInfo = {
-    id_cartera: null,
-    cartera_nombre: '',
-    cartera_dia_cobro: '',
-    cliente_dia_cobro_semanal: '',
-    fecha_entrega: '',
-  }
-  try {
-    carteraInfo = await resolverCarteraCobro(pid)
-  } catch {
-    /* sin cartera */
-  }
-  const saldos = await cargarSaldosReportePrestamo(pid)
-  abrirDialogoCaja({
-    id_prestamo: pid,
-    cliente: searchResult.value?.nombre ?? 'Cliente',
-    dni: searchResult.value?.dni ?? '',
-    ...carteraInfo,
-    cuota_numero: info.numero_cuota,
-    fecha_cuota: info.fecha_programada,
-    capital: info.capital_programado,
-    interes: info.interes_programado,
-    monto_pendiente_cuota: info.monto_pendiente,
-    saldo_inicial: saldos?.saldo_inicial ?? info.saldo_actual ?? info.saldo_capital_programado,
-    saldo_actual: saldos?.saldo_actual ?? info.saldo_actual ?? info.saldo_capital_programado,
-  })
-}
-
-async function abrirEstadoCuenta(prestamoId?: number | null) {
-  const pid = prestamoId ?? searchResult.value?.prestamoId
-  if (pid == null) return
-  ensureSearchContextFromPrestamo(pid)
-  estadoCuentaVisible.value = true
-  estadoCuentaLoading.value = true
-  estadoCuentaError.value = ''
-  estadoCuentaRows.value = []
-  estadoCuentaPlanRows.value = []
-  try {
-    const [pagos, cuotas, { data: pr }] = await Promise.all([
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=200`),
-      fetchAllPages<PrestamoCuotaRow>(
-        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=200&ordering=numero_cuota`,
-      ),
-      api.get<Prestamo>(`/prestamos/${pid}/`),
-    ])
-    const pagosActivos = pagosVigentes(pagos)
-    estadoCuentaRows.value = [...ordenarPagosPrestamo(pagosActivos)].reverse()
-    const filasEstado = buildFilasCuotaEstado(cuotas, pagos)
-    estadoCuentaPlanRows.value = filasCuotaEstadoAModalPlan(filasEstado)
-    estadoCuentaResumen.value = {
-      totalPagos: pagosActivos.length,
-      totalCapital: pagosActivos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
-      totalInteres: pagosActivos.reduce((s, p) => s + (Number(p.interes) || 0), 0),
-      estadoPrestamo: pr.estado ?? '',
-    }
-  } catch (e) {
-    estadoCuentaError.value = getApiErrorMessage(e, 'No se pudo cargar el estado de cuenta.')
-  } finally {
-    estadoCuentaLoading.value = false
-  }
-}
-
-function avisoWhatsAppSinTelefono() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'El cliente no tiene teléfono registrado.',
-    life: 4000,
-  })
-}
-
-function avisoWhatsAppNumeroInvalido() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'No se pudo abrir WhatsApp. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
-    life: 5000,
-  })
-}
-
-function enviarWhatsAppEstadoCuentaModal() {
-  const cliente = searchResult.value
-  if (!cliente) return
-  const telefono = cliente.telefono?.trim()
-  if (!telefono) {
-    avisoWhatsAppSinTelefono()
-    return
-  }
-  const r = estadoCuentaResumen.value
-  const mensaje = mensajeEstadoCuentaModal({
-    nombre: cliente.nombre,
-    dni: cliente.dni || '—',
-    totalPagos: r.totalPagos,
-    totalCapital: formatMoney(r.totalCapital),
-    totalInteres: formatMoney(r.totalInteres),
-    estadoPrestamo: r.estadoPrestamo,
-  })
-  if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
-}
-
-async function abrirCuotas(prestamoId?: number | null) {
-  const pid = prestamoId ?? searchResult.value?.prestamoId
-  if (pid == null) return
-  ensureSearchContextFromPrestamo(pid)
-  cuotasVisible.value = true
-  cuotasLoading.value = true
-  cuotasError.value = ''
-  cuotasRows.value = []
-  cuotasPagosRegistrados.value = []
-  filasCalendarioEstado.value = []
-  cuotasPrestamoId.value = pid
-  try {
-    const [cuotas, pagos] = await Promise.all([
-      fetchAllPages<PrestamoCuotaRow>(
-        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=500&ordering=numero_cuota`,
-      ),
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=500`),
-    ])
-    cuotasRows.value = cuotas.map((c) => ({
-      periodo: c.numero_cuota,
-      fecha_limite: c.fecha_programada,
-      capital: Number(c.capital_programado),
-      interes: Number(c.interes_programado),
-      saldo: Number(c.saldo_capital_programado),
-    }))
-    cuotasPagosRegistrados.value = pagos
-    filasCalendarioEstado.value = buildFilasCuotaEstado(cuotas, pagos)
-  } catch (e) {
-    cuotasError.value = getApiErrorMessage(e, 'No se pudo cargar el calendario de cuotas.')
-  } finally {
-    cuotasLoading.value = false
-  }
-}
 
 function parseQueryNumber(value: unknown): number | null {
   let v = value
@@ -1307,134 +653,9 @@ function firstQueryString(query: RouteLocationNormalized['query'], key: string):
 }
 
 async function resolverClientePorPrestamo(pid: number): Promise<{ nombre: string; dni: string }> {
-  const row = prestamoMeta.value.find((p) => p.id_prestamo === pid)
-  if (row) return { nombre: row.nombre, dni: row.dni }
   const { data: pr } = await api.get<Prestamo>(`/prestamos/${pid}/`)
   const { data: cl } = await api.get<Cliente>(`/clientes/${pr.id_cliente}/`)
   return { nombre: cl.nombre ?? 'Cliente', dni: cl.dni ?? '' }
-}
-
-async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
-  const items: T[] = []
-  let nextUrl: string | null = initialPath
-  while (nextUrl) {
-    const response: { data: Paginated<T> } = await api.get<Paginated<T>>(nextUrl)
-    const page: Paginated<T> = response.data
-    items.push(...page.results)
-    nextUrl = page.next
-  }
-  return items
-}
-
-async function loadPrestamos() {
-  const [prestamos, clientes, usuarios] = await Promise.all([
-    fetchAllPages<Prestamo>('/prestamos/?page_size=200'),
-    fetchAllPages<Cliente>('/clientes/?page_size=200'),
-    fetchAllPages<{ id_usuario: number; nombre: string }>('/usuarios/?page_size=200'),
-  ])
-  const clientesById = new Map(
-    clientes.map((cliente) => [cliente.id_cliente, cliente] as const),
-  )
-  clienteMeta.value = clientes.map((cliente) => ({
-    id_cliente: cliente.id_cliente,
-    dni: cliente.dni ?? '',
-    nombre: cliente.nombre ?? 'Cliente',
-    telefono: cliente.telefono ?? '',
-    direccion_residencia: cliente.direccion_residencia ?? '',
-    actividad_economica: cliente.actividad_economica ?? '',
-  }))
-  usuarioOptions.value = usuarios.map((usuario) => ({
-    id_usuario: usuario.id_usuario,
-    nombre: usuario.nombre,
-  }))
-
-  prestamoMeta.value = prestamos.map((prestamo) => {
-    const cliente = clientesById.get(prestamo.id_cliente)
-    return {
-      id_prestamo: prestamo.id_prestamo,
-      id_cliente: prestamo.id_cliente,
-      id_zona: prestamo.id_zona ?? null,
-      dni: cliente?.dni ?? '',
-      nombre: cliente?.nombre ?? 'Cliente',
-      zona: (prestamo.zona?.nombre ?? prestamo.sucursal ?? '').trim(),
-      forma_pago: prestamo.forma_pago ?? 'mensual',
-      numero_prestamo: prestamo.numero_prestamo ?? '',
-      estado: prestamo.estado ?? '',
-    }
-  })
-
-  prestamoOptions.value = prestamos.map((prestamo) => {
-    const cliente = clientesById.get(prestamo.id_cliente)
-    const dni = cliente?.dni ?? 'Sin DNI'
-    const nombre = cliente?.nombre ?? 'Cliente'
-    return {
-      id_prestamo: prestamo.id_prestamo,
-      label: `${prestamo.numero_prestamo} (#${prestamo.id_prestamo}) - ${nombre} [DNI: ${dni}]`,
-    }
-  })
-  prestamosCatalogoReady.value = true
-}
-
-async function ensurePrestamosCatalogo(): Promise<void> {
-  if (prestamosCatalogoReady.value) return
-  if (prestamosCatalogoCargando.value) {
-    while (prestamosCatalogoCargando.value) {
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    return
-  }
-  prestamosCatalogoCargando.value = true
-  try {
-    await loadPrestamos()
-  } finally {
-    prestamosCatalogoCargando.value = false
-  }
-}
-
-function resetClienteForm() {
-  clienteForm.value = {
-    nombre: '',
-    dni: '',
-    telefono: '',
-    direccion_residencia: '',
-    actividad_economica: '',
-  }
-}
-
-function resetPrestamoForm() {
-  prestamoForm.value = {
-    numero_prestamo: '',
-    id_cliente: clienteMeta.value[0]?.id_cliente ?? null,
-    id_usuario: usuarioOptions.value[0]?.id_usuario ?? null,
-    monto: null,
-    plazo: 12,
-    tasa_interes: null,
-    forma_pago: 'mensual',
-    forma_desembolso: 'efectivo',
-    comision: 0,
-    fecha_entrega: getTodayISO(),
-    estado: 'activo',
-  }
-}
-
-function openCreateFromQuery() {
-  const queryPrestamo = parseQueryNumber(route.query.id_prestamo)
-  const queryCapital = parseQueryNumber(route.query.capital)
-  const queryInteres = parseQueryNumber(route.query.interes)
-  const querySaldo = parseQueryNumber(route.query.saldo)
-  const queryFecha = typeof route.query.fecha_pago === 'string' ? route.query.fecha_pago : ''
-
-  clienteSearch.value = ''
-  hasClientSearchExecuted.value = true
-  searchResult.value = null
-  form.value = {
-    id_prestamo: queryPrestamo ?? prestamoOptions.value[0]?.id_prestamo ?? null,
-    fecha_pago: queryFecha,
-    documento: '',
-    capital: queryCapital,
-    interes: queryInteres,
-    saldo: querySaldo,
-  }
 }
 
 /** Deep link desde integración préstamos: abre diálogo caja listo para cobrar. */
@@ -1614,7 +835,6 @@ async function confirmarPagoCuota() {
     if (pagoCreado?.id_pago) {
       await abrirFacturaPago(pagoCreado.id_pago)
     }
-    await cargarProximaCuotaParaCobro(cajaForm.value.id_prestamo)
     await cargarHojaCobrosFindeco({ silentEmpty: true })
     cajaVisible.value = false
   } catch (e) {
@@ -1635,70 +855,12 @@ async function confirmarPagoCuota() {
   }
 }
 
-async function cobrarDesdeAlerta(alerta: { periodo: number; capital: number; interes: number; saldo: number }) {
-  if (cuotasPrestamoId.value == null || !searchResult.value) return
-  const saldos = await cargarSaldosReportePrestamo(cuotasPrestamoId.value)
-  let carteraInfo: CarteraCobroInfo = {
-    id_cartera: null,
-    cartera_nombre: '',
-    cartera_dia_cobro: '',
-    cliente_dia_cobro_semanal: '',
-    fecha_entrega: '',
-  }
-  try {
-    carteraInfo = await resolverCarteraCobro(cuotasPrestamoId.value)
-  } catch {
-    /* sin cartera */
-  }
-  const filaCuota = cuotasRows.value.find((row) => row.periodo === alerta.periodo)
-  const fechaCuota = filaCuota?.fecha_limite
-  let montoPendiente = alerta.capital + alerta.interes
-  try {
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?id_prestamo=${cuotasPrestamoId.value}&all=1`,
-    )
-    const fila = data.filas?.[0]
-    if (fila) montoPendiente = montoPendienteDesdeFilaReporte(fila)
-  } catch {
-    /* sin reporte */
-  }
-  abrirDialogoCaja({
-    id_prestamo: cuotasPrestamoId.value,
-    cliente: searchResult.value.nombre,
-    dni: searchResult.value.dni,
-    ...carteraInfo,
-    cuota_numero: alerta.periodo,
-    fecha_cuota: fechaCuota,
-    capital: alerta.capital,
-    interes: alerta.interes,
-    monto_pendiente_cuota: montoPendiente,
-    saldo_inicial: saldos?.saldo_inicial ?? alerta.saldo,
-    saldo_actual: saldos?.saldo_actual ?? alerta.saldo,
-  })
-}
-
 onMounted(async () => {
   if (auth.isAuthenticated && !auth.profile) {
     await auth.fetchProfile()
   }
   await cargarCatalogoCarterasHoja()
-  resetClienteForm()
-  resetPrestamoForm()
-
   await consumirDeepLinkIntegracionEnQuery()
-
-  if (route.query.fromPrestamo === '1' && canWritePagos.value) {
-    await ensurePrestamosCatalogo()
-    openCreateFromQuery()
-    const cleanedQuery = { ...route.query }
-    delete cleanedQuery.fromPrestamo
-    delete cleanedQuery.id_prestamo
-    delete cleanedQuery.fecha_pago
-    delete cleanedQuery.capital
-    delete cleanedQuery.interes
-    delete cleanedQuery.saldo
-    await router.replace({ query: cleanedQuery })
-  }
 })
 </script>
 
@@ -1963,298 +1125,6 @@ onMounted(async () => {
       </template>
     </Dialog>
 
-    <section v-if="canWritePagos" class="gestion-cobros-section no-print">
-      <h2 class="section-title">Gestión de cobro de cuotas</h2>
-      <p class="hint-text">
-        Busca por DNI, nombre o número de préstamo, o pulsa <strong>Cobrar</strong> en la hoja de arriba para
-        registrar el pago y generar la factura.
-      </p>
-
-      <div class="transacciones-panel">
-        <div class="cobros-busqueda-stack">
-          <div class="dni-search-wrap dni-busqueda-linea">
-            <InputText
-              v-model="clienteSearch"
-              placeholder="DNI, nombre o número de préstamo"
-              class="campo-buscar-cliente"
-              @keyup.enter="buscarCliente"
-            />
-            <Button
-              label="Buscar cliente"
-              icon="pi pi-search"
-              type="button"
-              :loading="buscarClienteLoading"
-              @click="buscarCliente"
-            />
-          </div>
-        </div>
-
-        <p v-if="hasClientSearchExecuted && !searchResult && !buscarClienteLoading" class="gestion-sin-resultado">
-          No se encontró cliente ni préstamo con ese criterio.
-        </p>
-
-        <div v-if="searchResult" class="result-box">
-          <h3 class="result-title">{{ searchResult.nombre }}</h3>
-          <div class="result-form-grid">
-            <div class="result-field">
-              <span class="result-label">DNI</span>
-              <InputText :model-value="searchResult.dni || '—'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Teléfono</span>
-              <InputText :model-value="searchResult.telefono || '—'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Préstamo</span>
-              <InputText :model-value="searchResult.prestamoLabel || 'Sin préstamo activo'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Dirección</span>
-              <InputText :model-value="searchResult.direccion_residencia || '—'" readonly />
-            </div>
-          </div>
-
-          <p v-if="proximaCuotaSemanalLoading" class="cuota-semanal-muted">Cargando cuota pendiente…</p>
-
-          <div v-else-if="proximaCuotaSemanalInfo" class="cuota-semanal-card">
-            <div class="cuota-semanal-head">
-              <span class="cuota-semanal-titulo">Cuota #{{ proximaCuotaSemanalInfo.numero_cuota }} pendiente</span>
-              <span class="cuota-semanal-monto">{{ formatMoney(proximaCuotaSemanalInfo.monto_pendiente) }}</span>
-            </div>
-            <p class="cuota-semanal-meta">
-              Fecha programada: {{ formatDate(proximaCuotaSemanalInfo.fecha_programada) }} · Capital:
-              {{ formatMoney(proximaCuotaSemanalInfo.capital_programado) }} · Interés:
-              {{ formatMoney(proximaCuotaSemanalInfo.interes_programado) }} · Saldo actual:
-              {{ formatMoney(proximaCuotaSemanalInfo.saldo_actual ?? proximaCuotaSemanalInfo.saldo_inicial ?? 0) }}
-            </p>
-            <p v-if="proximaCuotaAtrasadas.count > 0" class="cuotas-atrasadas-alerta">
-              {{ proximaCuotaAtrasadas.count }} cuota{{ proximaCuotaAtrasadas.count === 1 ? '' : 's' }} vencida{{
-                proximaCuotaAtrasadas.count === 1 ? '' : 's'
-              }}
-              sin cobro (#{{ proximaCuotaAtrasadas.numeros.replace(/,\s*/g, ', #') }})
-            </p>
-          </div>
-          <p v-else-if="proximaCuotaSemanalMensaje" class="cuota-semanal-muted">{{ proximaCuotaSemanalMensaje }}</p>
-
-          <div class="result-actions">
-            <Button
-              label="Cobrar cuota"
-              icon="pi pi-wallet"
-              type="button"
-              severity="success"
-              :disabled="!searchResult.prestamoId || proximaCuotaSemanalLoading"
-              @click="abrirCobroDesdeBusqueda"
-            />
-            <Button
-              label="Estado de cuenta"
-              icon="pi pi-list"
-              type="button"
-              severity="secondary"
-              outlined
-              :disabled="!searchResult.prestamoId"
-              @click="() => abrirEstadoCuenta()"
-            />
-            <Button
-              label="Calendario de cuotas"
-              icon="pi pi-calendar"
-              type="button"
-              severity="secondary"
-              outlined
-              :disabled="!searchResult.prestamoId"
-              @click="() => abrirCuotas()"
-            />
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <Dialog
-      v-model:visible="estadoCuentaVisible"
-      header="Estado de cuenta"
-      modal
-      :style="{ width: 'min(72rem, 98vw)' }"
-    >
-      <div class="estado-cuenta-wrap">
-        <p v-if="estadoCuentaError" class="estado-error">{{ estadoCuentaError }}</p>
-        <div v-else class="estado-resumen-grid">
-          <div class="estado-card"><strong>Cobros registrados:</strong> {{ estadoCuentaResumen.totalPagos }}</div>
-          <div class="estado-card"><strong>Capital pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalCapital) }}</div>
-          <div class="estado-card"><strong>Interés pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalInteres) }}</div>
-          <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
-        </div>
-        <DataTable
-          :value="estadoCuentaPlanRows"
-          :loading="estadoCuentaLoading"
-          paginator
-          :rows="10"
-          data-key="numero_cuota"
-          responsive-layout="scroll"
-          class="estado-table"
-        >
-          <Column field="numero_cuota" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_programada) }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{ data.fecha_cancelo ? formatDate(data.fecha_cancelo) : '—' }}
-            </template>
-          </Column>
-          <Column header="Hora">
-            <template #body="{ data }">
-              {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
-            </template>
-          </Column>
-          <Column header="Cuota $">
-            <template #body="{ data }">{{ formatMoney(data.total_programado) }}</template>
-          </Column>
-          <Column field="estado" header="Estado" />
-          <Column header="Documento">
-            <template #body="{ data }">{{ data.documento || `Cuota ${data.numero_cuota}` }}</template>
-          </Column>
-          <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }">
-              <Button
-                v-if="data.id_pago && !esPagoFacturaSecundario(data)"
-                icon="pi pi-file-pdf"
-                label="Ver"
-                size="small"
-                severity="secondary"
-                outlined
-                :loading="facturaAbriendoId === data.id_pago"
-                :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                @click="verFacturaPago(data.id_pago)"
-              />
-              <span v-else class="text-muted">—</span>
-            </template>
-          </Column>
-        </DataTable>
-      </div>
-      <template #footer>
-        <Button
-          label="Enviar por WhatsApp"
-          icon="pi pi-whatsapp"
-          severity="success"
-          outlined
-          :disabled="!searchResult?.telefono?.trim() || estadoCuentaLoading || !!estadoCuentaError"
-          @click="enviarWhatsAppEstadoCuentaModal"
-        />
-        <Button label="Cerrar" severity="secondary" text @click="estadoCuentaVisible = false" />
-      </template>
-    </Dialog>
-    <Dialog
-      v-model:visible="cuotasVisible"
-      header="Calendario de cuotas"
-      modal
-      :style="{ width: 'min(72rem, 98vw)' }"
-    >
-      <div class="estado-cuenta-wrap">
-        <p v-if="cuotasError" class="estado-error">{{ cuotasError }}</p>
-        <div v-else class="estado-card">
-          <strong>Total de cuotas:</strong> {{ cuotasTotal }}
-        </div>
-        <DataTable
-          :value="cuotasCalendarioFilas"
-          :loading="cuotasLoading"
-          responsive-layout="scroll"
-          class="estado-table"
-        >
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Estado" style="width: 7rem">
-            <template #body="{ data }">{{ data.estado }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{
-                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
-                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
-                  : '—'
-              }}
-            </template>
-          </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-          </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-        </DataTable>
-        <h4 class="subsection-title">Cuotas pagadas</h4>
-        <DataTable :value="cuotasPagadasRows" responsive-layout="scroll" class="estado-table">
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{
-                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
-                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
-                  : '—'
-              }}
-            </template>
-          </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-          </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-          <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }">
-              <template v-if="cuotasPagoPorPeriodo.get(data.periodo)">
-                <Button
-                  v-if="!esPagoFacturaSecundario(cuotasPagoPorPeriodo.get(data.periodo)!)"
-                  icon="pi pi-file-pdf"
-                  label="Ver"
-                  size="small"
-                  severity="secondary"
-                  outlined
-                  :loading="facturaAbriendoId === cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                  @click="verFacturaPago(cuotasPagoPorPeriodo.get(data.periodo)!.id_pago)"
-                />
-                <span v-else class="texto-muted">—</span>
-              </template>
-              <span v-else class="texto-muted">—</span>
-            </template>
-          </Column>
-        </DataTable>
-        <DataTable :value="cuotasAlertasRows" responsive-layout="scroll" class="estado-table">
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha vencida">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Días atraso">
-            <template #body="{ data }">{{ data.dias_atraso }}</template>
-          </Column>
-          <Column header="Acción" style="width: 9rem">
-            <template #body="{ data }">
-              <Button
-                label="Cobrar"
-                icon="pi pi-wallet"
-                size="small"
-                severity="success"
-                outlined
-                @click="cobrarDesdeAlerta(data)"
-              />
-            </template>
-          </Column>
-        </DataTable>
-      </div>
-      <template #footer>
-        <Button label="Cerrar" severity="secondary" text @click="cuotasVisible = false" />
-      </template>
-    </Dialog>
     <Dialog
       v-model:visible="cajaVisible"
       header="Caja - Pago de cuota"
@@ -2369,23 +1239,6 @@ onMounted(async () => {
 <style scoped>
 .page {
   max-width: 100%;
-}
-
-.section-title {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-
-.transacciones-panel {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #ffffff;
-  padding: 0.9rem;
-  margin-bottom: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
 }
 
 .transacciones-filtros {
@@ -2529,28 +1382,6 @@ onMounted(async () => {
   max-width: 18rem;
 }
 
-.cobros-busqueda-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  width: 100%;
-}
-
-.dni-search-wrap {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.dni-busqueda-linea {
-  flex-wrap: wrap;
-}
-
-.campo-buscar-cliente {
-  flex: 1 1 12rem;
-  min-width: 0;
-}
-
 .hoja-print-cobros-top {
   display: flex;
   flex-wrap: wrap;
@@ -2575,31 +1406,6 @@ onMounted(async () => {
   min-width: 13rem;
 }
 
-.hint-text {
-  display: block;
-  color: #475569;
-  font-size: 0.85rem;
-}
-
-.result-box {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #f8fafc;
-  padding: 0.9rem;
-}
-
-.result-title {
-  margin: 0 0 0.8rem;
-  font-size: 0.95rem;
-  color: #0f172a;
-}
-
-.result-form-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
 .result-field {
   display: flex;
   flex-direction: column;
@@ -2614,87 +1420,6 @@ onMounted(async () => {
 .result-field :deep(input[readonly]) {
   background: #ffffff;
   color: #0f172a;
-}
-
-.native-select {
-  min-height: 2.65rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 0.45rem 0.65rem;
-  background: #fff;
-  color: #0f172a;
-}
-
-.result-actions {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  margin-top: 0.6rem;
-}
-
-.cuota-semanal-cta {
-  margin-top: 1rem;
-}
-
-.cuota-semanal-source-hint {
-  margin: 0;
-  padding: 0.55rem 0.65rem;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  font-size: 0.8rem;
-  line-height: 1.45;
-  color: #475569;
-}
-
-.cuota-semanal-source-hint code {
-  font-size: 0.74rem;
-  padding: 0.05rem 0.28rem;
-  border-radius: 4px;
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-.cuota-semanal-card {
-  margin-top: 0.75rem;
-  border: 1px solid #93c5fd;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
-  padding: 0.95rem 1rem;
-}
-
-.cuota-semanal-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.cuota-semanal-titulo {
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: #1e3a8a;
-}
-
-.cuota-semanal-monto {
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-
-.cuota-semanal-meta {
-  margin: 0.5rem 0 0.75rem;
-  font-size: 0.86rem;
-  color: #334155;
-  line-height: 1.45;
-}
-
-.cuota-semanal-muted {
-  margin: 0.35rem 0 0;
-  font-size: 0.82rem;
-  color: #64748b;
 }
 
 .caja-total-banner {
@@ -2748,32 +1473,6 @@ onMounted(async () => {
   color: #64748b;
 }
 
-.estado-cuenta-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.texto-muted {
-  color: #94a3b8;
-  font-size: 0.85rem;
-}
-
-.estado-resumen-grid {
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.estado-card {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #f8fafc;
-  padding: 0.65rem 0.75rem;
-  font-size: 0.9rem;
-  color: #1f2937;
-}
-
 .estado-error {
   margin: 0;
   color: #b91c1c;
@@ -2783,12 +1482,6 @@ onMounted(async () => {
 .field-error {
   color: #b91c1c;
   font-size: 0.78rem;
-}
-
-.subsection-title {
-  margin: 0.35rem 0 0.2rem;
-  font-size: 0.95rem;
-  color: #0f172a;
 }
 
 .caja-wrap {
@@ -2811,67 +1504,13 @@ onMounted(async () => {
 }
 
 @media (min-width: 760px) {
-  .transacciones-filtros {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .column-filter-grid {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
-  }
-
-  .form-stack {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    column-gap: 1rem;
-    row-gap: 1.35rem;
-    align-items: start;
-  }
-
-  .row-two {
-    max-width: 100%;
-  }
-
-  .form-stack > :not(.row-two) {
-    grid-column: 1 / -1;
-  }
-
-  .compact-field {
-    max-width: 20rem;
-  }
-
-  .result-form-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .caja-form-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-
-  .estado-resumen-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
 }
 
 .hoja-findeco-section {
   margin-bottom: 1.25rem;
-}
-
-.hoja-findeco-section {
-  margin-bottom: 1.25rem;
-}
-
-.gestion-cobros-section {
-  margin-bottom: 1.5rem;
-}
-
-.gestion-sin-resultado {
-  margin: 0;
-  padding: 0.65rem 0.75rem;
-  border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #64748b;
-  font-size: 0.88rem;
 }
 
 .cuota-pagada-tag {
@@ -2906,17 +1545,6 @@ onMounted(async () => {
   white-space: normal;
   text-align: right;
   line-height: 1.2;
-}
-
-.cuotas-atrasadas-alerta {
-  margin: 0.5rem 0 0;
-  padding: 0.45rem 0.55rem;
-  border-radius: 6px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
-  font-size: 0.82rem;
-  font-weight: 600;
 }
 
 .col-cuota-pend {
@@ -3177,8 +1805,7 @@ onMounted(async () => {
   }
 
   .hoja-findeco-datatable,
-  .hoja-findeco-totales-bar,
-  .gestion-cobros-section {
+  .hoja-findeco-totales-bar {
     display: none !important;
   }
 
