@@ -59,13 +59,9 @@ const hojaCobrosPage = ref(1)
 const hojaCobrosPageSize = ref(HOJA_COBROS_PAGE_SIZE)
 const hojaCobrosTotal = ref(0)
 const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
-const hojaCobrosFilasPrint = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosResumen = ref<ReporteIntegracionResumen | null>(null)
 const hojaCobrosFechaReporte = ref('')
 const hojaCobrosGeneradoEn = ref('')
-const hojaPreviewVisible = ref(false)
-const hojaPreviewCargando = ref(false)
-const hojaImprimiendo = ref(false)
 
 const hojaTableFirst = computed(() => (hojaCobrosPage.value - 1) * hojaCobrosPageSize.value)
 
@@ -116,7 +112,6 @@ function carteraHojaRequerida(): boolean {
 
 function limpiarResultadosHojaCobros() {
   hojaCobrosFilas.value = []
-  hojaCobrosFilasPrint.value = []
   hojaCobrosResumen.value = null
   hojaCobrosTotal.value = 0
   hojaCobrosCargada.value = false
@@ -205,18 +200,6 @@ const hojaCobrosTotales = computed(() => {
   return { saldoInicial: 0, cuota: 0, saldoActual: 0 }
 })
 
-const hojaPreviewTotales = computed(() => {
-  let saldoInicial = 0
-  let cuota = 0
-  let saldoActual = 0
-  for (const f of hojaCobrosFilasPrint.value) {
-    saldoInicial += Number.parseFloat(f.saldo_inicial) || 0
-    cuota += Number.parseFloat(f.cuota) || 0
-    saldoActual += Number.parseFloat(f.saldo_actual) || 0
-  }
-  return { saldoInicial, cuota, saldoActual }
-})
-
 function numeroFilaHoja(indexEnPagina: number): number {
   return hojaTableFirst.value + indexEnPagina + 1
 }
@@ -235,10 +218,10 @@ function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
   return qs
 }
 
-async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: boolean }) {
+async function cargarHojaCobrosFindeco(options?: { silentEmpty?: boolean }) {
   if (!carteraHojaRequerida()) {
     reiniciarHojaCobrosSinCartera()
-    if (!options?.silentEmpty && !options?.all) {
+    if (!options?.silentEmpty) {
       toast.add({
         severity: 'warn',
         summary: 'Hoja de cobros',
@@ -246,23 +229,16 @@ async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: 
         life: 4000,
       })
     }
-    return []
+    return
   }
-  if (!options?.all) hojaCobrosLoading.value = true
+  hojaCobrosLoading.value = true
   try {
-    const qs = buildHojaCobrosQuery(
-      options?.all
-        ? { all: '1' }
-        : {
-            page: String(hojaCobrosPage.value),
-            page_size: String(hojaCobrosPageSize.value),
-          },
-    )
+    const qs = buildHojaCobrosQuery({
+      page: String(hojaCobrosPage.value),
+      page_size: String(hojaCobrosPageSize.value),
+    })
     const url = `/prestamos/reporte-integracion/?${qs.toString()}`
     const { data } = await api.get<ReporteIntegracionResponse>(url)
-    if (options?.all) {
-      return data.filas ?? []
-    }
     hojaCobrosFilas.value = (data.filas ?? []).slice(0, hojaCobrosPageSize.value)
     hojaCobrosResumen.value = data.resumen ?? null
     hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
@@ -279,68 +255,15 @@ async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: 
       })
     }
   } catch (e) {
-    if (!options?.all) {
-      toast.add({
-        severity: 'error',
-        summary: 'Hoja de cobros',
-        detail: getApiErrorMessage(e),
-        life: 6000,
-      })
-    } else {
-      throw e
-    }
-  } finally {
-    if (!options?.all) hojaCobrosLoading.value = false
-  }
-  return []
-}
-
-async function abrirVistaPreviaHoja() {
-  if (!hojaCobrosTotal.value && !hojaCobrosFilas.value.length) {
-    toast.add({ severity: 'warn', summary: 'Hoja de cobros', detail: 'No hay datos para imprimir.', life: 4000 })
-    return
-  }
-  hojaPreviewCargando.value = true
-  try {
-    const filas = await cargarHojaCobrosFindeco({ all: true })
-    if (!filas.length) {
-      toast.add({
-        severity: 'warn',
-        summary: 'Hoja de cobros',
-        detail: 'No hay préstamos para los filtros seleccionados.',
-        life: 4000,
-      })
-      return
-    }
-    hojaCobrosFilasPrint.value = filas
-    hojaPreviewVisible.value = true
-  } catch (e) {
     toast.add({
       severity: 'error',
       summary: 'Hoja de cobros',
-      detail: getApiErrorMessage(e, 'No se pudo cargar la vista previa.'),
+      detail: getApiErrorMessage(e),
       life: 6000,
     })
   } finally {
-    hojaPreviewCargando.value = false
     hojaCobrosLoading.value = false
   }
-}
-
-function cerrarVistaPreviaHoja() {
-  hojaPreviewVisible.value = false
-}
-
-function ejecutarImpresionDesdePreview() {
-  hojaImprimiendo.value = true
-  const cleanup = () => {
-    document.body.classList.remove('printing-hoja-cobros')
-    hojaImprimiendo.value = false
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  document.body.classList.add('printing-hoja-cobros')
-  window.print()
 }
 
 function onHojaCobrosPage(e: { first: number; rows: number }) {
@@ -894,16 +817,6 @@ onMounted(async () => {
           :disabled="!carteraHojaRequerida()"
           @click="() => void cargarHojaCobrosFindeco()"
         />
-        <Button
-          label="Imprimir"
-          icon="pi pi-print"
-          type="button"
-          severity="success"
-          outlined
-          :loading="hojaPreviewCargando"
-          :disabled="!hojaCobrosTotal || hojaCobrosLoading || hojaPreviewCargando"
-          @click="abrirVistaPreviaHoja"
-        />
         <span v-if="hojaCobrosTotal" class="hoja-findeco-contador no-print">
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
         </span>
@@ -1039,91 +952,6 @@ onMounted(async () => {
         </div>
       </article>
     </section>
-
-    <Dialog
-      v-model:visible="hojaPreviewVisible"
-      modal
-      :show-header="false"
-      class="hoja-preview-dialog no-print"
-      :style="{ width: 'min(96vw, 78rem)' }"
-      :draggable="false"
-      @hide="cerrarVistaPreviaHoja"
-    >
-      <div class="hoja-preview-print-area">
-        <header class="hoja-findeco-header hoja-preview-header">
-          <img
-            src="/findeco-logo.png"
-            alt="FINDECO"
-            class="hoja-findeco-logo"
-            width="200"
-            height="52"
-          />
-          <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
-          <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
-          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
-        </header>
-
-        <div class="hoja-preview-scroll">
-          <table class="hoja-findeco-table hoja-preview-table">
-            <thead>
-              <tr>
-                <th class="col-n">N</th>
-                <th class="col-nombre">NOMBRE CLIENTE</th>
-                <th class="col-fecha">ENTREGA</th>
-                <th class="col-fecha">VENCE</th>
-                <th class="col-monto">SALDO INICIAL</th>
-                <th class="col-monto">CUOTA</th>
-                <th class="col-monto">CUOTA PEND.</th>
-                <th class="col-monto">SALDO ACTUAL</th>
-                <th class="col-prestamo">Nº PRESTAMO</th>
-                <th class="col-cel">CELULAR</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(fila, index) in hojaCobrosFilasPrint" :key="`preview-${fila.id_prestamo}`">
-                <td class="col-n">{{ index + 1 }}</td>
-                <td class="col-nombre">{{ fila.nombre_cliente }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_entrega) }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_vencimiento) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_inicial) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.cuota) }}</td>
-                <td class="col-monto col-cuota-pend">
-                  <span>{{ formatNumeroHoja(fila.cuota_siguiente_monto) || '—' }}</span>
-                  <span v-if="(fila.cuotas_atrasadas ?? 0) > 0" class="cuotas-atrasadas-tag-print">
-                    {{ textoCuotasAtrasadas(fila) }}
-                  </span>
-                </td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_actual) }}</td>
-                <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
-                <td class="col-cel">{{ fila.telefono?.trim() || '' }}</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr class="hoja-findeco-totales">
-                <td colspan="4" class="totales-label">TOTALES:</td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoInicial) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.cuota) }}</td>
-                <td class="col-monto"></td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoActual) }}</td>
-                <td colspan="2"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-
-      <template #footer>
-        <div class="hoja-preview-dialog-actions">
-          <Button label="Cerrar" severity="secondary" text @click="cerrarVistaPreviaHoja" />
-          <Button
-            label="Imprimir"
-            icon="pi pi-print"
-            :loading="hojaImprimiendo"
-            @click="ejecutarImpresionDesdePreview"
-          />
-        </div>
-      </template>
-    </Dialog>
 
     <Dialog
       v-model:visible="cajaVisible"
@@ -1382,26 +1210,6 @@ onMounted(async () => {
   max-width: 18rem;
 }
 
-.hoja-print-cobros-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
-}
-
-.hoja-impresion-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-  align-items: center;
-}
-
-.filtro-print-select {
-  flex: 1 1 12rem;
-  min-width: 11rem;
-}
-
 .hoja-cartera-select {
   min-width: 13rem;
 }
@@ -1633,33 +1441,6 @@ onMounted(async () => {
   color: #111827;
 }
 
-.hoja-findeco-print-table {
-  display: none;
-}
-
-.hoja-preview-scroll {
-  max-height: min(70vh, 42rem);
-  overflow: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.375rem;
-}
-
-.hoja-preview-header {
-  margin-bottom: 0.85rem;
-}
-
-.hoja-preview-table {
-  display: table;
-  width: 100%;
-}
-
-.hoja-preview-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  width: 100%;
-}
-
 .hoja-findeco-datatable {
   min-width: 52rem;
   font-family: Arial, Helvetica, sans-serif;
@@ -1802,59 +1583,6 @@ onMounted(async () => {
 @media print {
   .no-print {
     display: none !important;
-  }
-
-  .hoja-findeco-datatable,
-  .hoja-findeco-totales-bar {
-    display: none !important;
-  }
-
-  body.printing-hoja-cobros .p-dialog-mask,
-  body.printing-hoja-cobros .hoja-preview-dialog-actions,
-  body.printing-hoja-cobros .hoja-findeco-toolbar,
-  body.printing-hoja-cobros .p-dialog-header,
-  body.printing-hoja-cobros .p-dialog-footer {
-    display: none !important;
-  }
-
-  body.printing-hoja-cobros .p-dialog {
-    position: static !important;
-    width: 100% !important;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    box-shadow: none !important;
-    transform: none !important;
-  }
-
-  body.printing-hoja-cobros .p-dialog-content {
-    padding: 0 !important;
-    overflow: visible !important;
-  }
-
-  body.printing-hoja-cobros .hoja-preview-scroll {
-    max-height: none !important;
-    overflow: visible !important;
-    border: none !important;
-  }
-
-  body.printing-hoja-cobros .hoja-preview-print-area {
-    display: block !important;
-  }
-
-  body.printing-hoja-cobros .hoja-findeco-section {
-    display: none !important;
-  }
-
-  .hoja-findeco-sheet {
-    border: none;
-    box-shadow: none;
-    padding: 0;
-  }
-
-  .hoja-findeco-section {
-    margin: 0;
   }
 }
 </style>
