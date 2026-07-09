@@ -2233,7 +2233,7 @@ watch(
         </div>
         <div>
           <label class="lbl" for="ep-plazo">{{ editForm.forma_pago === 'semanal' ? 'Plazo (semanas)' : 'Plazo (meses)' }}</label>
-          <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid />
+          <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid disabled />
         </div>
         <div>
           <label class="lbl" for="ep-tasa">{{
