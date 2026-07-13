@@ -293,6 +293,24 @@ const totalesPlanPagos = computed(() => {
   }
 })
 
+const totalesAbonos = computed(() => {
+  let capital = 0
+  let interes = 0
+  let total = 0
+  for (const fila of filasAbonosRegistrados.value) {
+    capital += fila.capital
+    interes += fila.interes
+    total += fila.total
+  }
+  const ultima = filasAbonosRegistrados.value[filasAbonosRegistrados.value.length - 1]
+  return {
+    capital: Math.round(capital * 100) / 100,
+    interes: Math.round(interes * 100) / 100,
+    total: Math.round(total * 100) / 100,
+    saldoCapital: ultima ? ultima.saldo_capital : 0,
+  }
+})
+
 const totalesPlanDesembolso = computed(() => {
   let capital = 0
   let interes = 0
@@ -1139,35 +1157,55 @@ function limpiarFormulario() {
               size="small"
               :loading="loadingPlan"
             >
-              <Column field="n" header="N" />
+              <Column field="n" header="N">
+                <template #footer>
+                  <strong>TOTAL</strong>
+                </template>
+              </Column>
               <Column header="Fecha">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatDate(data.fecha_pago) }}
                 </template>
+                <template #footer>—</template>
               </Column>
               <Column header="Documento">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ data.documento }}
+                </template>
+                <template #footer>
+                  <strong>Abonado</strong>
                 </template>
               </Column>
               <Column header="Capital">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatMoney(data.capital) }}
                 </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.capital) }}</strong>
+                </template>
               </Column>
               <Column header="Interés">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatMoney(data.interes) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.interes) }}</strong>
                 </template>
               </Column>
               <Column header="Total">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatMoney(data.total) }}
                 </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.total) }}</strong>
+                </template>
               </Column>
               <Column header="Saldo capital">
                 <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatMoney(data.saldo_capital) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.saldoCapital) }}</strong>
                 </template>
               </Column>
             </DataTable>
