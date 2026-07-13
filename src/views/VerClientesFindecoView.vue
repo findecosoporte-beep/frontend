@@ -7,8 +7,6 @@ import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import Fieldset from 'primevue/fieldset'
 import FloatLabel from 'primevue/floatlabel'
-import IconField from 'primevue/iconfield'
-import InputIcon from 'primevue/inputicon'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
@@ -35,7 +33,7 @@ import {
   mensajeTelefonoHnInvalido,
   normalizarTelefonoHn,
 } from '@/utils/telefonoHonduras'
-import type { Cliente, DiaCobroCartera, Paginated } from '@/types/api'
+import type { Cartera, Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
 const { canWriteClientes } = usePermissions()
@@ -49,11 +47,20 @@ const pageSize = ref(20)
 /** Alineado con MAX_PAGE_SIZE del API */
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const loading = ref(false)
+const loadingCarteras = ref(false)
 const error = ref('')
-const search = ref('')
-let searchTimer: ReturnType<typeof setTimeout> | null = null
+const carteras = ref<Cartera[]>([])
+const carteraFiltro = ref<number | null>(null)
 
 const first = computed(() => (page.value - 1) * pageSize.value)
+
+const carteraOpciones = computed(() => [
+  { label: 'Todas las carteras', value: null as number | null },
+  ...carteras.value.map((c) => ({
+    label: `${c.nombre} (${etiquetaDiaCobro(c.dia_cobro)})`,
+    value: c.id_cartera as number | null,
+  })),
+])
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
@@ -217,6 +224,18 @@ async function guardarEdicion() {
   }
 }
 
+async function cargarCarteras() {
+  loadingCarteras.value = true
+  try {
+    const { data } = await api.get<Paginated<Cartera>>('/carteras/?page_size=100&ordering=nombre')
+    carteras.value = data.results
+  } catch {
+    carteras.value = []
+  } finally {
+    loadingCarteras.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -225,8 +244,9 @@ async function load() {
       page: String(page.value),
       page_size: String(pageSize.value),
     })
-    const termino = search.value.trim()
-    if (termino) params.set('search', termino)
+    if (carteraFiltro.value != null) {
+      params.set('id_cartera', String(carteraFiltro.value))
+    }
     const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
     total.value = data.count
     rows.value = data.results
@@ -245,22 +265,13 @@ function onPage(e: { page: number; first: number; rows: number }) {
   void load()
 }
 
-function onSearchInput() {
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    page.value = 1
-    void load()
-  }, 350)
-}
-
-function limpiarBusqueda() {
-  if (searchTimer) clearTimeout(searchTimer)
-  search.value = ''
+function onCarteraChange() {
   page.value = 1
   void load()
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await cargarCarteras()
   void load()
 })
 </script>
@@ -269,23 +280,20 @@ onMounted(() => {
   <div class="page page-twelve-col">
     <h1 class="title span-full">Ver Clientes Findeco</h1>
     <div class="span-full acciones">
-      <IconField icon-position="left" class="buscador">
-        <InputIcon class="pi pi-search" />
-        <InputText
-          v-model="search"
-          placeholder="Buscar por nombre, DNI, teléfono..."
+      <div class="filtro-cartera findeco-select-wrap">
+        <Select
+          v-model="carteraFiltro"
+          :options="carteraOpciones"
+          option-label="label"
+          option-value="value"
+          placeholder="Seleccionar cartera"
+          :loading="loadingCarteras"
+          :disabled="loadingCarteras"
           fluid
-          @input="onSearchInput"
-          @keyup.enter="onSearchInput"
+          @change="onCarteraChange"
         />
-        <InputIcon
-          v-if="search"
-          class="pi pi-times buscador-clear"
-          title="Limpiar búsqueda"
-          @click="limpiarBusqueda"
-        />
-      </IconField>
-      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="load" />
+      </div>
+      <Button label="Buscar" icon="pi pi-search" severity="secondary" outlined :loading="loading" @click="load" />
     </div>
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
@@ -510,17 +518,8 @@ onMounted(() => {
   margin-bottom: 0.25rem;
 }
 
-.buscador {
+.filtro-cartera {
   width: min(28rem, 100%);
-}
-
-.buscador :deep(.p-inputtext) {
-  width: 100%;
-}
-
-.buscador-clear {
-  cursor: pointer;
-  pointer-events: auto;
 }
 
 .estado {

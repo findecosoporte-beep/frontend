@@ -11,14 +11,16 @@ import Select from 'primevue/select'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import { fetchConfiguracionFacturacion } from '@/composables/useConfiguracionFacturacion'
 import {
   descargarDesembolsosFindecoPdf,
   generateDesembolsosFindecoPdf,
   type DesembolsosFindecoPdfData,
+  type DesembolsosFindecoPdfEmisor,
 } from '@/utils/desembolsosFindecoPdf'
 import { formatDate, formatMoney } from '@/utils/format'
 import { totalInteresDesdeCondiciones } from '@/utils/prestamoCalc'
-import type { Cartera, Cliente, Paginated, Prestamo } from '@/types/api'
+import type { Cartera, Cliente, ConfiguracionFacturacion, Paginated, Prestamo } from '@/types/api'
 
 const PAGE_SIZE_FETCH = 100
 
@@ -88,11 +90,6 @@ function montoPrestamo(p: Prestamo): number {
 
 function nombreCliente(id: number): string {
   return clientesNombrePorId.value[id]?.trim() || '—'
-}
-
-function codigoPrestamo(p: Prestamo): string {
-  const codigo = (p.numero_prestamo ?? '').trim()
-  return codigo || String(p.id_prestamo)
 }
 
 function parsePartesFecha(iso: string | null | undefined): { anio: number; mes: number; dia: number } | null {
@@ -177,22 +174,25 @@ const etiquetaPeriodo = computed(() => {
   return partes.join(' · ')
 })
 
-interface FilaPorFecha {
-  fecha: string
-  cantidad: number
-  montoTotal: number
-  interesTotal: number
-}
-
 interface BloqueCartera {
   clave: string
-  idCartera: number | null
   nombreCartera: string
-  cantidad: number
-  montoTotal: number
-  interesTotal: number
-  porFecha: FilaPorFecha[]
   prestamos: Prestamo[]
+  totales: { cantidad: number; monto: string; interes: string }
+}
+
+function totalesBloque(prestamosBloque: Prestamo[]): { cantidad: number; monto: string; interes: string } {
+  let monto = 0
+  let interes = 0
+  for (const p of prestamosBloque) {
+    monto = roundMoney2(monto + montoPrestamo(p))
+    interes = roundMoney2(interes + totalInteresDesdePrestamo(p))
+  }
+  return {
+    cantidad: prestamosBloque.length,
+    monto: formatMoney(monto),
+    interes: formatMoney(interes),
+  }
 }
 
 const prestamosFiltrados = computed(() =>
@@ -208,70 +208,28 @@ const bloquesPorCartera = computed((): BloqueCartera[] => {
     if (!bloque) {
       bloque = {
         clave,
-        idCartera: p.id_cartera ?? null,
         nombreCartera: nombreCarteraPrestamo(p),
-        cantidad: 0,
-        montoTotal: 0,
-        interesTotal: 0,
-        porFecha: [],
         prestamos: [],
+        totales: { cantidad: 0, monto: formatMoney(0), interes: formatMoney(0) },
       }
       map.set(clave, bloque)
     }
-    bloque.cantidad += 1
-    bloque.montoTotal = roundMoney2(bloque.montoTotal + montoPrestamo(p))
-    bloque.interesTotal = roundMoney2(bloque.interesTotal + totalInteresDesdePrestamo(p))
     bloque.prestamos.push(p)
   }
 
   const bloques = [...map.values()].sort((a, b) => a.nombreCartera.localeCompare(b.nombreCartera, 'es'))
 
   for (const bloque of bloques) {
-    const porFechaMap = new Map<string, FilaPorFecha>()
-    for (const p of bloque.prestamos) {
-      const fecha = (p.fecha_entrega ?? '').slice(0, 10)
-      let fila = porFechaMap.get(fecha)
-      if (!fila) {
-        fila = { fecha, cantidad: 0, montoTotal: 0, interesTotal: 0 }
-        porFechaMap.set(fecha, fila)
-      }
-      fila.cantidad += 1
-      fila.montoTotal = roundMoney2(fila.montoTotal + montoPrestamo(p))
-      fila.interesTotal = roundMoney2(fila.interesTotal + totalInteresDesdePrestamo(p))
-    }
-    bloque.porFecha = [...porFechaMap.values()].sort((a, b) => a.fecha.localeCompare(b.fecha))
     bloque.prestamos.sort((a, b) => {
       const fa = (a.fecha_entrega ?? '').localeCompare(b.fecha_entrega ?? '')
       if (fa !== 0) return fa
       return a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true })
     })
+    bloque.totales = totalesBloque(bloque.prestamos)
   }
 
   return bloques
 })
-
-const totalesGenerales = computed(() => {
-  let monto = 0
-  let interes = 0
-  for (const p of prestamosFiltrados.value) {
-    monto = roundMoney2(monto + montoPrestamo(p))
-    interes = roundMoney2(interes + totalInteresDesdePrestamo(p))
-  }
-  return {
-    cantidad: prestamosFiltrados.value.length,
-    montoTotal: monto,
-    interesTotal: interes,
-  }
-})
-
-const resumenPorCartera = computed(() =>
-  bloquesPorCartera.value.map((b) => ({
-    nombreCartera: b.nombreCartera,
-    cantidad: b.cantidad,
-    montoTotal: b.montoTotal,
-    interesTotal: b.interesTotal,
-  })),
-)
 
 watch(carteraFiltroId, () => {
   prestamos.value = []
@@ -394,34 +352,52 @@ function carteraTituloReporte(): string {
     : opcionesCarteraFiltro.value.find((c) => c.value === carteraFiltroId.value)?.label ?? 'Cartera'
 }
 
-function construirDatosPdf(): DesembolsosFindecoPdfData {
+function emisorDesdeConfig(config: ConfiguracionFacturacion | null): DesembolsosFindecoPdfEmisor {
+  return {
+    razonSocial: config?.razon_social?.trim() || 'FINDECO',
+    nombreComercial: config?.nombre_comercial?.trim() || 'Servicios Financieros Inmediatos',
+    rtn: config?.rtn?.trim() || '',
+    direccion: config?.direccion?.trim() || '',
+    ciudad: config?.ciudad?.trim() || '',
+    telefono: config?.telefono?.trim() || '',
+    correo: config?.correo?.trim() || '',
+  }
+}
+
+async function cargarLogoFindecoDataUrl(): Promise<string | null> {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}findeco-logo.png`)
+    if (!response.ok) return null
+    const blob = await response.blob()
+    return await new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
+function construirDatosPdf(
+  emisor: DesembolsosFindecoPdfEmisor,
+  logoDataUrl: string | null,
+): DesembolsosFindecoPdfData {
   const fechaEnc = fechaReporteEncabezado()
   const titulo = `REPORTE DE DESEMBOLSOS ${fechaEnc}`
-  const { cantidad, montoTotal, interesTotal } = totalesGenerales.value
 
   return {
     titulo,
     carteraTitulo: carteraTituloReporte(),
     etiquetaPeriodo: etiquetaPeriodo.value,
-    totales: {
-      cantidad,
-      monto: formatMoney(montoTotal),
-      interes: formatMoney(interesTotal),
-    },
+    emisor,
+    logoDataUrl,
     bloques: bloquesPorCartera.value.map((bloque) => ({
       nombreCartera: bloque.nombreCartera,
-      cantidad: bloque.cantidad,
-      montoTotal: formatMoney(bloque.montoTotal),
-      interesTotal: formatMoney(bloque.interesTotal),
-      porFecha: bloque.porFecha.map((f) => ({
-        fecha: formatDate(f.fecha),
-        cantidad: f.cantidad,
-        monto: formatMoney(f.montoTotal),
-        interes: formatMoney(f.interesTotal),
-      })),
+      totales: bloque.totales,
       prestamos: bloque.prestamos.map((p, i) => ({
         numero: i + 1,
-        codigo: codigoPrestamo(p),
         cliente: nombreCliente(p.id_cliente),
         fechaEntrega: formatDate(p.fecha_entrega),
         monto: formatMoney(p.monto),
@@ -450,7 +426,11 @@ async function imprimirReporte() {
   revocarPdfUrl()
 
   try {
-    const datos = construirDatosPdf()
+    const [config, logoDataUrl] = await Promise.all([
+      fetchConfiguracionFacturacion().catch(() => null),
+      cargarLogoFindecoDataUrl(),
+    ])
+    const datos = construirDatosPdf(emisorDesdeConfig(config), logoDataUrl)
     pdfTitulo.value = datos.titulo
     const blob = generateDesembolsosFindecoPdf(datos)
     pdfBlob.value = blob
@@ -595,60 +575,9 @@ onBeforeUnmount(() => {
     </p>
 
     <template v-else-if="bloquesPorCartera.length > 0">
-      <div class="span-full panel-tabla">
-        <h2 class="subtitulo">Resumen por cartera · {{ etiquetaPeriodo }}</h2>
-        <DataTable
-          class="datatable-reporte"
-          :value="resumenPorCartera"
-          responsive-layout="scroll"
-          striped-rows
-          size="small"
-        >
-          <Column field="nombreCartera" header="Cartera" :style="{ minWidth: '12rem' }" />
-          <Column header="Préstamos" :style="{ width: '6rem' }">
-            <template #body="{ data }">{{ data.cantidad }}</template>
-          </Column>
-          <Column header="Monto desembolsado" :style="{ minWidth: '9rem' }">
-            <template #body="{ data }">{{ formatMoney(data.montoTotal) }}</template>
-          </Column>
-          <Column header="Interés total" :style="{ minWidth: '9rem' }">
-            <template #body="{ data }">{{ formatMoney(data.interesTotal) }}</template>
-          </Column>
-        </DataTable>
-        <div class="fila-totales fila-total-detalle-pie" aria-label="Totales generales">
-          <span>Total general</span>
-          <span>{{ totalesGenerales.cantidad }} préstamos</span>
-          <span>Monto {{ formatMoney(totalesGenerales.montoTotal) }}</span>
-          <span>Interés {{ formatMoney(totalesGenerales.interesTotal) }}</span>
-        </div>
-      </div>
-
       <div v-for="bloque in bloquesPorCartera" :key="bloque.clave" class="span-full panel-tabla">
         <h2 class="subtitulo">{{ bloque.nombreCartera }}</h2>
 
-        <h3 class="subtitulo-detalle">Por día de entrega</h3>
-        <DataTable
-          class="datatable-reporte datatable-desembolso"
-          :value="bloque.porFecha"
-          responsive-layout="scroll"
-          striped-rows
-          size="small"
-        >
-          <Column header="Fecha" :style="{ minWidth: '9rem' }">
-            <template #body="{ data }">{{ formatDate(data.fecha) }}</template>
-          </Column>
-          <Column header="Préstamos" :style="{ width: '6rem' }">
-            <template #body="{ data }">{{ data.cantidad }}</template>
-          </Column>
-          <Column header="Monto" :style="{ minWidth: '8rem' }">
-            <template #body="{ data }">{{ formatMoney(data.montoTotal) }}</template>
-          </Column>
-          <Column header="Interés" :style="{ minWidth: '8rem' }">
-            <template #body="{ data }">{{ formatMoney(data.interesTotal) }}</template>
-          </Column>
-        </DataTable>
-
-        <h3 class="subtitulo-detalle">Detalle de préstamos</h3>
         <div class="bloque-cartera-tabla">
           <DataTable
             class="datatable-reporte datatable-desembolso"
@@ -656,35 +585,40 @@ onBeforeUnmount(() => {
             responsive-layout="scroll"
             striped-rows
             size="small"
+            show-gridlines
             data-key="id_prestamo"
           >
-            <Column header="N" :style="{ width: '2.75rem' }">
+            <Column header="N" :style="{ width: '2.75rem' }" footer-style="font-weight: 700">
               <template #body="{ index }: { index: number }">{{ (index ?? 0) + 1 }}</template>
+              <template #footer>{{ bloque.totales.cantidad }}</template>
             </Column>
-            <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
-              <template #body="{ data }: { data: Prestamo }">{{ codigoPrestamo(data) }}</template>
-            </Column>
-            <Column header="Nombre" :style="{ minWidth: '16rem', maxWidth: '22rem' }">
+            <Column header="Nombre" :style="{ minWidth: '16rem', maxWidth: '22rem' }" footer-style="font-weight: 700">
               <template #body="{ data }: { data: Prestamo }">
                 <span class="celda-nombre-cliente">{{ nombreCliente(data.id_cliente) }}</span>
               </template>
+              <template #footer>TOTAL</template>
             </Column>
             <Column header="Entrega" :style="{ minWidth: '9rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
+              <template #footer></template>
             </Column>
-            <Column header="Monto" :style="{ minWidth: '8rem' }">
+            <Column header="Monto" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
               <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
+              <template #footer>{{ bloque.totales.monto }}</template>
             </Column>
             <Column header="Tasa" :style="{ minWidth: '6.5rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
+              <template #footer></template>
             </Column>
             <Column header="Plazo" :style="{ width: '4.5rem' }">
               <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
+              <template #footer></template>
             </Column>
-            <Column header="Interés" :style="{ minWidth: '8rem' }">
+            <Column header="Interés" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
               <template #body="{ data }: { data: Prestamo }">
                 {{ formatMoney(totalInteresDesdePrestamo(data)) }}
               </template>
+              <template #footer>{{ bloque.totales.interes }}</template>
             </Column>
           </DataTable>
         </div>
@@ -845,13 +779,6 @@ onBeforeUnmount(() => {
   color: #334155;
 }
 
-.subtitulo-detalle {
-  margin: 0.85rem 0 0.45rem;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: #475569;
-}
-
 .panel-tabla {
   min-width: 0;
   border-radius: 0.5rem;
@@ -863,32 +790,6 @@ onBeforeUnmount(() => {
 
 .bloque-cartera-tabla {
   margin-top: 0;
-}
-
-.fila-totales {
-  display: grid;
-  grid-template-columns: 1.2fr repeat(3, auto);
-  gap: 0.75rem 1rem;
-  align-items: center;
-  margin-top: 0.75rem;
-  padding: 0.6rem 0.75rem;
-  background: #f8fafc;
-  border-radius: 0.375rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.fila-total-detalle-pie {
-  margin-top: 1rem;
-  border: 1px solid #e2e8f0;
-}
-
-@media (max-width: 52rem) {
-  .fila-total-detalle-pie {
-    grid-template-columns: 1fr 1fr;
-    font-size: 0.82rem;
-  }
 }
 
 .datatable-reporte :deep(table) {
@@ -910,6 +811,13 @@ onBeforeUnmount(() => {
 .datatable-desembolso :deep(.p-datatable-tbody > tr > td) {
   font-size: 0.875rem;
   vertical-align: top;
+}
+
+.datatable-desembolso :deep(.p-datatable-tfoot > tr > td) {
+  font-size: 0.875rem;
+  font-weight: 700;
+  background: #f8fafc;
+  border-top: 1px solid #cbd5e1;
 }
 
 .celda-nombre-cliente {
