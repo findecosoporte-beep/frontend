@@ -216,25 +216,57 @@ interface FilaAbonoRegistrado {
   saldo_capital: number
 }
 
-const filasAbonosRegistrados = computed((): FilaAbonoRegistrado[] =>
-  pagosOrdenados.value
+function etiquetaDocumentoAbono(p: Pago): string {
+  const detalle = p.detalle_distribucion
+  if (detalle?.length) {
+    const partes: string[] = []
+    for (const linea of detalle) {
+      if (linea.abono_capital) {
+        partes.push(linea.liquida_prestamo ? 'Abono a capital (liquida)' : 'Abono a capital')
+        continue
+      }
+      if (linea.cuota == null) continue
+      const base = `Cuota ${linea.cuota}`
+      partes.push(linea.parcial ? `${base} (parcial)` : base)
+    }
+    const unicas = [...new Set(partes)]
+    if (unicas.length) return unicas.join(', ')
+  }
+  const doc = (p.documento ?? '').trim()
+  return doc || `Pago ${p.id_pago}`
+}
+
+const filasAbonosRegistrados = computed((): FilaAbonoRegistrado[] => {
+  const montoInicial = numMonto(prestamoActivo.value?.monto)
+  let saldoCapital = montoInicial
+  const conteoDocumento = new Map<string, number>()
+  return pagosOrdenados.value
     .filter((p) => !p.anulado)
     .map((p, index) => {
       const capital = numMonto(p.capital)
       const interes = numMonto(p.interes)
       const mora = numMonto(p.mora)
+      saldoCapital = Math.round(Math.max(0, saldoCapital - capital) * 100) / 100
+      let documento = etiquetaDocumentoAbono(p)
+      const claveDoc = documento.toLowerCase()
+      const visto = (conteoDocumento.get(claveDoc) ?? 0) + 1
+      conteoDocumento.set(claveDoc, visto)
+      // Sin detalle_distribucion, dos cobros con el mismo documento se distinguen.
+      if (visto > 1 && !(p.detalle_distribucion && p.detalle_distribucion.length)) {
+        documento = `${documento} (${visto})`
+      }
       return {
         n: index + 1,
         id_pago: p.id_pago,
         fecha_pago: p.fecha_pago,
-        documento: (p.documento ?? '').trim() || `Pago ${p.id_pago}`,
+        documento,
         capital,
         interes,
         total: Math.round((capital + interes + mora) * 100) / 100,
-        saldo_capital: numMonto(p.saldo),
+        saldo_capital: saldoCapital,
       }
-    }),
-)
+    })
+})
 
 const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
   buildFilasCuotaEstado(cuotasPlan.value, abonos.value),
@@ -246,18 +278,18 @@ const totalesPlanPagos = computed(() => {
   let capital = 0
   let interes = 0
   let total = 0
-  let saldoCapital = 0
   for (const fila of filasCuotasEstado.value) {
     capital += numMonto(fila.capital_programado)
     interes += numMonto(fila.interes_programado)
     total += numMonto(fila.total_programado)
-    saldoCapital += numMonto(fila.saldo_capital_programado)
   }
+  const ultima = filasCuotasEstado.value[filasCuotasEstado.value.length - 1]
   return {
     capital: Math.round(capital * 100) / 100,
     interes: Math.round(interes * 100) / 100,
     total: Math.round(total * 100) / 100,
-    saldoCapital: Math.round(saldoCapital * 100) / 100,
+    /** Saldo tras la última cuota (no es suma de saldos intermedios). */
+    saldoCapital: ultima ? numMonto(ultima.saldo_capital_programado) : 0,
   }
 })
 

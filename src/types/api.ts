@@ -220,6 +220,7 @@ export interface ReporteIntegracionResponse {
 export interface PagoDistribucionLinea {
   cuota?: number
   abono_capital?: boolean
+  liquida_prestamo?: boolean
   capital?: string
   interes?: string
   mora?: string
