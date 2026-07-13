@@ -66,8 +66,24 @@ const facturaAbriendoId = ref<number | null>(null)
 
 const carteraOpciones = computed(() => [
   { label: 'Todas', value: null as number | null },
-  ...carteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number | null })),
+  ...carteras.value
+    .slice()
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    .map((c) => ({ label: c.nombre, value: c.id_cartera as number | null })),
 ])
+
+const tituloCartera = computed(() => {
+  if (carteraFiltro.value == null) return 'Todas las carteras'
+  return carteras.value.find((c) => c.id_cartera === carteraFiltro.value)?.nombre ?? 'Cartera'
+})
+
+const anioOpciones = computed(() => {
+  const actual = new Date().getFullYear()
+  return Array.from({ length: 8 }, (_, i) => ({
+    label: String(actual - i),
+    value: actual - i,
+  }))
+})
 
 const periodoLegible = computed(() => {
   if (!reporte.value) return '—'
@@ -78,6 +94,7 @@ const periodoLegible = computed(() => {
     const nombreMes = MESES.find((x) => x.value === d.getMonth() + 1)?.label ?? ''
     return `${nombreMes} ${d.getFullYear()}`
   }
+  void fecha_fin
   return String(new Date(fecha_inicio + 'T12:00:00').getFullYear())
 })
 
@@ -173,7 +190,7 @@ onMounted(async () => {
       <div>
         <h1 class="page-title">Facturas contabilidad</h1>
         <p class="page-subtitle">
-          Facturas SAR emitidas por cobros, con totales por periodo para revision contable.
+          Facturas SAR emitidas por cobros, con totales por periodo para revisión contable.
         </p>
       </div>
     </header>
@@ -183,149 +200,170 @@ onMounted(async () => {
     </Message>
 
     <Card v-else class="filtros-card">
-      <div class="filtros-grid">
-        <div class="filtro-field">
-          <label for="fc-modo">Periodo</label>
-          <Select
-            id="fc-modo"
-            v-model="modo"
-            :options="modoOpciones"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-
-        <div v-if="modo === 'dia'" class="filtro-field">
-          <label for="fc-fecha">Dia</label>
-          <InputText id="fc-fecha" v-model="fechaDia" type="date" />
-        </div>
-
-        <template v-if="modo === 'mes'">
+      <template #content>
+        <div class="filtros-grid">
           <div class="filtro-field">
-            <label for="fc-mes">Mes</label>
-            <Select id="fc-mes" v-model="mes" :options="MESES" option-label="label" option-value="value" />
+            <label for="fc-cartera">Cartera</label>
+            <Select
+              id="fc-cartera"
+              v-model="carteraFiltro"
+              :options="carteraOpciones"
+              option-label="label"
+              option-value="value"
+              placeholder="Todas"
+              show-clear
+              fluid
+            />
           </div>
+
           <div class="filtro-field">
-            <label for="fc-anio-mes">Ano</label>
-            <InputText id="fc-anio-mes" v-model.number="anio" type="number" min="2000" max="2100" />
+            <label for="fc-modo">Periodo</label>
+            <Select
+              id="fc-modo"
+              v-model="modo"
+              :options="modoOpciones"
+              option-label="label"
+              option-value="value"
+            />
           </div>
-        </template>
 
-        <div v-if="modo === 'anio'" class="filtro-field">
-          <label for="fc-anio">Ano</label>
-          <InputText id="fc-anio" v-model.number="anio" type="number" min="2000" max="2100" />
-        </div>
+          <div v-if="modo === 'dia'" class="filtro-field">
+            <label for="fc-fecha">Dia</label>
+            <InputText id="fc-fecha" v-model="fechaDia" type="date" />
+          </div>
 
-        <div class="filtro-field">
-          <label for="fc-cartera">Cartera</label>
-          <Select
-            id="fc-cartera"
-            v-model="carteraFiltro"
-            :options="carteraOpciones"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
+          <template v-if="modo === 'mes'">
+            <div class="filtro-field">
+              <label for="fc-mes">Mes</label>
+              <Select id="fc-mes" v-model="mes" :options="MESES" option-label="label" option-value="value" />
+            </div>
+            <div class="filtro-field">
+              <label for="fc-anio-mes">Ano</label>
+              <Select
+                id="fc-anio-mes"
+                v-model="anio"
+                :options="anioOpciones"
+                option-label="label"
+                option-value="value"
+              />
+            </div>
+          </template>
 
-        <div class="filtro-field filtro-check">
-          <Checkbox v-model="incluirAnuladas" input-id="fc-anuladas" binary />
-          <label for="fc-anuladas">Incluir anuladas</label>
-        </div>
+          <div v-if="modo === 'anio'" class="filtro-field">
+            <label for="fc-anio">Ano</label>
+            <Select
+              id="fc-anio"
+              v-model="anio"
+              :options="anioOpciones"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
 
-        <div class="filtro-acciones">
-          <Button label="Consultar" icon="pi pi-search" :loading="loading" @click="consultar" />
+          <div class="filtro-field filtro-check">
+            <Checkbox v-model="incluirAnuladas" input-id="fc-anuladas" binary />
+            <label for="fc-anuladas">Incluir anuladas</label>
+          </div>
+
+          <div class="filtro-acciones">
+            <Button label="Consultar" icon="pi pi-search" :loading="loading" @click="consultar" />
+          </div>
         </div>
-      </div>
+      </template>
     </Card>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
     <template v-if="reporte">
       <Card class="resumen-card">
-        <div class="resumen-grid">
-          <div>
-            <span class="resumen-label">Periodo</span>
-            <strong>{{ periodoLegible }}</strong>
+        <template #content>
+          <div class="resumen-grid">
+            <div>
+              <span class="resumen-label">Cartera</span>
+              <strong>{{ reporte.cartera_etiqueta || tituloCartera }}</strong>
+            </div>
+            <div>
+              <span class="resumen-label">Periodo</span>
+              <strong>{{ periodoLegible }}</strong>
+            </div>
+            <div>
+              <span class="resumen-label">Facturas</span>
+              <strong>{{ reporte.resumen.registros }}</strong>
+            </div>
+            <div>
+              <span class="resumen-label">Capital</span>
+              <strong>{{ formatMoney(reporte.resumen.total_capital) }}</strong>
+            </div>
+            <div>
+              <span class="resumen-label">Interes</span>
+              <strong>{{ formatMoney(reporte.resumen.total_interes) }}</strong>
+            </div>
+            <div>
+              <span class="resumen-label">Total cobrado</span>
+              <strong>{{ formatMoney(reporte.resumen.total_cobrado) }}</strong>
+            </div>
           </div>
-          <div>
-            <span class="resumen-label">Cartera</span>
-            <strong>{{ reporte.cartera_etiqueta }}</strong>
-          </div>
-          <div>
-            <span class="resumen-label">Facturas</span>
-            <strong>{{ reporte.resumen.registros }}</strong>
-          </div>
-          <div>
-            <span class="resumen-label">Capital</span>
-            <strong>{{ formatMoney(reporte.resumen.total_capital) }}</strong>
-          </div>
-          <div>
-            <span class="resumen-label">Interes</span>
-            <strong>{{ formatMoney(reporte.resumen.total_interes) }}</strong>
-          </div>
-          <div>
-            <span class="resumen-label">Total cobrado</span>
-            <strong>{{ formatMoney(reporte.resumen.total_cobrado) }}</strong>
-          </div>
-        </div>
+        </template>
       </Card>
 
       <Card>
-        <div class="tabla-toolbar">
-          <InputText v-model="busqueda" placeholder="Buscar factura, cliente, prestamo..." class="busqueda-input" />
-        </div>
-        <DataTable
-          :value="filasFiltradas"
-          :loading="loading"
-          paginator
-          :rows="15"
-          data-key="id_pago"
-          responsive-layout="scroll"
-          size="small"
-        >
-          <Column field="numero_factura" header="No. factura" style="min-width: 11rem" />
-          <Column header="Fecha">
-            <template #body="{ data }: { data: FacturasContabilidadFila }">
-              {{ formatDate(data.fecha_pago) }}
-            </template>
-          </Column>
-          <Column field="hora_pago" header="Hora" style="width: 6rem" />
-          <Column field="nombre_cliente" header="Cliente" style="min-width: 12rem" />
-          <Column field="dni_cliente" header="Identidad" style="min-width: 9rem" />
-          <Column field="rtn_cliente" header="RTN" style="min-width: 9rem">
-            <template #body="{ data }: { data: FacturasContabilidadFila }">
-              {{ data.rtn_cliente || '—' }}
-            </template>
-          </Column>
-          <Column field="numero_prestamo" header="Prestamo" style="min-width: 8rem" />
-          <Column header="Total">
-            <template #body="{ data }: { data: FacturasContabilidadFila }">
-              {{ formatMoney(data.total) }}
-            </template>
-          </Column>
-          <Column header="Estado" style="width: 7rem">
-            <template #body="{ data }: { data: FacturasContabilidadFila }">
-              <Tag
-                :value="data.estado"
-                :severity="data.anulado ? 'danger' : 'success'"
-              />
-            </template>
-          </Column>
-          <Column header="Factura" style="width: 7rem">
-            <template #body="{ data }: { data: FacturasContabilidadFila }">
-              <Button
-                icon="pi pi-file-pdf"
-                label="Ver"
-                size="small"
-                severity="secondary"
-                outlined
-                :loading="facturaAbriendoId === data.id_pago"
-                :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                @click="verFactura(data)"
-              />
-            </template>
-          </Column>
-        </DataTable>
+        <template #content>
+          <div class="tabla-toolbar">
+            <InputText v-model="busqueda" placeholder="Buscar factura, cliente, prestamo..." class="busqueda-input" />
+          </div>
+          <DataTable
+            :value="filasFiltradas"
+            :loading="loading"
+            paginator
+            :rows="15"
+            data-key="id_pago"
+            responsive-layout="scroll"
+            size="small"
+          >
+            <Column field="numero_factura" header="No. factura" style="min-width: 11rem" />
+            <Column header="Fecha">
+              <template #body="{ data }: { data: FacturasContabilidadFila }">
+                {{ formatDate(data.fecha_pago) }}
+              </template>
+            </Column>
+            <Column field="hora_pago" header="Hora" style="width: 6rem" />
+            <Column field="nombre_cliente" header="Cliente" style="min-width: 12rem" />
+            <Column field="dni_cliente" header="Identidad" style="min-width: 9rem" />
+            <Column field="rtn_cliente" header="RTN" style="min-width: 9rem">
+              <template #body="{ data }: { data: FacturasContabilidadFila }">
+                {{ data.rtn_cliente || '—' }}
+              </template>
+            </Column>
+            <Column field="numero_prestamo" header="Prestamo" style="min-width: 8rem" />
+            <Column header="Total">
+              <template #body="{ data }: { data: FacturasContabilidadFila }">
+                {{ formatMoney(data.total) }}
+              </template>
+            </Column>
+            <Column header="Estado" style="width: 7rem">
+              <template #body="{ data }: { data: FacturasContabilidadFila }">
+                <Tag
+                  :value="data.estado"
+                  :severity="data.anulado ? 'danger' : 'success'"
+                />
+              </template>
+            </Column>
+            <Column header="Factura" style="width: 7rem">
+              <template #body="{ data }: { data: FacturasContabilidadFila }">
+                <Button
+                  icon="pi pi-file-pdf"
+                  label="Ver"
+                  size="small"
+                  severity="secondary"
+                  outlined
+                  :loading="facturaAbriendoId === data.id_pago"
+                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
+                  @click="verFactura(data)"
+                />
+              </template>
+            </Column>
+          </DataTable>
+        </template>
       </Card>
     </template>
   </div>
@@ -382,16 +420,17 @@ onMounted(async () => {
   align-items: center;
   gap: 0.5rem;
   min-width: auto;
-  padding-bottom: 0.35rem;
+  padding-bottom: 0.4rem;
 }
 
 .filtro-acciones {
-  margin-left: auto;
+  display: flex;
+  align-items: flex-end;
 }
 
 .resumen-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 1rem;
 }
 
@@ -407,6 +446,6 @@ onMounted(async () => {
 }
 
 .busqueda-input {
-  width: min(100%, 22rem);
+  width: min(100%, 24rem);
 }
 </style>

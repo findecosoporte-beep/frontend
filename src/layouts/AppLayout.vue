@@ -84,6 +84,11 @@ const menuSections: SidebarSection[] = [
             icon: 'pi pi-history',
             routeName: 'historial-pagos-cobros',
           },
+          {
+            label: 'Historial de facturas',
+            icon: 'pi pi-receipt',
+            routeName: 'historial-facturas-cobros',
+          },
         ],
       },
       {
