@@ -450,6 +450,7 @@ function abrirDialogoCaja(payload: {
   saldo?: number
   fecha_cuota?: string
   fecha_pago?: string
+  omitirFiltroCarteraHoja?: boolean
 }) {
   const idCartera = payload.id_cartera ?? null
   if (!puedeCobrarCartera(idCartera)) {
@@ -462,6 +463,7 @@ function abrirDialogoCaja(payload: {
     return
   }
   if (
+    !payload.omitirFiltroCarteraHoja &&
     hojaCobrosCarteraFiltro.value !== '' &&
     idCartera != null &&
     hojaCobrosCarteraFiltro.value !== idCartera
@@ -515,7 +517,10 @@ async function resolverDniPrestamo(prestamoId: number): Promise<string> {
   }
 }
 
-async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
+async function abrirCobroDesdeHoja(
+  fila: ReporteIntegracionFila,
+  options?: { omitirFiltroCarteraHoja?: boolean },
+) {
   if (!canWritePagos.value) {
     toast.add({
       severity: 'warn',
@@ -556,7 +561,286 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
     monto_pendiente_cuota: montoPendiente,
     saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
     saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
+    omitirFiltroCarteraHoja: options?.omitirFiltroCarteraHoja,
   })
+}
+
+const clienteSearch = ref('')
+const buscarClienteLoading = ref(false)
+const hasClientSearchExecuted = ref(false)
+const searchResult = ref<{
+  id_cliente: number
+  nombre: string
+  dni: string
+  telefono: string
+  direccion_residencia: string
+  prestamoId: number | null
+  prestamoLabel: string | null
+  cuotaPendiente: number | null
+  mensaje: string
+} | null>(null)
+
+function coincideNumeroPrestamo(numero: string, q: string): boolean {
+  const normalizado = numero.trim().toLowerCase()
+  const criterio = q.trim().toLowerCase()
+  if (!normalizado || !criterio) return false
+  return normalizado === criterio || normalizado.includes(criterio)
+}
+
+async function buscarPrestamoPorCriterio(q: string): Promise<{
+  id_prestamo: number
+  id_cliente: number
+  numero_prestamo: string
+  estado: string
+} | null> {
+  const idCartera =
+    hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null
+      ? Number(hojaCobrosCarteraFiltro.value)
+      : null
+  const carteraQs = idCartera != null ? `&id_cartera=${idCartera}` : ''
+
+  const enHoja = hojaCobrosFilas.value.find(
+    (f) =>
+      coincideNumeroPrestamo(f.numero_prestamo ?? '', q) ||
+      (f.numero_prestamo ?? '').trim().toLowerCase() === q.trim().toLowerCase() ||
+      (f.nombre_cliente ?? '').toLowerCase().includes(q.toLowerCase()),
+  )
+  if (enHoja) {
+    return {
+      id_prestamo: enHoja.id_prestamo,
+      id_cliente: 0,
+      numero_prestamo: enHoja.numero_prestamo,
+      estado: enHoja.estado ?? 'activo',
+    }
+  }
+
+  const exacto = await api.get<Paginated<Prestamo>>(
+    `/prestamos/?numero_prestamo=${encodeURIComponent(q)}${carteraQs}&page_size=5`,
+  )
+  if (exacto.data.results[0]) {
+    const p = exacto.data.results[0]
+    return {
+      id_prestamo: p.id_prestamo,
+      id_cliente: p.id_cliente,
+      numero_prestamo: p.numero_prestamo,
+      estado: p.estado ?? '',
+    }
+  }
+
+  const { data } = await api.get<Paginated<Prestamo>>(
+    `/prestamos/?search=${encodeURIComponent(q)}${carteraQs}&page_size=20`,
+  )
+  const criterio = q.trim().toLowerCase()
+  const hit =
+    data.results.find((p) => (p.numero_prestamo ?? '').trim().toLowerCase() === criterio) ??
+    data.results.find((p) => coincideNumeroPrestamo(p.numero_prestamo ?? '', q)) ??
+    null
+  if (!hit) return null
+  return {
+    id_prestamo: hit.id_prestamo,
+    id_cliente: hit.id_cliente,
+    numero_prestamo: hit.numero_prestamo,
+    estado: hit.estado ?? '',
+  }
+}
+
+async function cargarResumenBusqueda(prestamoId: number, cliente: Cliente, numeroPrestamo: string, estado: string) {
+  let cuotaPendiente: number | null = null
+  let mensaje = ''
+  if (estado === 'cancelado' || estado === 'pagado') {
+    mensaje = 'El préstamo no está activo para cobrar.'
+  } else {
+    try {
+      const { data } = await api.get<ReporteIntegracionResponse>(
+        `/prestamos/reporte-integracion/?id_prestamo=${prestamoId}&all=1`,
+      )
+      const fila = data.filas?.[0]
+      if (!fila || fila.cuota_siguiente_numero == null) {
+        mensaje = 'Sin cuota pendiente por cobrar.'
+      } else {
+        cuotaPendiente = montoPendienteDesdeFilaReporte(fila)
+      }
+    } catch {
+      mensaje = 'No se pudo cargar la cuota pendiente.'
+    }
+  }
+
+  searchResult.value = {
+    id_cliente: cliente.id_cliente,
+    nombre: cliente.nombre ?? 'Cliente',
+    dni: cliente.dni ?? '',
+    telefono: cliente.telefono ?? '',
+    direccion_residencia: cliente.direccion_residencia ?? '',
+    prestamoId,
+    prestamoLabel: `${numeroPrestamo} (${estado})`,
+    cuotaPendiente,
+    mensaje,
+  }
+}
+
+async function buscarCliente() {
+  const q = clienteSearch.value.trim()
+  if (!q) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Buscar cliente',
+      detail: 'Ingresa el DNI, nombre o número de préstamo.',
+      life: 3500,
+    })
+    return
+  }
+
+  buscarClienteLoading.value = true
+  hasClientSearchExecuted.value = true
+  searchResult.value = null
+
+  try {
+    const prestamoHit = await buscarPrestamoPorCriterio(q)
+    if (prestamoHit) {
+      let cliente: Cliente
+      if (prestamoHit.id_cliente > 0) {
+        const { data } = await api.get<Cliente>(`/clientes/${prestamoHit.id_cliente}/`)
+        cliente = data
+      } else {
+        const resolved = await resolverClientePorPrestamo(prestamoHit.id_prestamo)
+        const { data: pr } = await api.get<Prestamo>(`/prestamos/${prestamoHit.id_prestamo}/`)
+        cliente = {
+          id_cliente: pr.id_cliente,
+          nombre: resolved.nombre,
+          dni: resolved.dni,
+          telefono: null,
+          rtn: null,
+          direccion_residencia: null,
+          direccion_negocio: null,
+          referencia: null,
+          referencia_parentesco: null,
+          referencia_telefono: null,
+          actividad_economica: null,
+          dia_cobro_semanal: null,
+        }
+        try {
+          const { data: full } = await api.get<Cliente>(`/clientes/${pr.id_cliente}/`)
+          cliente = full
+        } catch {
+          /* usar datos parciales */
+        }
+      }
+      await cargarResumenBusqueda(
+        prestamoHit.id_prestamo,
+        cliente,
+        prestamoHit.numero_prestamo,
+        prestamoHit.estado,
+      )
+      return
+    }
+
+    const { data: clientesData } = await api.get<Paginated<Cliente>>(
+      `/clientes/?search=${encodeURIComponent(q)}&page_size=10`,
+    )
+    const cliente =
+      clientesData.results.find((c) => (c.dni ?? '').trim() === q) ??
+      clientesData.results.find((c) => (c.dni ?? '').replace(/-/g, '') === q.replace(/-/g, '')) ??
+      clientesData.results.find((c) => (c.nombre ?? '').toLowerCase().includes(q.toLowerCase())) ??
+      clientesData.results[0] ??
+      null
+
+    if (!cliente) {
+      toast.add({
+        severity: 'info',
+        summary: 'Sin resultados',
+        detail: 'No se encontró cliente ni préstamo con ese criterio.',
+        life: 4000,
+      })
+      return
+    }
+
+    const idCartera =
+      hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null
+        ? Number(hojaCobrosCarteraFiltro.value)
+        : null
+    const carteraQs = idCartera != null ? `&id_cartera=${idCartera}` : ''
+    const { data: prestamosData } = await api.get<Paginated<Prestamo>>(
+      `/prestamos/?id_cliente=${cliente.id_cliente}${carteraQs}&page_size=50&ordering=-fecha_entrega,-id_prestamo`,
+    )
+    const activos = prestamosData.results.filter((p) => p.estado !== 'cancelado' && p.estado !== 'pagado')
+    const activo =
+      activos.find((p) => p.estado === 'activo' || p.estado === 'mora') ?? activos[0] ?? null
+
+    if (!activo) {
+      searchResult.value = {
+        id_cliente: cliente.id_cliente,
+        nombre: cliente.nombre ?? 'Cliente',
+        dni: cliente.dni ?? '',
+        telefono: cliente.telefono ?? '',
+        direccion_residencia: cliente.direccion_residencia ?? '',
+        prestamoId: null,
+        prestamoLabel: null,
+        cuotaPendiente: null,
+        mensaje: 'El cliente no tiene préstamos activos para cobrar.',
+      }
+      return
+    }
+
+    await cargarResumenBusqueda(activo.id_prestamo, cliente, activo.numero_prestamo, activo.estado ?? '')
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Buscar cliente',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    buscarClienteLoading.value = false
+  }
+}
+
+async function abrirCobroDesdeBusqueda() {
+  if (!canWritePagos.value) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cobros',
+      detail: 'Tu rol no puede registrar cobros.',
+      life: 4000,
+    })
+    return
+  }
+  const pid = searchResult.value?.prestamoId
+  if (pid == null) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Cobros',
+      detail: 'El cliente no tiene un préstamo seleccionable.',
+      life: 4000,
+    })
+    return
+  }
+
+  buscarClienteLoading.value = true
+  try {
+    const { data } = await api.get<ReporteIntegracionResponse>(
+      `/prestamos/reporte-integracion/?id_prestamo=${pid}&all=1`,
+    )
+    const fila = data.filas?.[0]
+    if (!fila) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Cobros',
+        detail: 'No se encontró información de cobro para el préstamo.',
+        life: 4000,
+      })
+      return
+    }
+    await abrirCobroDesdeHoja(fila, { omitirFiltroCarteraHoja: true })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Cobros',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    buscarClienteLoading.value = false
+  }
 }
 
 
@@ -950,6 +1234,75 @@ onMounted(async () => {
           <span class="totales-monto">{{ formatNumeroHoja(hojaCobrosTotales.cuota) }}</span>
           <span class="totales-monto">{{ formatNumeroHoja(hojaCobrosTotales.saldoActual) }}</span>
         </div>
+
+        <section v-if="canWritePagos" class="gestion-cobros-section no-print">
+          <h2 class="section-title">Buscar cliente</h2>
+          <p class="hint-text">
+            Busca por DNI, nombre o número de préstamo dentro de la cartera cargada.
+          </p>
+
+          <div class="dni-search-wrap">
+            <InputText
+              v-model="clienteSearch"
+              placeholder="DNI, nombre o número de préstamo"
+              class="campo-buscar-cliente"
+              @keyup.enter="buscarCliente"
+            />
+            <Button
+              label="Buscar cliente"
+              icon="pi pi-search"
+              type="button"
+              :loading="buscarClienteLoading"
+              @click="buscarCliente"
+            />
+          </div>
+
+          <p
+            v-if="hasClientSearchExecuted && !searchResult && !buscarClienteLoading"
+            class="gestion-sin-resultado"
+          >
+            No se encontró cliente ni préstamo con ese criterio en esta cartera.
+          </p>
+
+          <div v-if="searchResult" class="result-box">
+            <h3 class="result-title">{{ searchResult.nombre }}</h3>
+            <div class="result-form-grid">
+              <div class="result-field">
+                <span class="result-label">DNI</span>
+                <InputText :model-value="searchResult.dni || '—'" readonly />
+              </div>
+              <div class="result-field">
+                <span class="result-label">Teléfono</span>
+                <InputText :model-value="searchResult.telefono || '—'" readonly />
+              </div>
+              <div class="result-field">
+                <span class="result-label">Préstamo</span>
+                <InputText :model-value="searchResult.prestamoLabel || 'Sin préstamo activo'" readonly />
+              </div>
+              <div class="result-field">
+                <span class="result-label">Dirección</span>
+                <InputText :model-value="searchResult.direccion_residencia || '—'" readonly />
+              </div>
+            </div>
+
+            <p v-if="searchResult.cuotaPendiente != null" class="cuota-busqueda-monto">
+              Cuota pendiente: <strong>{{ formatMoney(searchResult.cuotaPendiente) }}</strong>
+            </p>
+            <p v-else-if="searchResult.mensaje" class="gestion-sin-resultado">{{ searchResult.mensaje }}</p>
+
+            <div class="result-actions">
+              <Button
+                label="Cobrar cuota"
+                icon="pi pi-wallet"
+                type="button"
+                severity="success"
+                :loading="buscarClienteLoading"
+                :disabled="!searchResult.prestamoId || searchResult.cuotaPendiente == null"
+                @click="abrirCobroDesdeBusqueda"
+              />
+            </div>
+          </div>
+        </section>
       </article>
     </section>
 
@@ -1077,6 +1430,87 @@ onMounted(async () => {
 
 .transacciones-buscar {
   min-width: 0;
+}
+
+.gestion-cobros-section {
+  margin-top: 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--p-content-border-color, #e5e7eb);
+  border-radius: 10px;
+  background: var(--p-content-background, #fff);
+}
+
+.gestion-cobros-section .section-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.gestion-cobros-section .hint-text {
+  margin: 0 0 0.85rem;
+  color: var(--p-text-muted-color);
+  font-size: 0.92rem;
+}
+
+.dni-search-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.campo-buscar-cliente {
+  flex: 1 1 16rem;
+  min-width: 12rem;
+}
+
+.gestion-sin-resultado {
+  margin: 0.75rem 0 0;
+  color: var(--p-text-muted-color);
+  font-size: 0.92rem;
+}
+
+.result-box {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--p-content-border-color, #e5e7eb);
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.result-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.result-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.75rem;
+}
+
+.result-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.result-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color);
+}
+
+.cuota-busqueda-monto {
+  margin: 0.85rem 0 0;
+  font-size: 0.95rem;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
 }
 
 .transacciones-actions {
