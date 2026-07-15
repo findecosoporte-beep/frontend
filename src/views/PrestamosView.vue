@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
+import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -65,14 +66,54 @@ const eliminarForzadoMotivo = ref('')
 const eliminarForzadoPrestamo = ref<Prestamo | null>(null)
 
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
-const prestamosList = ref<Prestamo[]>([])
+const prestamosList = ref<PrestamoFilaListado[]>([])
 const listLoading = ref(false)
 const listError = ref('')
-const listPage = ref(1)
 const listPageSize = ref(20)
-const listTotal = ref(0)
 const listSearch = ref('')
-const listFirst = computed(() => (listPage.value - 1) * listPageSize.value)
+const listadoPrimera = ref(0)
+
+interface PrestamoFilaListado extends Prestamo {
+  nombre_cliente: string
+  cartera_nombre: string
+  estado_etiqueta: string
+  monto_texto: string
+  tasa_texto: string
+  plazo_texto: string
+  fecha_entrega_texto: string
+  registrado_texto: string
+  modificado_texto: string
+}
+
+const CAMPOS_FILTRO_PRESTAMOS = [
+  'numero_prestamo',
+  'nombre_cliente',
+  'cartera_nombre',
+  'monto_texto',
+  'plazo_texto',
+  'tasa_texto',
+  'estado_etiqueta',
+  'fecha_entrega_texto',
+  'registrado_texto',
+  'modificado_texto',
+] as const
+
+function crearFiltrosPrestamosVacios() {
+  const filtros: Record<string, { value: string | null; matchMode: string }> = {
+    global: { value: null, matchMode: FilterMatchMode.CONTAINS },
+  }
+  for (const campo of CAMPOS_FILTRO_PRESTAMOS) {
+    filtros[campo] = { value: null, matchMode: FilterMatchMode.CONTAINS }
+  }
+  return filtros
+}
+
+const filtrosPrestamos = ref(crearFiltrosPrestamosVacios())
+
+function reiniciarFiltrosPrestamos() {
+  filtrosPrestamos.value = crearFiltrosPrestamosVacios()
+  listadoPrimera.value = 0
+}
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
@@ -488,38 +529,49 @@ function resolveCobradorIdFromPrestamo(p: Prestamo): number | null {
   return hit?.id_usuario ?? null
 }
 
+function enriquecerFilaPrestamo(p: Prestamo): PrestamoFilaListado {
+  return {
+    ...p,
+    nombre_cliente: nombreClienteListado(p.id_cliente),
+    cartera_nombre: nombreCarteraListado(p),
+    estado_etiqueta: etiquetaEstadoPrestamo(p.estado),
+    monto_texto: formatMoney(p.monto),
+    tasa_texto: formatTasaPct(p.tasa_interes),
+    plazo_texto: String(p.plazo ?? ''),
+    fecha_entrega_texto: formatDate(p.fecha_entrega),
+    registrado_texto: textoRegistroPrestamo(p),
+    modificado_texto: textoUltimaModificacionPrestamo(p),
+  }
+}
+
 async function loadPrestamosList() {
   listLoading.value = true
   listError.value = ''
   try {
     const params = new URLSearchParams({
-      page: String(listPage.value),
-      page_size: String(listPageSize.value),
+      page_size: '100',
       ordering: '-id_prestamo',
     })
     const term = listSearch.value.trim()
     if (term) params.set('search', term)
-    const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
-    prestamosList.value = data.results
-    listTotal.value = data.count
+    const todos = await fetchAllPages<Prestamo>(`/prestamos/?${params.toString()}`)
+    prestamosList.value = todos.map(enriquecerFilaPrestamo)
+    listadoPrimera.value = 0
   } catch (e) {
     listError.value = getApiErrorMessage(e)
     prestamosList.value = []
-    listTotal.value = 0
   } finally {
     listLoading.value = false
   }
 }
 
-function onListPage(event: { page: number; rows: number }) {
-  listPage.value = event.page + 1
-  listPageSize.value = event.rows
+function onListSearch() {
+  reiniciarFiltrosPrestamos()
   void loadPrestamosList()
 }
 
-function onListSearch() {
-  listPage.value = 1
-  void loadPrestamosList()
+function onListadoPage(event: { rows: number }) {
+  listPageSize.value = event.rows
 }
 
 function openEditPrestamo(row: Prestamo) {
@@ -1736,6 +1788,13 @@ watch(
         />
         <Button label="Buscar" icon="pi pi-search" severity="secondary" @click="onListSearch" />
         <Button
+          label="Limpiar filtros"
+          icon="pi pi-filter-slash"
+          severity="secondary"
+          outlined
+          @click="reiniciarFiltrosPrestamos"
+        />
+        <Button
           label="Actualizar"
           icon="pi pi-refresh"
           severity="secondary"
@@ -1748,59 +1807,123 @@ watch(
       <Message v-if="listError" severity="error" class="listado-msg" :closable="false">{{ listError }}</Message>
 
       <DataTable
+        v-model:filters="filtrosPrestamos"
+        v-model:first="listadoPrimera"
         :value="prestamosList"
-        lazy
+        :global-filter-fields="[...CAMPOS_FILTRO_PRESTAMOS]"
         paginator
-        :first="listFirst"
         :rows="listPageSize"
         :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
-        :total-records="listTotal"
         :loading="listLoading"
         data-key="id_prestamo"
+        filter-display="row"
+        removable-sort
         responsive-layout="scroll"
         striped-rows
         size="small"
         class="prestamos-tabla"
-        @page="onListPage"
+        paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
+        current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
+        @page="onListadoPage"
       >
-        <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ data.numero_prestamo || data.id_prestamo }}</template>
-        </Column>
-        <Column header="Cliente" :style="{ minWidth: '12rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ nombreClienteListado(data.id_cliente) }}</template>
-        </Column>
-        <Column header="Cartera" :style="{ minWidth: '9rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ nombreCarteraListado(data) }}</template>
-        </Column>
-        <Column header="Monto" :style="{ minWidth: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
-        </Column>
-        <Column header="Plazo" :style="{ width: '5rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
-        </Column>
-        <Column header="Tasa" :style="{ width: '6rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
-        </Column>
-        <Column header="Estado" :style="{ width: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">
-            <Tag :value="etiquetaEstadoPrestamo(data.estado)" :severity="severityEstadoPrestamo(data.estado)" />
+        <Column
+          field="numero_prestamo"
+          header="Nº préstamo"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '9rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            {{ data.numero_prestamo || data.id_prestamo }}
           </template>
         </Column>
-        <Column header="Entrega" :style="{ minWidth: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
-        </Column>
-        <Column header="Registrado" :style="{ minWidth: '11rem' }">
-          <template #body="{ data }: { data: Prestamo }">
-            <span class="auditoria-celda">{{ textoRegistroPrestamo(data) }}</span>
+        <Column
+          field="nombre_cliente"
+          header="Cliente"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '12rem' }"
+        />
+        <Column
+          field="cartera_nombre"
+          header="Cartera"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '9rem' }"
+        />
+        <Column
+          field="monto_texto"
+          header="Monto"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="plazo_texto"
+          header="Plazo"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ width: '5.5rem' }"
+        />
+        <Column
+          field="tasa_texto"
+          header="Tasa"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ width: '6.5rem' }"
+        />
+        <Column
+          field="estado_etiqueta"
+          header="Estado"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ width: '9rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            <Tag :value="data.estado_etiqueta" :severity="severityEstadoPrestamo(data.estado)" />
           </template>
         </Column>
-        <Column header="Última modificación" :style="{ minWidth: '11rem' }">
-          <template #body="{ data }: { data: Prestamo }">
-            <span class="auditoria-celda">{{ textoUltimaModificacionPrestamo(data) }}</span>
+        <Column
+          field="fecha_entrega_texto"
+          header="Entrega"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="registrado_texto"
+          header="Registrado"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '11rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            <span class="auditoria-celda">{{ data.registrado_texto }}</span>
           </template>
         </Column>
-        <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }">
-          <template #body="{ data }: { data: Prestamo }">
+        <Column
+          field="modificado_texto"
+          header="Última modificación"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '11rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            <span class="auditoria-celda">{{ data.modificado_texto }}</span>
+          </template>
+        </Column>
+        <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }" :exportable="false">
+          <template #body="{ data }: { data: PrestamoFilaListado }">
             <div class="acciones-tabla">
               <Button
                 icon="pi pi-pencil"
@@ -2676,6 +2799,11 @@ watch(
 
 .prestamos-tabla :deep(.p-datatable-wrapper) {
   border-radius: 0.45rem;
+}
+
+.prestamos-tabla :deep(.p-datatable-filter-row .p-inputtext) {
+  width: 100%;
+  font-size: 0.8rem;
 }
 
 .acciones-tabla {
