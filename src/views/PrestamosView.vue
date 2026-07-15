@@ -12,6 +12,7 @@ import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
+import Textarea from 'primevue/textarea'
 import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -55,7 +56,13 @@ import type {
 
 const toast = useToast()
 const confirm = useConfirm()
-const { canWritePrestamos, canWriteClientes, canManageUsuarios } = usePermissions()
+const { canWritePrestamos, canWriteClientes, canManageUsuarios, canAnularPagos } = usePermissions()
+
+const eliminarForzadoVisible = ref(false)
+const eliminarForzadoLoading = ref(false)
+const eliminarForzadoComprobando = ref(false)
+const eliminarForzadoMotivo = ref('')
+const eliminarForzadoPrestamo = ref<Prestamo | null>(null)
 
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const prestamosList = ref<Prestamo[]>([])
@@ -649,7 +656,61 @@ async function saveEditPrestamo() {
   }
 }
 
-function confirmarEliminarPrestamo(row: Prestamo) {
+async function prestamoTieneCobrosOServicios(idPrestamo: number): Promise<boolean> {
+  const [pagosResp, serviciosResp] = await Promise.all([
+    api.get<Paginated<{ id_pago: number }>>(`/pagos/?id_prestamo=${idPrestamo}&page_size=1`),
+    api.get<Paginated<{ id_servicio: number }>>(`/servicios/?id_prestamo=${idPrestamo}&page_size=1`),
+  ])
+  const tienePagos = (pagosResp.data.count ?? pagosResp.data.results?.length ?? 0) > 0
+  const tieneServicios = (serviciosResp.data.count ?? serviciosResp.data.results?.length ?? 0) > 0
+  return tienePagos || tieneServicios
+}
+
+function abrirDialogoEliminarForzado(row: Prestamo) {
+  eliminarForzadoPrestamo.value = row
+  eliminarForzadoMotivo.value = ''
+  eliminarForzadoVisible.value = true
+}
+
+function cerrarDialogoEliminarForzado() {
+  eliminarForzadoVisible.value = false
+  eliminarForzadoPrestamo.value = null
+  eliminarForzadoMotivo.value = ''
+  eliminarForzadoLoading.value = false
+}
+
+async function confirmarEliminarForzado() {
+  const row = eliminarForzadoPrestamo.value
+  const motivo = eliminarForzadoMotivo.value.trim()
+  if (!row) return
+  if (!motivo) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Motivo requerido',
+      detail: 'Indique el motivo de la eliminación forzada.',
+      life: 4000,
+    })
+    return
+  }
+  eliminarForzadoLoading.value = true
+  try {
+    await api.post(`/prestamos/${row.id_prestamo}/eliminar-forzado/`, { motivo })
+    toast.add({
+      severity: 'success',
+      summary: 'Préstamo eliminado',
+      detail: 'Se anularon los cobros vigentes y se eliminó el préstamo.',
+      life: 4000,
+    })
+    cerrarDialogoEliminarForzado()
+    await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+  } finally {
+    eliminarForzadoLoading.value = false
+  }
+}
+
+function ejecutarEliminarSimple(row: Prestamo) {
   confirm.require({
     message: `¿Eliminar el préstamo ${row.numero_prestamo}? Esta acción no se puede deshacer.`,
     header: 'Confirmar eliminación',
@@ -663,10 +724,53 @@ function confirmarEliminarPrestamo(row: Prestamo) {
         toast.add({ severity: 'success', summary: 'Préstamo eliminado', life: 3000 })
         await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
       } catch (e) {
-        toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+        const detail = getApiErrorMessage(e)
+        if (canAnularPagos.value && /cobro|servicio|eliminar-forzado/i.test(detail)) {
+          abrirDialogoEliminarForzado(row)
+          toast.add({
+            severity: 'warn',
+            summary: 'Requiere eliminación forzada',
+            detail: 'El préstamo tiene cobros o servicios. Confirme con motivo para anularlos y eliminar.',
+            life: 5000,
+          })
+          return
+        }
+        toast.add({ severity: 'error', summary: 'Error', detail, life: 6000 })
       }
     },
   })
+}
+
+async function confirmarEliminarPrestamo(row: Prestamo) {
+  if (eliminarForzadoComprobando.value) return
+  eliminarForzadoComprobando.value = true
+  try {
+    const bloqueado = await prestamoTieneCobrosOServicios(row.id_prestamo)
+    if (!bloqueado) {
+      ejecutarEliminarSimple(row)
+      return
+    }
+    if (canAnularPagos.value) {
+      abrirDialogoEliminarForzado(row)
+      return
+    }
+    toast.add({
+      severity: 'warn',
+      summary: 'No se puede eliminar',
+      detail:
+        'Este préstamo tiene cobros o servicios. Un administrador o supervisor debe usar la eliminación forzada, o anule cobros en Historial de pagos.',
+      life: 7000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: getApiErrorMessage(e, 'No se pudo verificar cobros del préstamo.'),
+      life: 6000,
+    })
+  } finally {
+    eliminarForzadoComprobando.value = false
+  }
 }
 
 function aplicarReglasSemanalEdit() {
@@ -1712,6 +1816,7 @@ watch(
                 text
                 rounded
                 aria-label="Eliminar préstamo"
+                :loading="eliminarForzadoComprobando"
                 @click="confirmarEliminarPrestamo(data)"
               />
             </div>
@@ -1719,6 +1824,49 @@ watch(
         </Column>
       </DataTable>
     </section>
+
+    <Dialog
+      v-model:visible="eliminarForzadoVisible"
+      modal
+      header="Eliminar préstamo y anular cobros"
+      :style="{ width: 'min(32rem, 95vw)' }"
+      @hide="cerrarDialogoEliminarForzado"
+    >
+      <p v-if="eliminarForzadoPrestamo" class="eliminar-forzado-aviso">
+        El préstamo <strong>{{ eliminarForzadoPrestamo.numero_prestamo }}</strong> tiene cobros o
+        servicios. Se anularán los cobros vigentes, se borrarán pagos/servicios y se eliminará el
+        préstamo. Esta acción no se puede deshacer.
+      </p>
+      <div class="eliminar-forzado-field">
+        <label for="motivo-eliminar-forzado">Motivo</label>
+        <Textarea
+          id="motivo-eliminar-forzado"
+          v-model="eliminarForzadoMotivo"
+          rows="3"
+          auto-resize
+          class="w-full"
+          placeholder="Ej.: préstamo cargado por error, cliente duplicado…"
+        />
+      </div>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          text
+          type="button"
+          :disabled="eliminarForzadoLoading"
+          @click="cerrarDialogoEliminarForzado"
+        />
+        <Button
+          label="Anular cobros y eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          type="button"
+          :loading="eliminarForzadoLoading"
+          @click="() => void confirmarEliminarForzado()"
+        />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"
@@ -2784,6 +2932,23 @@ watch(
   display: block;
   font-size: 0.88rem;
   color: var(--p-text-color, #0f172a);
+}
+
+.eliminar-forzado-aviso {
+  margin: 0 0 1rem;
+  line-height: 1.45;
+  color: var(--p-text-color, #0f172a);
+}
+
+.eliminar-forzado-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.eliminar-forzado-field label {
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 @media (max-width: 1100px) {
