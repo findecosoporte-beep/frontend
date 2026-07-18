@@ -100,21 +100,6 @@ const menuSections: SidebarSection[] = [
             icon: 'pi pi-id-card',
             routeName: 'usuarios',
           },
-          {
-            label: 'Facturacion SAR',
-            icon: 'pi pi-file-edit',
-            routeName: 'configuracion-facturacion-sar',
-          },
-          {
-            label: 'Reporte SAR trimestral',
-            icon: 'pi pi-chart-bar',
-            routeName: 'reporte-sar-trimestral',
-          },
-          {
-            label: 'Facturas contabilidad',
-            icon: 'pi pi-receipt',
-            routeName: 'facturas-contabilidad',
-          },
         ],
       },
     ],
