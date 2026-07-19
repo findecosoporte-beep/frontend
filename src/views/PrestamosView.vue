@@ -1763,8 +1763,8 @@ watch(
 </script>
 
 <template>
-  <div class="page">
-    <div class="prestamos-header">
+  <div class="page page-twelve-col">
+    <div class="prestamos-header span-full">
       <h1 class="title">Préstamos</h1>
       <div v-if="canWritePrestamos" class="prestamos-header-actions">
         <Button label="Nuevo préstamo" icon="pi pi-plus" @click="openCreate" />
@@ -1778,7 +1778,7 @@ watch(
       </div>
     </div>
 
-    <section class="prestamos-listado">
+    <section class="prestamos-listado panel-tabla tabla-width-full">
       <div class="listado-toolbar">
         <InputText
           v-model="listSearch"
@@ -1821,7 +1821,7 @@ watch(
         responsive-layout="scroll"
         striped-rows
         size="small"
-        class="prestamos-tabla"
+        class="prestamos-tabla datatable-prestamos"
         paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
         current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
         @page="onListadoPage"
@@ -2742,9 +2742,31 @@ watch(
 </template>
 
 <style scoped>
-.page {
-  max-width: min(100%, 88rem);
+/* Grid de 12 columnas; la tabla usa ancho completo (igual que Ver Clientes). */
+.page-twelve-col {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  align-content: start;
+  max-width: 100%;
   width: 100%;
+}
+
+.span-full {
+  grid-column: 1 / -1;
+}
+
+.tabla-width-full {
+  grid-column: 1 / -1;
+}
+
+.panel-tabla {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }
 
 .prestamos-header {
@@ -2753,7 +2775,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.25rem;
 }
 
 .prestamos-header-actions {
@@ -2772,12 +2794,8 @@ watch(
 }
 
 .prestamos-listado {
-  margin-bottom: 1.5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.5rem;
+  margin-bottom: 0;
   padding: 1rem;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }
 
 .listado-toolbar {
@@ -2797,8 +2815,14 @@ watch(
   margin-bottom: 0.75rem;
 }
 
-.prestamos-tabla :deep(.p-datatable-wrapper) {
+.datatable-prestamos :deep(.p-datatable-wrapper) {
+  overflow-x: auto;
   border-radius: 0.45rem;
+}
+
+.datatable-prestamos :deep(table) {
+  width: 100%;
+  min-width: 78rem;
 }
 
 .prestamos-tabla :deep(.p-datatable-filter-row .p-inputtext) {

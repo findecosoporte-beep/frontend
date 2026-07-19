@@ -11,6 +11,7 @@ import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
@@ -36,6 +37,7 @@ import {
 import type { Cartera, Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
+const confirm = useConfirm()
 const { canWriteClientes } = usePermissions()
 
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
@@ -65,6 +67,7 @@ const carteraOpciones = computed(() => [
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
+const deletingClienteId = ref<number | null>(null)
 const editForm = ref({
   id_cliente: 0,
   nombre: '',
@@ -134,6 +137,52 @@ function abrirEditar(data: Cliente) {
 
 function cerrarEditar() {
   editDialogVisible.value = false
+}
+
+function confirmarEliminarCliente(data: Cliente) {
+  if (!canWriteClientes.value) return
+  const tienePrestamos = totalPrestamosCliente(data) > 0
+  confirm.require({
+    message: tienePrestamos
+      ? `«${data.nombre}» tiene préstamos registrados. No se podrá eliminar hasta que esos préstamos se anulen o eliminen. ¿Desea intentarlo de todos modos?`
+      : `¿Eliminar al cliente «${data.nombre}» (DNI ${data.dni})? Esta acción no se puede deshacer.`,
+    header: 'Eliminar cliente',
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Eliminar',
+    rejectLabel: 'Cancelar',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      deletingClienteId.value = data.id_cliente
+      try {
+        await api.delete(`/clientes/${data.id_cliente}/`)
+        toast.add({
+          severity: 'success',
+          summary: 'Cliente eliminado',
+          detail: 'Se eliminó el cliente correctamente.',
+          life: 3500,
+        })
+        if (editForm.value.id_cliente === data.id_cliente) {
+          cerrarEditar()
+        }
+        if (rows.value.length <= 1 && page.value > 1) {
+          page.value -= 1
+        }
+        await load()
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'No se pudo eliminar',
+          detail: getApiErrorMessage(
+            e,
+            'No se pudo eliminar el cliente. Si tiene préstamos u otros registros vinculados, elimínelos primero.',
+          ),
+          life: 7000,
+        })
+      } finally {
+        deletingClienteId.value = null
+      }
+    },
+  })
 }
 
 async function guardarEdicion() {
@@ -408,21 +457,36 @@ onMounted(async () => {
         </Column>
         <Column
           v-if="canWriteClientes"
-          header=""
+          header="Acciones"
           :exportable="false"
-          :style="{ width: '2.75rem' }"
+          :style="{ width: '6.5rem' }"
         >
           <template #body="{ data }: { data: Cliente }">
-            <Button
-              icon="pi pi-pencil"
-              rounded
-              text
-              size="small"
-              severity="secondary"
-              title="Editar cliente"
-              :aria-label="`Editar cliente ${data.nombre}`"
-              @click="abrirEditar(data)"
-            />
+            <div class="acciones-cliente">
+              <Button
+                icon="pi pi-pencil"
+                rounded
+                text
+                size="small"
+                severity="secondary"
+                title="Editar cliente"
+                :aria-label="`Editar cliente ${data.nombre}`"
+                :disabled="deletingClienteId === data.id_cliente || savingEdit"
+                @click="abrirEditar(data)"
+              />
+              <Button
+                icon="pi pi-trash"
+                rounded
+                text
+                size="small"
+                severity="danger"
+                title="Eliminar cliente"
+                :aria-label="`Eliminar cliente ${data.nombre}`"
+                :loading="deletingClienteId === data.id_cliente"
+                :disabled="deletingClienteId != null || savingEdit"
+                @click="confirmarEliminarCliente(data)"
+              />
+            </div>
           </template>
         </Column>
       </DataTable>
@@ -550,6 +614,12 @@ onMounted(async () => {
 .filtro-busqueda {
   width: min(24rem, 100%);
   flex: 1 1 14rem;
+}
+
+.acciones-cliente {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
 }
 
 .estado {
