@@ -51,6 +51,7 @@ const loadingCarteras = ref(false)
 const error = ref('')
 const carteras = ref<Cartera[]>([])
 const carteraFiltro = ref<number | null>(null)
+const busqueda = ref('')
 
 const first = computed(() => (page.value - 1) * pageSize.value)
 
@@ -247,6 +248,10 @@ async function load() {
     if (carteraFiltro.value != null) {
       params.set('id_cartera', String(carteraFiltro.value))
     }
+    const term = busqueda.value.trim()
+    if (term) {
+      params.set('search', term)
+    }
     const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
     total.value = data.count
     rows.value = data.results
@@ -266,6 +271,11 @@ function onPage(e: { page: number; first: number; rows: number }) {
 }
 
 function onCarteraChange() {
+  page.value = 1
+  void load()
+}
+
+function buscarClientes() {
   page.value = 1
   void load()
 }
@@ -293,7 +303,22 @@ onMounted(async () => {
           @change="onCarteraChange"
         />
       </div>
-      <Button label="Buscar" icon="pi pi-search" severity="secondary" outlined :loading="loading" @click="load" />
+      <div class="filtro-busqueda">
+        <InputText
+          v-model="busqueda"
+          placeholder="Buscar por nombre, apellido o DNI"
+          fluid
+          @keyup.enter="buscarClientes"
+        />
+      </div>
+      <Button
+        label="Buscar"
+        icon="pi pi-search"
+        severity="secondary"
+        outlined
+        :loading="loading"
+        @click="buscarClientes"
+      />
     </div>
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
@@ -519,7 +544,12 @@ onMounted(async () => {
 }
 
 .filtro-cartera {
-  width: min(28rem, 100%);
+  width: min(22rem, 100%);
+}
+
+.filtro-busqueda {
+  width: min(24rem, 100%);
+  flex: 1 1 14rem;
 }
 
 .estado {
