@@ -12,7 +12,6 @@ import Message from 'primevue/message'
 import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
-import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
 import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
@@ -72,6 +71,7 @@ const listError = ref('')
 const listPageSize = ref(20)
 const listSearch = ref('')
 const listadoPrimera = ref(0)
+const exportingExcel = ref(false)
 
 interface PrestamoFilaListado extends Prestamo {
   nombre_cliente: string
@@ -485,12 +485,40 @@ function etiquetaEstadoPrestamo(estado: string): string {
   return estadoEditOpts.find((o) => o.value === estado)?.label ?? estado
 }
 
-function severityEstadoPrestamo(estado: string) {
-  if (estado === 'activo') return 'success'
-  if (estado === 'mora') return 'danger'
-  if (estado === 'pagado') return 'info'
-  if (estado === 'cancelado') return 'secondary'
-  return 'warn'
+function descargarBlob(blob: Blob, nombre: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = nombre
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function exportarPrestamosExcel() {
+  exportingExcel.value = true
+  try {
+    const term = listSearch.value.trim()
+    const { data } = await api.get<Blob>('/prestamos/exportar-excel/', {
+      responseType: 'blob',
+      params: term ? { search: term } : undefined,
+    })
+    descargarBlob(data, 'prestamos_findeco.xlsx')
+    toast.add({
+      severity: 'success',
+      summary: 'Exportación lista',
+      detail: 'Se descargó el Excel con los préstamos.',
+      life: 3500,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo exportar',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    exportingExcel.value = false
+  }
 }
 
 function formatTasaPct(value: string | number | null | undefined): string {
@@ -1802,6 +1830,14 @@ watch(
           :loading="listLoading"
           @click="loadPrestamosList"
         />
+        <Button
+          label="Exportar Excel"
+          icon="pi pi-file-excel"
+          severity="secondary"
+          outlined
+          :loading="exportingExcel"
+          @click="exportarPrestamosExcel"
+        />
       </div>
 
       <Message v-if="listError" severity="error" class="listado-msg" :closable="false">{{ listError }}</Message>
@@ -1819,7 +1855,6 @@ watch(
         filter-display="row"
         removable-sort
         responsive-layout="scroll"
-        striped-rows
         size="small"
         class="prestamos-tabla datatable-prestamos"
         paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
@@ -1885,11 +1920,7 @@ watch(
           filter
           filter-placeholder="Filtrar"
           :style="{ width: '9rem' }"
-        >
-          <template #body="{ data }: { data: PrestamoFilaListado }">
-            <Tag :value="data.estado_etiqueta" :severity="severityEstadoPrestamo(data.estado)" />
-          </template>
-        </Column>
+        />
         <Column
           field="fecha_entrega_texto"
           header="Entrega"
