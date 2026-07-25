@@ -5,7 +5,6 @@ import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
-import type { DataTableFilterEvent } from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
@@ -77,7 +76,6 @@ const dialogAnularVisible = ref(false)
 const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
 const motivoAnulacion = ref('')
 const paginaPrimera = ref(0)
-const filasImpresion = ref<HistorialPagosCobrosFila[]>([])
 
 const CAMPOS_FILTRO_TABLA = [
   'cartera_nombre',
@@ -116,12 +114,6 @@ const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
 function reiniciarFiltrosTabla() {
   filtrosTabla.value = crearFiltrosVacios()
-  filasImpresion.value = reporte.value?.filas ?? []
-  paginaPrimera.value = 0
-}
-
-function onTablaFiltrada(event: DataTableFilterEvent) {
-  filasImpresion.value = (event.filteredValue as HistorialPagosCobrosFila[]) ?? []
   paginaPrimera.value = 0
 }
 
@@ -225,14 +217,12 @@ async function consultarHistorial() {
   loading.value = true
   reporte.value = null
   reiniciarFiltrosTabla()
-  filasImpresion.value = []
   paginaPrimera.value = 0
   try {
     const { data } = await api.get<HistorialPagosCobrosResponse>(
       `/pagos/historial-cobros/?${buildHistorialQueryString()}`,
     )
     reporte.value = data
-    filasImpresion.value = data.filas
     if (!data.filas.length) {
       toast.add({
         severity: 'info',
@@ -312,25 +302,6 @@ async function exportarHistorialPdf() {
   } finally {
     exportandoPdf.value = false
   }
-}
-
-function imprimirHistorial() {
-  if (!reporte.value?.filas.length) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Imprimir',
-      detail: 'Consulte primero un periodo con registros.',
-      life: 3500,
-    })
-    return
-  }
-  const cleanup = () => {
-    document.body.classList.remove('printing-historial-pagos')
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  document.body.classList.add('printing-historial-pagos')
-  window.print()
 }
 
 function abrirDialogoAnular(fila: { id_pago: number; nombre_cliente: string; total: string }) {
@@ -474,15 +445,6 @@ onMounted(async () => {
             @click="consultarHistorial"
           />
           <Button
-            label="Imprimir"
-            icon="pi pi-print"
-            type="button"
-            severity="success"
-            outlined
-            :disabled="!reporte?.filas.length || loading"
-            @click="imprimirHistorial"
-          />
-          <Button
             label="Excel"
             icon="pi pi-file-excel"
             type="button"
@@ -557,7 +519,6 @@ onMounted(async () => {
         removable-sort
         responsive-layout="scroll"
         class="historial-table no-print-table"
-        @filter="onTablaFiltrada"
       >
         <Column
           field="cartera_nombre"
@@ -688,39 +649,6 @@ onMounted(async () => {
           />
         </template>
       </Dialog>
-
-      <table class="historial-print-table" aria-hidden="true">
-        <thead>
-          <tr>
-            <th>Cartera</th>
-            <th>Cliente</th>
-            <th>DNI</th>
-            <th>Préstamo</th>
-            <th>Doc.</th>
-            <th>F. programada</th>
-            <th>F. canceló</th>
-            <th>Usuario</th>
-            <th>Fecha registro</th>
-            <th>Capital</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="fila in filasImpresion" :key="fila.id_pago">
-            <td>{{ fila.cartera_nombre }}</td>
-            <td>{{ fila.nombre_cliente }}</td>
-            <td>{{ fila.dni_cliente }}</td>
-            <td>{{ fila.numero_prestamo }}</td>
-            <td>{{ fila.documento || '—' }}</td>
-            <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
-            <td>{{ formatDate(fila.fecha_pago) }}</td>
-            <td>{{ nombreUsuarioCobro(fila) }}</td>
-            <td>{{ fechaRegistroCobro(fila) }}</td>
-            <td class="num">{{ formatMoney(fila.capital) }}</td>
-            <td class="num">{{ formatMoney(fila.total) }}</td>
-          </tr>
-        </tbody>
-      </table>
 
       <footer class="historial-totales">
         <span><strong>Capital:</strong> {{ formatMoney(reporte.resumen.total_capital) }}</span>
@@ -893,32 +821,6 @@ onMounted(async () => {
   color: var(--p-text-muted-color);
 }
 
-.historial-print-table {
-  display: none;
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.72rem;
-}
-
-.historial-print-table th {
-  background: #000;
-  color: #fff;
-  border: 1px solid #000;
-  padding: 0.25rem 0.35rem;
-  text-align: left;
-}
-
-.historial-print-table td {
-  border: 1px solid #1a1a1a;
-  padding: 0.25rem 0.35rem;
-  text-align: left;
-}
-
-.historial-print-table .num {
-  text-align: right;
-  white-space: nowrap;
-}
-
 .auditoria-celda {
   display: block;
   font-size: 0.82rem;
@@ -960,36 +862,6 @@ onMounted(async () => {
 
   .filtro-acciones :deep(.p-button) {
     flex: 1;
-  }
-}
-
-@media print {
-  .no-print {
-    display: none !important;
-  }
-
-  .historial-sheet {
-    border: none;
-    border-radius: 0;
-    padding: 0;
-  }
-
-  .no-print-table {
-    display: none !important;
-  }
-
-  .historial-print-table {
-    display: table !important;
-  }
-
-  body.printing-historial-pagos .sidebar,
-  body.printing-historial-pagos .topbar {
-    display: none !important;
-  }
-
-  body.printing-historial-pagos .layout-main {
-    margin: 0 !important;
-    padding: 0 !important;
   }
 }
 </style>
