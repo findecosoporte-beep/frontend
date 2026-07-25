@@ -225,16 +225,34 @@ const hojaCobrosTotales = computed(() => {
 })
 
 const hojaPreviewTotales = computed(() => {
-  let saldoInicial = 0
   let cuota = 0
-  let saldoActual = 0
   for (const f of hojaCobrosFilasPrint.value) {
-    saldoInicial += Number.parseFloat(f.saldo_inicial) || 0
-    cuota += Number.parseFloat(f.cuota) || 0
-    saldoActual += Number.parseFloat(f.saldo_actual) || 0
+    const monto = f.cuota_siguiente_monto || f.cuota
+    cuota += Number.parseFloat(String(monto ?? '')) || 0
   }
-  return { saldoInicial, cuota, saldoActual }
+  return { registros: hojaCobrosFilasPrint.value.length, cuota }
 })
+
+function etiquetaEstadoHoja(estado: string | undefined | null): string {
+  const key = (estado || '').trim()
+  const map: Record<string, string> = {
+    activo: 'Activo',
+    pendiente_aprobacion: 'Pendiente',
+    pagado: 'Pagado',
+    mora: 'Mora',
+    cancelado: 'Cancelado',
+  }
+  return map[key] || key || '—'
+}
+
+function valorCuotaHoja(fila: ReporteIntegracionFila): string {
+  const monto = fila.cuota_siguiente_monto ?? fila.cuota
+  const texto = formatNumeroHoja(monto)
+  if (fila.cuota_siguiente_numero != null) {
+    return `#${fila.cuota_siguiente_numero}  ${texto || '—'}`
+  }
+  return texto || '—'
+}
 
 function numeroFilaHoja(indexEnPagina: number): number {
   return hojaTableFirst.value + indexEnPagina + 1
@@ -283,6 +301,9 @@ async function cargarHojaCobrosFindeco(options?: {
     const url = `/prestamos/reporte-integracion/?${qs.toString()}`
     const { data } = await api.get<ReporteIntegracionResponse>(url)
     if (options?.all) {
+      hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
+      hojaCobrosGeneradoEn.value = data.generado_en ?? ''
+      if (data.resumen) hojaCobrosResumen.value = data.resumen
       return data.filas ?? []
     }
     hojaCobrosFilas.value = (data.filas ?? []).slice(0, hojaCobrosPageSize.value)
@@ -327,15 +348,6 @@ async function abrirVistaPreviaHoja() {
     })
     return
   }
-  if (!hojaCobrosTotal.value && !hojaCobrosFilas.value.length) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Hoja de cobros',
-      detail: 'Primero pulse «Actualizar hoja» para cargar la cartera.',
-      life: 4000,
-    })
-    return
-  }
   hojaPreviewCargando.value = true
   try {
     const filas = await cargarHojaCobrosFindeco({ all: true })
@@ -359,7 +371,6 @@ async function abrirVistaPreviaHoja() {
     })
   } finally {
     hojaPreviewCargando.value = false
-    hojaCobrosLoading.value = false
   }
 }
 
@@ -406,7 +417,7 @@ async function descargarHojaCobrosPdf() {
   }
   hojaDescargandoPdf.value = true
   try {
-    const qs = buildHojaCobrosQuery()
+    const qs = buildHojaCobrosQuery({ all: '1', vista: 'listado' })
     const response = await api.get<Blob>(`/prestamos/hoja-cobros-pdf/?${qs.toString()}`, {
       responseType: 'blob',
     })
@@ -1252,14 +1263,25 @@ onMounted(async () => {
           @click="() => void cargarHojaCobrosFindeco()"
         />
         <Button
-          label="Ver / Descargar listado"
-          icon="pi pi-download"
+          label="Ver listado"
+          icon="pi pi-eye"
           type="button"
           severity="success"
           outlined
           :loading="hojaPreviewCargando"
-          :disabled="!hojaCobrosTotal || hojaCobrosLoading || hojaPreviewCargando"
-          @click="abrirVistaPreviaHoja"
+          :disabled="!carteraHojaRequerida() || hojaPreviewCargando"
+          title="Abre el listado completo de la cartera para imprimir o descargar PDF"
+          @click="() => void abrirVistaPreviaHoja()"
+        />
+        <Button
+          label="Descargar PDF"
+          icon="pi pi-file-pdf"
+          type="button"
+          severity="success"
+          :loading="hojaDescargandoPdf"
+          :disabled="!carteraHojaRequerida() || hojaDescargandoPdf || hojaPreviewCargando"
+          title="Descarga el PDF completo de la cartera seleccionada"
+          @click="() => void descargarHojaCobrosPdf()"
         />
         <span v-if="hojaCobrosTotal" class="hoja-findeco-contador no-print">
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
@@ -1490,52 +1512,35 @@ onMounted(async () => {
         </header>
 
         <div class="hoja-preview-scroll">
-          <table class="hoja-findeco-table hoja-preview-table">
+          <table class="hoja-findeco-table hoja-preview-table hoja-preview-table-simple">
             <thead>
               <tr>
                 <th class="col-n">N</th>
+                <th class="col-prestamo">Nº PRÉSTAMO</th>
                 <th class="col-nombre">NOMBRE CLIENTE</th>
-                <th class="col-fecha">ENTREGA</th>
-                <th class="col-fecha">VENCE</th>
-                <th class="col-monto">SALDO INICIAL</th>
+                <th class="col-estado">ESTADO</th>
                 <th class="col-monto">CUOTA</th>
-                <th class="col-monto">CUOTA PEND.</th>
-                <th class="col-monto">SALDO ACTUAL</th>
-                <th class="col-prestamo">Nº PRESTAMO</th>
-                <th class="col-cel">CELULAR</th>
-                <th class="col-abono">ABONO DE CUOTAS</th>
                 <th class="col-espacio">ESPACIO</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(fila, index) in hojaCobrosFilasPrint" :key="`preview-${fila.id_prestamo}`">
                 <td class="col-n">{{ index + 1 }}</td>
-                <td class="col-nombre">{{ fila.nombre_cliente }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_entrega) }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_vencimiento) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_inicial) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.cuota) }}</td>
-                <td class="col-monto col-cuota-pend">
-                  <span>{{ formatNumeroHoja(fila.cuota_siguiente_monto) || '—' }}</span>
-                  <span v-if="(fila.cuotas_atrasadas ?? 0) > 0" class="cuotas-atrasadas-tag-print">
-                    {{ textoCuotasAtrasadas(fila) }}
-                  </span>
-                </td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_actual) }}</td>
                 <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
-                <td class="col-cel">{{ fila.telefono?.trim() || '' }}</td>
-                <td class="col-abono"></td>
+                <td class="col-nombre">{{ fila.nombre_cliente }}</td>
+                <td class="col-estado">{{ etiquetaEstadoHoja(fila.estado) }}</td>
+                <td class="col-monto">{{ valorCuotaHoja(fila) }}</td>
                 <td class="col-espacio"></td>
               </tr>
             </tbody>
             <tfoot>
               <tr class="hoja-findeco-totales">
-                <td colspan="4" class="totales-label">TOTALES:</td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoInicial) }}</td>
+                <td colspan="3" class="totales-label">
+                  TOTALES ({{ hojaPreviewTotales.registros }}):
+                </td>
+                <td></td>
                 <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.cuota) }}</td>
-                <td class="col-monto"></td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoActual) }}</td>
-                <td colspan="4"></td>
+                <td></td>
               </tr>
             </tfoot>
           </table>
@@ -1958,6 +1963,30 @@ onMounted(async () => {
 .hoja-preview-table {
   display: table;
   width: 100%;
+}
+
+.hoja-preview-table-simple .col-prestamo {
+  width: 12%;
+  text-align: center;
+}
+
+.hoja-preview-table-simple .col-nombre {
+  width: 38%;
+  text-align: left;
+}
+
+.hoja-preview-table-simple .col-estado {
+  width: 14%;
+  text-align: center;
+}
+
+.hoja-preview-table-simple .col-monto {
+  width: 16%;
+}
+
+.hoja-preview-table-simple .col-espacio {
+  width: 16%;
+  min-height: 1.4rem;
 }
 
 .hoja-preview-dialog-actions {
