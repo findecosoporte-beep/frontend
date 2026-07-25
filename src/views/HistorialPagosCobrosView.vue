@@ -364,6 +364,11 @@ onMounted(async () => {
     await auth.fetchProfile()
   }
   await cargarCarteras()
+  await consultarHistorial()
+})
+
+watch([modo, fechaDia, mes, anio, carteraFiltro], () => {
+  void consultarHistorial()
 })
 </script>
 
