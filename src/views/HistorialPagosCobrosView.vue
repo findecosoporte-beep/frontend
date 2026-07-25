@@ -59,8 +59,29 @@ function hoyIso(): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
+function isoDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/** Lunes y domingo de la semana que contiene la fecha de referencia. */
+function rangoSemanaActual(refIso = hoyIso()): { inicio: string; fin: string } {
+  const ref = new Date(`${refIso}T12:00:00`)
+  const day = ref.getDay() // 0=dom … 6=sáb
+  const diffLunes = day === 0 ? -6 : 1 - day
+  const lunes = new Date(ref)
+  lunes.setDate(ref.getDate() + diffLunes)
+  const domingo = new Date(lunes)
+  domingo.setDate(lunes.getDate() + 6)
+  return { inicio: isoDate(lunes), fin: isoDate(domingo) }
+}
+
 const modo = ref<'dia' | 'semana' | 'mes' | 'anio'>('semana')
 const fechaDia = ref(hoyIso())
+const semanaRangoInicial = rangoSemanaActual()
+const fechaInicioSemana = ref(semanaRangoInicial.inicio)
+const fechaFinSemana = ref(semanaRangoInicial.fin)
 const mes = ref(new Date().getMonth() + 1)
 const anio = ref(new Date().getFullYear())
 const carteraFiltro = ref<number | null>(null)
@@ -181,9 +202,13 @@ async function cargarCarteras() {
 
 function buildHistorialQueryString(): string {
   const qs = new URLSearchParams({ modo: modo.value })
-  if (modo.value === 'dia' || modo.value === 'semana') {
+  if (modo.value === 'dia') {
     qs.set('fecha', fechaDia.value)
     qs.set('anio', String(new Date(`${fechaDia.value}T12:00:00`).getFullYear()))
+  } else if (modo.value === 'semana') {
+    qs.set('fecha_inicio', fechaInicioSemana.value)
+    qs.set('fecha_fin', fechaFinSemana.value)
+    qs.set('anio', String(new Date(`${fechaInicioSemana.value}T12:00:00`).getFullYear()))
   } else if (modo.value === 'mes') {
     qs.set('mes', String(mes.value))
     qs.set('anio', String(anio.value))
@@ -219,6 +244,26 @@ function fallbackNombreExport(extension: 'xlsx' | 'pdf'): string {
 
 async function consultarHistorial() {
   error.value = ''
+  if (modo.value === 'semana') {
+    if (!fechaInicioSemana.value || !fechaFinSemana.value) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Semana',
+        detail: 'Indique fecha de inicio y fecha final.',
+        life: 4000,
+      })
+      return
+    }
+    if (fechaFinSemana.value < fechaInicioSemana.value) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Semana',
+        detail: 'La fecha final no puede ser anterior a la de inicio.',
+        life: 4000,
+      })
+      return
+    }
+  }
   loading.value = true
   reporte.value = null
   reiniciarFiltrosTabla()
@@ -367,7 +412,7 @@ onMounted(async () => {
   await consultarHistorial()
 })
 
-watch([modo, fechaDia, mes, anio, carteraFiltro], () => {
+watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFiltro], () => {
   void consultarHistorial()
 })
 </script>
@@ -390,12 +435,31 @@ watch([modo, fechaDia, mes, anio, carteraFiltro], () => {
           />
         </div>
 
-        <div v-if="modo === 'dia' || modo === 'semana'" class="filtro-field">
-          <label class="filtro-label" for="hist-fecha">
-            {{ modo === 'semana' ? 'Fecha (semana lun–dom)' : 'Día' }}
-          </label>
+        <div v-if="modo === 'dia'" class="filtro-field">
+          <label class="filtro-label" for="hist-fecha">Día</label>
           <InputText id="hist-fecha" v-model="fechaDia" type="date" class="filtro-input" />
         </div>
+
+        <template v-if="modo === 'semana'">
+          <div class="filtro-field">
+            <label class="filtro-label" for="hist-fecha-inicio">Fecha inicio</label>
+            <InputText
+              id="hist-fecha-inicio"
+              v-model="fechaInicioSemana"
+              type="date"
+              class="filtro-input"
+            />
+          </div>
+          <div class="filtro-field">
+            <label class="filtro-label" for="hist-fecha-fin">Fecha final</label>
+            <InputText
+              id="hist-fecha-fin"
+              v-model="fechaFinSemana"
+              type="date"
+              class="filtro-input"
+            />
+          </div>
+        </template>
 
         <template v-if="modo === 'mes'">
           <div class="filtro-field">
