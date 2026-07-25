@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
@@ -47,6 +47,7 @@ const MESES = [
 
 const modoOpciones = [
   { label: 'Por día', value: 'dia' as const },
+  { label: 'Por semana', value: 'semana' as const },
   { label: 'Por mes', value: 'mes' as const },
   { label: 'Por año', value: 'anio' as const },
 ]
@@ -58,7 +59,7 @@ function hoyIso(): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-const modo = ref<'dia' | 'mes' | 'anio'>('dia')
+const modo = ref<'dia' | 'semana' | 'mes' | 'anio'>('semana')
 const fechaDia = ref(hoyIso())
 const mes = ref(new Date().getMonth() + 1)
 const anio = ref(new Date().getFullYear())
@@ -142,6 +143,10 @@ const periodoLegible = computed(() => {
   if (!reporte.value) return '—'
   const { modo: m, fecha_inicio, fecha_fin } = reporte.value
   if (m === 'dia') return formatDate(fecha_inicio)
+  if (m === 'semana' || m === 'semanal') {
+    if (fecha_inicio === fecha_fin) return formatDate(fecha_inicio)
+    return `${formatDate(fecha_inicio)} – ${formatDate(fecha_fin)}`
+  }
   if (m === 'mes') {
     const d = new Date(`${fecha_inicio}T12:00:00`)
     const nombreMes = MESES[d.getMonth()]?.label ?? ''
@@ -176,7 +181,7 @@ async function cargarCarteras() {
 
 function buildHistorialQueryString(): string {
   const qs = new URLSearchParams({ modo: modo.value })
-  if (modo.value === 'dia') {
+  if (modo.value === 'dia' || modo.value === 'semana') {
     qs.set('fecha', fechaDia.value)
     qs.set('anio', String(new Date(`${fechaDia.value}T12:00:00`).getFullYear()))
   } else if (modo.value === 'mes') {
@@ -380,8 +385,10 @@ onMounted(async () => {
           />
         </div>
 
-        <div v-if="modo === 'dia'" class="filtro-field">
-          <label class="filtro-label" for="hist-fecha">Día</label>
+        <div v-if="modo === 'dia' || modo === 'semana'" class="filtro-field">
+          <label class="filtro-label" for="hist-fecha">
+            {{ modo === 'semana' ? 'Fecha (semana lun–dom)' : 'Día' }}
+          </label>
           <InputText id="hist-fecha" v-model="fechaDia" type="date" class="filtro-input" />
         </div>
 
