@@ -518,6 +518,14 @@ const resumenSaldos = computed((): { filas: FilaResumenSaldos[]; fechaPagoVencid
   return { filas, fechaPagoVencido }
 })
 
+/** Sello visual sobre la tabla de saldos cuando el préstamo está liquidado. */
+const mostrarSelloPagado = computed(() => {
+  if (estadoPrestamoActivo.value === 'pagado') return true
+  const total = resumenSaldos.value.filas.find((f) => f.esTotal)
+  if (!total) return false
+  return total.inicial > 0 && total.actual <= 0.009
+})
+
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
   let nextUrl: string | null = initialPath
@@ -1059,7 +1067,14 @@ function limpiarFormulario() {
             </div>
           </section>
 
-          <div class="ec-tabla-saldos-wrap">
+          <div class="ec-tabla-saldos-wrap" :class="{ 'ec-tabla-saldos-wrap--pagado': mostrarSelloPagado }">
+            <div
+              v-if="mostrarSelloPagado"
+              class="ec-sello-pagado"
+              aria-label="Préstamo pagado"
+            >
+              PAGADO
+            </div>
             <table class="ec-tabla-saldos">
               <thead>
                 <tr>
@@ -1452,8 +1467,36 @@ function limpiarFormulario() {
 }
 
 .ec-tabla-saldos-wrap {
+  position: relative;
   margin-bottom: 1.15rem;
   overflow-x: auto;
+}
+
+.ec-tabla-saldos-wrap--pagado {
+  overflow: hidden;
+}
+
+.ec-sello-pagado {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  font-size: clamp(2.75rem, 8vw, 4.5rem);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  color: rgba(185, 28, 28, 0.55);
+  text-transform: uppercase;
+  border: 4px solid rgba(185, 28, 28, 0.45);
+  border-radius: 0.35rem;
+  padding: 0.4rem 1.15rem;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .ec-tabla-saldos {
