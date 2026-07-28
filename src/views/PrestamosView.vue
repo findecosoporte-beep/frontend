@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
-import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -68,7 +67,9 @@ const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const prestamosList = ref<PrestamoFilaListado[]>([])
 const listLoading = ref(false)
 const listError = ref('')
+const listPage = ref(1)
 const listPageSize = ref(20)
+const listTotal = ref(0)
 const listSearch = ref('')
 const listadoPrimera = ref(0)
 const exportingExcel = ref(false)
@@ -85,38 +86,10 @@ interface PrestamoFilaListado extends Prestamo {
   modificado_texto: string
 }
 
-const CAMPOS_FILTRO_PRESTAMOS = [
-  'numero_prestamo',
-  'nombre_cliente',
-  'cartera_nombre',
-  'monto_texto',
-  'plazo_texto',
-  'tasa_texto',
-  'estado_etiqueta',
-  'fecha_entrega_texto',
-  'registrado_texto',
-  'modificado_texto',
-] as const
-
-function crearFiltrosPrestamosVacios() {
-  const filtros: Record<string, { value: string | null; matchMode: string }> = {
-    global: { value: null, matchMode: FilterMatchMode.CONTAINS },
-  }
-  for (const campo of CAMPOS_FILTRO_PRESTAMOS) {
-    filtros[campo] = { value: null, matchMode: FilterMatchMode.CONTAINS }
-  }
-  return filtros
-}
-
-const filtrosPrestamos = ref(crearFiltrosPrestamosVacios())
-
-function reiniciarFiltrosPrestamos() {
-  filtrosPrestamos.value = crearFiltrosPrestamosVacios()
-  listadoPrimera.value = 0
-}
-
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
+/** True si el préstamo ya tiene cobros vigentes: bloquea campos del plan de cuotas. */
+const editPlanBloqueado = ref(false)
 const editingPrestamoId = ref<number | null>(null)
 const editAuditoria = ref<{
   creado_en: string | null
@@ -577,33 +550,57 @@ async function loadPrestamosList() {
   listError.value = ''
   try {
     const params = new URLSearchParams({
-      page_size: '100',
+      page: String(listPage.value),
+      page_size: String(listPageSize.value),
       ordering: '-id_prestamo',
     })
     const term = listSearch.value.trim()
     if (term) params.set('search', term)
-    const todos = await fetchAllPages<Prestamo>(`/prestamos/?${params.toString()}`)
-    prestamosList.value = todos.map(enriquecerFilaPrestamo)
-    listadoPrimera.value = 0
+    const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
+    listTotal.value = data.count
+    if (typeof data.page === 'number') listPage.value = data.page
+    listadoPrimera.value = (listPage.value - 1) * listPageSize.value
+    prestamosList.value = data.results.map(enriquecerFilaPrestamo)
   } catch (e) {
     listError.value = getApiErrorMessage(e)
     prestamosList.value = []
+    listTotal.value = 0
   } finally {
     listLoading.value = false
   }
 }
 
 function onListSearch() {
-  reiniciarFiltrosPrestamos()
+  listPage.value = 1
+  listadoPrimera.value = 0
   void loadPrestamosList()
 }
 
-function onListadoPage(event: { rows: number }) {
-  listPageSize.value = event.rows
+function limpiarBusquedaListado() {
+  listSearch.value = ''
+  listPage.value = 1
+  listadoPrimera.value = 0
+  void loadPrestamosList()
 }
 
-function openEditPrestamo(row: Prestamo) {
+function onListadoPage(event: { page: number; first: number; rows: number }) {
+  if (listLoading.value) return
+  listPageSize.value = event.rows
+  listPage.value = Math.floor(event.first / event.rows) + 1
+  listadoPrimera.value = event.first
+  void loadPrestamosList()
+}
+
+async function prestamoTieneCobrosVigentes(idPrestamo: number): Promise<boolean> {
+  const { data } = await api.get<Paginated<{ id_pago: number; anulado?: boolean }>>(
+    `/pagos/?id_prestamo=${idPrestamo}&page_size=50`,
+  )
+  return data.results.some((p) => p.anulado !== true)
+}
+
+async function openEditPrestamo(row: Prestamo) {
   editingPrestamoId.value = row.id_prestamo
+  editPlanBloqueado.value = false
   editAuditoria.value = {
     creado_en: row.creado_en ?? null,
     creado_por: row.creado_por ?? null,
@@ -632,6 +629,11 @@ function openEditPrestamo(row: Prestamo) {
     ciclos: Number(row.ciclos) || 0,
   }
   editDialogVisible.value = true
+  try {
+    editPlanBloqueado.value = await prestamoTieneCobrosVigentes(row.id_prestamo)
+  } catch {
+    editPlanBloqueado.value = false
+  }
   if (!editForm.value.numero_prestamo.trim()) {
     void asignarNumeroPrestamoEditado()
   }
@@ -728,6 +730,7 @@ async function saveEditPrestamo() {
     toast.add({ severity: 'success', summary: 'Préstamo actualizado', life: 3000 })
     editDialogVisible.value = false
     editAuditoria.value = null
+    editPlanBloqueado.value = false
     await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
@@ -1183,7 +1186,6 @@ async function loadOptions() {
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
     fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
-    cargarPrestamosParaRenovacion(),
   ])
   clienteOptions.value = clientes
     .map(mapClienteOption)
@@ -1205,28 +1207,14 @@ async function loadOptions() {
 }
 
 /**
- * Genera el siguiente número de préstamo tomando el mayor consecutivo existente.
- * Conserva el prefijo y el ancho (ceros a la izquierda) del último número usado.
+ * Genera el siguiente número de préstamo vía API (sin descargar el catálogo completo).
  */
 async function generarNumeroPrestamo(): Promise<string> {
   try {
-    const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
-    let maxSeq = 0
-    let prefijo = 'PR-'
-    let ancho = 5
-    for (const p of prestamos) {
-      const numero = (p.numero_prestamo ?? '').trim()
-      const m = numero.match(/^(.*?)(\d+)$/)
-      if (!m) continue
-      const seq = Number.parseInt(m[2], 10)
-      if (!Number.isFinite(seq)) continue
-      if (seq > maxSeq) {
-        maxSeq = seq
-        prefijo = m[1] ?? ''
-        ancho = m[2].length
-      }
-    }
-    return `${prefijo}${String(maxSeq + 1).padStart(ancho, '0')}`
+    const { data } = await api.get<{ numero_prestamo: string }>('/prestamos/siguiente-numero/')
+    const numero = data.numero_prestamo?.trim()
+    if (numero) return numero
+    return `PR-${Date.now()}`
   } catch {
     return `PR-${Date.now()}`
   }
@@ -1258,12 +1246,17 @@ async function regenerarNumeroPrestamoEdit() {
   await asignarNumeroPrestamoEditado()
 }
 
-async function prepararDialogoPrestamo(idCliente: number | null) {
+async function prepararDialogoPrestamo(
+  idCliente: number | null,
+  opts?: { skipRenovacionLoad?: boolean },
+) {
   simulacion.value = null
   simulacionError.value = ''
   simulacionNotice.value = ''
   simulationSignature.value = ''
-  await cargarPrestamosParaRenovacion()
+  if (!opts?.skipRenovacionLoad) {
+    await cargarPrestamosParaRenovacion()
+  }
   form.value = {
     numero_prestamo: '',
     id_cliente: idCliente,
@@ -1309,7 +1302,9 @@ async function openRenovacion() {
     })
     return
   }
-  await prepararDialogoPrestamo(clienteOptionsRenovacion.value[0]?.id_cliente ?? null)
+  await prepararDialogoPrestamo(clienteOptionsRenovacion.value[0]?.id_cliente ?? null, {
+    skipRenovacionLoad: true,
+  })
 }
 
 function goToNextStep() {
@@ -1816,11 +1811,11 @@ watch(
         />
         <Button label="Buscar" icon="pi pi-search" severity="secondary" @click="onListSearch" />
         <Button
-          label="Limpiar filtros"
+          label="Limpiar búsqueda"
           icon="pi pi-filter-slash"
           severity="secondary"
           outlined
-          @click="reiniciarFiltrosPrestamos"
+          @click="limpiarBusquedaListado"
         />
         <Button
           label="Actualizar"
@@ -1843,17 +1838,15 @@ watch(
       <Message v-if="listError" severity="error" class="listado-msg" :closable="false">{{ listError }}</Message>
 
       <DataTable
-        v-model:filters="filtrosPrestamos"
         v-model:first="listadoPrimera"
         :value="prestamosList"
-        :global-filter-fields="[...CAMPOS_FILTRO_PRESTAMOS]"
+        lazy
         paginator
         :rows="listPageSize"
+        :total-records="listTotal"
         :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
         :loading="listLoading"
         data-key="id_prestamo"
-        filter-display="row"
-        removable-sort
         responsive-layout="scroll"
         size="small"
         class="prestamos-tabla datatable-prestamos"
@@ -1864,9 +1857,6 @@ watch(
         <Column
           field="numero_prestamo"
           header="Nº préstamo"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '9rem' }"
         >
           <template #body="{ data }: { data: PrestamoFilaListado }">
@@ -1876,65 +1866,41 @@ watch(
         <Column
           field="nombre_cliente"
           header="Cliente"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '12rem' }"
         />
         <Column
           field="cartera_nombre"
           header="Cartera"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '9rem' }"
         />
         <Column
           field="monto_texto"
           header="Monto"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '8rem' }"
         />
         <Column
           field="plazo_texto"
           header="Plazo"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ width: '5.5rem' }"
         />
         <Column
           field="tasa_texto"
           header="Tasa"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ width: '6.5rem' }"
         />
         <Column
           field="estado_etiqueta"
           header="Estado"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ width: '9rem' }"
         />
         <Column
           field="fecha_entrega_texto"
           header="Entrega"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '8rem' }"
         />
         <Column
           field="registrado_texto"
           header="Registrado"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '11rem' }"
         >
           <template #body="{ data }: { data: PrestamoFilaListado }">
@@ -1944,9 +1910,6 @@ watch(
         <Column
           field="modificado_texto"
           header="Última modificación"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '11rem' }"
         >
           <template #body="{ data }: { data: PrestamoFilaListado }">
@@ -2518,6 +2481,10 @@ watch(
             fluid
           />
         </div>
+        <div v-if="editPlanBloqueado" class="full hint-plan-bloqueado">
+          Este préstamo ya tiene cobros: monto, plazo, tasa, forma de pago, fecha de entrega y cartera
+          no se pueden cambiar (el plan de cuotas queda bloqueado).
+        </div>
         <div>
           <label class="lbl" for="ep-cartera">Cartera</label>
           <Select
@@ -2526,12 +2493,21 @@ watch(
             :options="carteraOptions"
             option-label="label"
             option-value="id_cartera"
+            :disabled="editPlanBloqueado"
             fluid
           />
         </div>
         <div>
           <label class="lbl" for="ep-monto">Monto</label>
-          <InputNumber id="ep-monto" v-model="editForm.monto" mode="currency" currency="HNL" locale="es-HN" fluid />
+          <InputNumber
+            id="ep-monto"
+            v-model="editForm.monto"
+            mode="currency"
+            currency="HNL"
+            locale="es-HN"
+            :disabled="editPlanBloqueado"
+            fluid
+          />
         </div>
         <div>
           <label class="lbl" for="ep-plazo">{{ editForm.forma_pago === 'semanal' ? 'Plazo (semanas)' : 'Plazo (meses)' }}</label>
@@ -2550,7 +2526,9 @@ watch(
             v-model="editForm.tasa_interes"
             :min-fraction-digits="2"
             :max-fraction-digits="2"
-            :disabled="editForm.forma_pago === 'semanal' || editForm.forma_pago === 'mensual'"
+            :disabled="
+              editPlanBloqueado || editForm.forma_pago === 'semanal' || editForm.forma_pago === 'mensual'
+            "
             fluid
           />
         </div>
@@ -2562,6 +2540,7 @@ watch(
             :options="formaPagoOpts"
             option-label="label"
             option-value="value"
+            :disabled="editPlanBloqueado"
             fluid
           />
         </div>
@@ -2582,7 +2561,13 @@ watch(
         </div>
         <div>
           <label class="lbl" for="ep-entrega">Fecha entrega</label>
-          <InputText id="ep-entrega" v-model="editForm.fecha_entrega" type="date" fluid />
+          <InputText
+            id="ep-entrega"
+            v-model="editForm.fecha_entrega"
+            type="date"
+            :disabled="editPlanBloqueado"
+            fluid
+          />
         </div>
         <div>
           <label class="lbl" for="ep-producto">Producto</label>
@@ -3095,6 +3080,16 @@ watch(
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--p-text-muted-color, #64748b);
+}
+
+.hint-plan-bloqueado {
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
 .auditoria-grid {
