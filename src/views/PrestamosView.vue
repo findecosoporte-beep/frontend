@@ -50,7 +50,6 @@ import type {
   Prestamo,
   SimulacionPrestamo,
   UsuarioRow,
-  Zona,
 } from '@/types/api'
 
 const toast = useToast()
@@ -137,7 +136,6 @@ const ESTADOS_PRESTAMO_ACTIVO = new Set(['activo', 'mora', 'pendiente_aprobacion
 const usuarioOptions = ref<
   Array<{ id_usuario: number; nombre: string; rol: string; label: string }>
 >([])
-const zonaOptions = ref<Zona[]>([])
 const carteraOptions = ref<
   Array<{ id_cartera: number; id_zona: number | null; dia_cobro: DiaCobroCartera; label: string }>
 >([])
@@ -442,14 +440,18 @@ function numField(value: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function nombreClienteListado(idCliente: number): string {
-  return clientesById.value[idCliente]?.nombre?.trim() || `Cliente #${idCliente}`
+function nombreClienteListado(idCliente: number, fallbackNombre?: string | null): string {
+  const cached = clientesById.value[idCliente]?.nombre?.trim()
+  if (cached) return cached
+  const fromApi = fallbackNombre?.trim()
+  if (fromApi) return fromApi
+  return `Cliente #${idCliente}`
 }
 
 function nombreCarteraListado(p: Prestamo): string {
-  const embebido = p.cartera?.nombre?.trim()
-  if (embebido) return embebido
-  const idC = p.id_cartera ?? null
+  const nested = p.cartera?.nombre?.trim()
+  if (nested) return nested
+  const idC = p.id_cartera
   if (idC == null) return '—'
   return carteraOptions.value.find((c) => c.id_cartera === idC)?.label?.split(' — ')[0] ?? `Cartera #${idC}`
 }
@@ -533,7 +535,7 @@ function resolveCobradorIdFromPrestamo(p: Prestamo): number | null {
 function enriquecerFilaPrestamo(p: Prestamo): PrestamoFilaListado {
   return {
     ...p,
-    nombre_cliente: nombreClienteListado(p.id_cliente),
+    nombre_cliente: nombreClienteListado(p.id_cliente, p.cliente_nombre),
     cartera_nombre: nombreCarteraListado(p),
     estado_etiqueta: etiquetaEstadoPrestamo(p.estado),
     monto_texto: formatMoney(p.monto),
@@ -593,12 +595,13 @@ function onListadoPage(event: { page: number; first: number; rows: number }) {
 
 async function prestamoTieneCobrosVigentes(idPrestamo: number): Promise<boolean> {
   const { data } = await api.get<Paginated<{ id_pago: number; anulado?: boolean }>>(
-    `/pagos/?id_prestamo=${idPrestamo}&page_size=50`,
+    `/pagos/?id_prestamo=${idPrestamo}&page_size=20`,
   )
   return data.results.some((p) => p.anulado !== true)
 }
 
 async function openEditPrestamo(row: Prestamo) {
+  await ensureCatalogosFormulario()
   editingPrestamoId.value = row.id_prestamo
   editPlanBloqueado.value = false
   editAuditoria.value = {
@@ -884,7 +887,9 @@ async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
 const zonaAsignadaNombre = computed(() => {
   const idZ = form.value.id_zona
   if (idZ == null) return ''
-  return zonaOptions.value.find((z) => z.id_zona === idZ)?.nombre ?? ''
+  const fromCartera = carteraOptions.value.find((c) => c.id_zona === idZ)
+  if (fromCartera) return fromCartera.label.split(' — ')[0] ?? ''
+  return ''
 })
 
 function mapClienteOption(r: Cliente) {
@@ -1158,7 +1163,14 @@ function sincronizarCarteraDesdeCliente(idCliente: number | null) {
 }
 
 async function cargarPrestamosParaRenovacion() {
-  const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
+  // Solo estados relevantes (no descarga anulados/cancelados ni el catálogo completo).
+  const estados = ['activo', 'mora', 'pendiente_aprobacion', 'pagado'] as const
+  const lotes = await Promise.all(
+    estados.map((estado) =>
+      fetchAllPages<Prestamo>(`/prestamos/?estado=${estado}&page_size=100&ordering=-id_prestamo`),
+    ),
+  )
+  const prestamos = lotes.flat()
   prestamosRegistrados.value = prestamos
   const ids = new Set<number>()
   for (const p of prestamos) {
@@ -1176,15 +1188,38 @@ function calcularCiclosRenovacion(idCliente: number): number {
   return maxCiclos + 1
 }
 
-function sincronizarCiclosDesdeCliente(idCliente: number | null) {
-  form.value.ciclos = idCliente == null ? 0 : calcularCiclosRenovacion(idCliente)
+async function sincronizarCiclosDesdeCliente(idCliente: number | null) {
+  if (idCliente == null) {
+    form.value.ciclos = 0
+    return
+  }
+  if (prestamosRegistrados.value.some((p) => p.id_cliente === idCliente)) {
+    form.value.ciclos = calcularCiclosRenovacion(idCliente)
+    return
+  }
+  try {
+    const delCliente = await fetchAllPages<Prestamo>(
+      `/prestamos/?id_cliente=${idCliente}&page_size=100&ordering=-id_prestamo`,
+    )
+    if (!delCliente.length) {
+      form.value.ciclos = 0
+      return
+    }
+    const maxCiclos = Math.max(...delCliente.map((p) => Number(p.ciclos) || 0))
+    form.value.ciclos = maxCiclos + 1
+  } catch {
+    form.value.ciclos = 0
+  }
 }
 
-async function loadOptions() {
-  const [clientes, usuarios, zonas, carteras] = await Promise.all([
+/** Catálogos pesados solo al abrir formularios (no al ver el listado). */
+let catalogosFormularioCargados = false
+
+async function ensureCatalogosFormulario() {
+  if (catalogosFormularioCargados) return
+  const [clientes, usuarios, carteras] = await Promise.all([
     fetchAllPages<Cliente>('/clientes/?page_size=100'),
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
-    fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
   ])
   clienteOptions.value = clientes
@@ -1194,7 +1229,6 @@ async function loadOptions() {
   usuarioOptions.value = usuarios
     .map(mapUsuarioOption)
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-  zonaOptions.value = zonas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
   carteraOptions.value = carteras
     .slice()
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
@@ -1204,6 +1238,7 @@ async function loadOptions() {
       dia_cobro: c.dia_cobro,
       label: `${c.nombre} — ${diasCobroLabel[c.dia_cobro] ?? c.dia_cobro}`,
     }))
+  catalogosFormularioCargados = true
 }
 
 /**
@@ -1254,6 +1289,7 @@ async function prepararDialogoPrestamo(
   simulacionError.value = ''
   simulacionNotice.value = ''
   simulationSignature.value = ''
+  await ensureCatalogosFormulario()
   if (!opts?.skipRenovacionLoad) {
     await cargarPrestamosParaRenovacion()
   }
@@ -1278,7 +1314,7 @@ async function prepararDialogoPrestamo(
     ciclos: 0,
   }
   sincronizarCarteraDesdeCliente(form.value.id_cliente)
-  sincronizarCiclosDesdeCliente(form.value.id_cliente)
+  await sincronizarCiclosDesdeCliente(form.value.id_cliente)
   aplicarReglasTasaPeriodo()
   wizardStep.value = 1
   dialogVisible.value = true
@@ -1292,6 +1328,7 @@ async function openCreate() {
 
 async function openRenovacion() {
   formularioModo.value = 'renovar'
+  await ensureCatalogosFormulario()
   await cargarPrestamosParaRenovacion()
   if (!clienteOptionsRenovacion.value.length) {
     toast.add({
@@ -1340,7 +1377,7 @@ watch(
   () => form.value.id_cliente,
   (idCliente) => {
     sincronizarCarteraDesdeCliente(idCliente)
-    sincronizarCiclosDesdeCliente(idCliente)
+    void sincronizarCiclosDesdeCliente(idCliente)
   },
 )
 
@@ -1497,7 +1534,7 @@ function valorPrint(value: string | null | undefined, fallback = 'N/A'): string 
 function buildPrintClienteSection(): string {
   const cliente = clienteCalculoDetalle.value
   const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
-  const zona = zonaOptions.value.find((z) => z.id_zona === form.value.id_zona)
+  const zonaNombre = cartera?.label?.split(' — ')[0] ?? ''
   const formaPagoLabel =
     formaPagoOpts.find((o) => o.value === form.value.forma_pago)?.label ?? form.value.forma_pago
   const plazoUnidad = form.value.forma_pago === 'semanal' ? 'semanas' : 'meses'
@@ -1531,7 +1568,7 @@ function buildPrintClienteSection(): string {
             <div><strong>Fecha entrega:</strong> ${form.value.fecha_entrega ? escapeHtml(formatDate(form.value.fecha_entrega)) : 'N/A'}</div>
             <div><strong>Fecha vencimiento:</strong> ${fechaVencimientoCalculada.value ? escapeHtml(formatDate(fechaVencimientoCalculada.value)) : 'N/A'}</div>
             <div><strong>Cartera:</strong> ${valorPrint(cartera?.label.split(' — ')[0])}</div>
-            <div><strong>Zona:</strong> ${valorPrint(zona?.nombre)}</div>
+            <div><strong>Zona:</strong> ${valorPrint(zonaNombre)}</div>
             <div><strong>Asesor:</strong> ${asesor ? escapeHtml(asesor) : 'N/A'}</div>
             <div><strong>Cobrador:</strong> ${cobrador ? escapeHtml(cobrador) : 'N/A'}</div>
           </div>
@@ -1746,13 +1783,8 @@ async function save() {
   }
 }
 
-onMounted(async () => {
-  try {
-    await loadOptions()
-    await loadPrestamosList()
-  } catch (e) {
-    toast.add({ severity: 'warn', summary: 'Opciones', detail: getApiErrorMessage(e), life: 5000 })
-  }
+onMounted(() => {
+  void loadPrestamosList()
 })
 
 watch(

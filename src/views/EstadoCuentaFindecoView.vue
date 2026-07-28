@@ -570,9 +570,10 @@ async function cargarHistorialPrestamos(idCliente: number) {
   historialPrestamos.value = []
   saldoActualPorPrestamoId.value = {}
   try {
-    const [prestamos, reporte] = await Promise.all([
-      fetchAllPages<Prestamo>(
-        `/prestamos/?id_cliente=${idCliente}&page_size=100&ordering=-fecha_entrega,-id_prestamo`,
+    // Un cliente suele tener pocos préstamos: una página basta; no hay que bajar el catálogo global.
+    const [prestamosResp, reporte] = await Promise.all([
+      api.get<Paginated<Prestamo>>(
+        `/prestamos/?id_cliente=${idCliente}&page_size=50&ordering=-fecha_entrega,-id_prestamo`,
       ),
       api
         .get<ReporteIntegracionResponse>(
@@ -581,7 +582,7 @@ async function cargarHistorialPrestamos(idCliente: number) {
         .then((r) => r.data)
         .catch(() => null),
     ])
-    historialPrestamos.value = prestamos
+    historialPrestamos.value = prestamosResp.data.results
     const saldos: Record<number, number> = {}
     for (const fila of reporte?.filas ?? []) {
       saldos[fila.id_prestamo] = Number.parseFloat(fila.saldo_actual) || 0
@@ -614,14 +615,17 @@ async function cargarPlanYPagos(idPrestamo: number) {
   cuotasPlan.value = []
   abonos.value = []
   try {
-    const [cuotas, pagosRows] = await Promise.all([
-      fetchAllPages<PrestamoCuotaRow>(
+    // Cuotas/pagos de UN préstamo: page_size alto en una sola petición evita el loop fetchAll.
+    const [cuotasResp, pagosResp] = await Promise.all([
+      api.get<Paginated<PrestamoCuotaRow>>(
         `/prestamo-cuotas/?id_prestamo=${idPrestamo}&page_size=100&ordering=numero_cuota`,
       ),
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${idPrestamo}&page_size=100&ordering=fecha_pago,id_pago`),
+      api.get<Paginated<Pago>>(
+        `/pagos/?id_prestamo=${idPrestamo}&page_size=100&ordering=fecha_pago,id_pago`,
+      ),
     ])
-    cuotasPlan.value = cuotas
-    abonos.value = pagosRows
+    cuotasPlan.value = cuotasResp.data.results
+    abonos.value = pagosResp.data.results
   } catch {
     cuotasPlan.value = []
     abonos.value = []

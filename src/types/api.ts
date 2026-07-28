@@ -137,6 +137,8 @@ export interface Prestamo {
   dias_mora: number
   categoria_crediticia: string | null
   id_cliente: number
+  /** Nombre del cliente (viene del API; evita bajar el catálogo de clientes). */
+  cliente_nombre?: string | null
   id_usuario: number
   monto: string | number
   plazo: number
