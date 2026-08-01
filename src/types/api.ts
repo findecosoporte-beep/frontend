@@ -137,6 +137,8 @@ export interface Prestamo {
   dias_mora: number
   categoria_crediticia: string | null
   id_cliente: number
+  /** Nombre del cliente (viene del API; evita bajar el catálogo de clientes). */
+  cliente_nombre?: string | null
   id_usuario: number
   monto: string | number
   plazo: number
@@ -152,6 +154,12 @@ export interface Prestamo {
   fecha_vencimiento: string
   /** Registro del préstamo en el sistema (ISO datetime). */
   creado_en?: string | null
+  /** Usuario operativo que registró el préstamo (no confundir con id_usuario = asesor). */
+  creado_por?: number | null
+  creado_por_nombre?: string | null
+  modificado_por?: number | null
+  modificado_por_nombre?: string | null
+  actualizado_en?: string | null
 }
 
 /** Respuesta de GET /prestamos/reporte-integracion/ */
@@ -163,6 +171,7 @@ export interface ReporteIntegracionFila {
   fecha_vencimiento: string
   dias_mora: number
   saldo_inicial: string
+  monto?: string
   cuota: string
   saldo_actual: string
   ciclos: number
@@ -171,16 +180,25 @@ export interface ReporteIntegracionFila {
   forma_pago?: string
   sucursal: string
   plazo: number
+  plazo_total?: number | null
+  total_cuotas_plan?: number | null
   /** Primera cuota del plan sin pago registrado con documento «Cuota N». */
   cuota_siguiente_numero?: number | null
   cuota_siguiente_fecha?: string | null
   cuota_siguiente_monto?: string | null
+  cuota_siguiente_monto_programado?: string | null
+  cuota_siguiente_abonado?: string | null
+  cuota_anterior_numero?: number | null
+  cuota_anterior_abonado?: string | null
+  total_abono_anterior_mas_cuota?: string | null
   cuota_siguiente_capital?: string | null
   cuota_siguiente_interes?: string | null
   cuota_siguiente_saldo_capital?: string | null
   /** Cuotas vencidas sin pago completo (según plan y fecha de hoy). */
   cuotas_atrasadas?: number
   cuotas_atrasadas_numeros?: string
+  fecha_ultimo_pago?: string
+  monto_ultimo_pago?: string
   id_cartera?: number | null
   cartera_nombre?: string
   cartera_dia_cobro?: string
@@ -214,6 +232,7 @@ export interface ReporteIntegracionResponse {
 export interface PagoDistribucionLinea {
   cuota?: number
   abono_capital?: boolean
+  liquida_prestamo?: boolean
   capital?: string
   interes?: string
   mora?: string
@@ -286,6 +305,10 @@ export interface HistorialPagosCobrosFila {
   fecha_pago: string
   hora_pago?: string
   cobrado_en?: string | null
+  registrado_en?: string
+  registrado_por?: number | null
+  registrado_por_nombre?: string
+  registrado_por_etiqueta?: string
   documento: string | null
   capital: string
   interes: string
@@ -294,7 +317,9 @@ export interface HistorialPagosCobrosFila {
   numero_prestamo: string
   nombre_cliente: string
   dni_cliente: string
+  id_cartera?: number | null
   cartera_nombre: string
+  cartera_dia_cobro?: string
 }
 
 export interface HistorialPagosCobrosResponse {
@@ -523,4 +548,41 @@ export interface ReporteSarTrimestral {
   ingresos_intereses: string
   /** @deprecated usar ingresos */
   pagos_recibidos: string
+}
+
+export interface FacturasContabilidadFila {
+  id_pago: number
+  numero_factura: string
+  fecha_pago: string
+  hora_pago: string
+  nombre_cliente: string
+  dni_cliente: string
+  rtn_cliente: string
+  numero_prestamo: string
+  cartera_nombre: string
+  capital: string
+  interes: string
+  mora: string
+  total: string
+  monto_recibido: string
+  anulado: boolean
+  estado: string
+}
+
+/** GET /reportes/facturas-contabilidad/?modo=&fecha=&mes=&anio= */
+export interface FacturasContabilidadResponse {
+  modo: string
+  fecha_inicio: string
+  fecha_fin: string
+  generado_en?: string
+  cartera_etiqueta: string
+  incluir_anuladas: boolean
+  filas: FacturasContabilidadFila[]
+  resumen: {
+    registros: number
+    total_capital: string
+    total_interes: string
+    total_mora: string
+    total_cobrado: string
+  }
 }

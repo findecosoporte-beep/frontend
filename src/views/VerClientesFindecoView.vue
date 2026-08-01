@@ -7,21 +7,37 @@ import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import Fieldset from 'primevue/fieldset'
 import FloatLabel from 'primevue/floatlabel'
-import IconField from 'primevue/iconfield'
-import InputIcon from 'primevue/inputicon'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import RtnHondurasInput from '@/components/RtnHondurasInput.vue'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import { usePermissions } from '@/composables/usePermissions'
-import type { Cliente, DiaCobroCartera, Paginated } from '@/types/api'
+import {
+  esDniHnValido,
+  esRtnHnValidoOpcional,
+  mensajeDniHnInvalido,
+  mensajeRtnHnInvalido,
+  normalizarDniHn,
+  normalizarRtnHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
+import type { Cartera, Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
+const confirm = useConfirm()
 const { canWriteClientes } = usePermissions()
 
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
@@ -33,14 +49,25 @@ const pageSize = ref(20)
 /** Alineado con MAX_PAGE_SIZE del API */
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
 const loading = ref(false)
+const loadingCarteras = ref(false)
 const error = ref('')
-const search = ref('')
-let searchTimer: ReturnType<typeof setTimeout> | null = null
+const carteras = ref<Cartera[]>([])
+const carteraFiltro = ref<number | null>(null)
+const busqueda = ref('')
 
 const first = computed(() => (page.value - 1) * pageSize.value)
 
+const carteraOpciones = computed(() => [
+  { label: 'Todas las carteras', value: null as number | null },
+  ...carteras.value.map((c) => ({
+    label: `${c.nombre} (${etiquetaDiaCobro(c.dia_cobro)})`,
+    value: c.id_cartera as number | null,
+  })),
+])
+
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
+const deletingClienteId = ref<number | null>(null)
 const editForm = ref({
   id_cliente: 0,
   nombre: '',
@@ -94,13 +121,13 @@ function abrirEditar(data: Cliente) {
   editForm.value = {
     id_cliente: data.id_cliente,
     nombre: nullToEmpty(data.nombre),
-    dni: nullToEmpty(data.dni),
-    rtn: nullToEmpty(data.rtn),
-    telefono: nullToEmpty(data.telefono),
+    dni: normalizarDniHn(nullToEmpty(data.dni)),
+    rtn: normalizarRtnHn(nullToEmpty(data.rtn)),
+    telefono: normalizarTelefonoHn(nullToEmpty(data.telefono)),
     direccion_residencia: nullToEmpty(data.direccion_residencia),
     direccion_negocio: nullToEmpty(data.direccion_negocio),
     referencia_parentesco: nullToEmpty(data.referencia_parentesco),
-    referencia_telefono: nullToEmpty(data.referencia_telefono),
+    referencia_telefono: normalizarTelefonoHn(nullToEmpty(data.referencia_telefono)),
     referencia: nullToEmpty(data.referencia),
     actividad_economica: nullToEmpty(data.actividad_economica),
     dia_cobro_semanal: data.dia_cobro_semanal ?? null,
@@ -112,15 +139,80 @@ function cerrarEditar() {
   editDialogVisible.value = false
 }
 
+function confirmarEliminarCliente(data: Cliente) {
+  if (!canWriteClientes.value) return
+  const tienePrestamos = totalPrestamosCliente(data) > 0
+  confirm.require({
+    message: tienePrestamos
+      ? `«${data.nombre}» tiene préstamos registrados. No se podrá eliminar hasta que esos préstamos se anulen o eliminen. ¿Desea intentarlo de todos modos?`
+      : `¿Eliminar al cliente «${data.nombre}» (DNI ${data.dni})? Esta acción no se puede deshacer.`,
+    header: 'Eliminar cliente',
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Eliminar',
+    rejectLabel: 'Cancelar',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      deletingClienteId.value = data.id_cliente
+      try {
+        await api.delete(`/clientes/${data.id_cliente}/`)
+        toast.add({
+          severity: 'success',
+          summary: 'Cliente eliminado',
+          detail: 'Se eliminó el cliente correctamente.',
+          life: 3500,
+        })
+        if (editForm.value.id_cliente === data.id_cliente) {
+          cerrarEditar()
+        }
+        if (rows.value.length <= 1 && page.value > 1) {
+          page.value -= 1
+        }
+        await load()
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'No se pudo eliminar',
+          detail: getApiErrorMessage(
+            e,
+            'No se pudo eliminar el cliente. Si tiene préstamos u otros registros vinculados, elimínelos primero.',
+          ),
+          life: 7000,
+        })
+      } finally {
+        deletingClienteId.value = null
+      }
+    },
+  })
+}
+
 async function guardarEdicion() {
   const nombre = editForm.value.nombre.trim()
-  const dni = editForm.value.dni.trim()
+  const dni = normalizarDniHn(editForm.value.dni)
   const id = editForm.value.id_cliente
   if (!nombre || !dni || !id) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+  const rtn = normalizarRtnHn(editForm.value.rtn)
+  if (!esRtnHnValidoOpcional(rtn)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'RTN inválido',
+      detail: mensajeRtnHnInvalido(),
       life: 4500,
     })
     return
@@ -134,17 +226,28 @@ async function guardarEdicion() {
     })
     return
   }
+  const telefono = normalizarTelefonoHn(editForm.value.telefono)
+  const referenciaTelefono = normalizarTelefonoHn(editForm.value.referencia_telefono)
+  if (!esTelefonoHnValidoOpcional(telefono) || !esTelefonoHnValidoOpcional(referenciaTelefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
   savingEdit.value = true
   try {
     const payload = {
       nombre,
       dni,
-      rtn: emptyToNull(editForm.value.rtn),
-      telefono: emptyToNull(editForm.value.telefono),
+      rtn: rtn || null,
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(editForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(editForm.value.direccion_negocio),
       referencia_parentesco: emptyToNull(editForm.value.referencia_parentesco),
-      referencia_telefono: emptyToNull(editForm.value.referencia_telefono),
+      referencia_telefono: referenciaTelefono || null,
       referencia: emptyToNull(editForm.value.referencia),
       actividad_economica: emptyToNull(editForm.value.actividad_economica),
       dia_cobro_semanal: editForm.value.dia_cobro_semanal,
@@ -171,6 +274,18 @@ async function guardarEdicion() {
   }
 }
 
+async function cargarCarteras() {
+  loadingCarteras.value = true
+  try {
+    const { data } = await api.get<Paginated<Cartera>>('/carteras/?page_size=100&ordering=nombre')
+    carteras.value = data.results
+  } catch {
+    carteras.value = []
+  } finally {
+    loadingCarteras.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -179,8 +294,13 @@ async function load() {
       page: String(page.value),
       page_size: String(pageSize.value),
     })
-    const termino = search.value.trim()
-    if (termino) params.set('search', termino)
+    if (carteraFiltro.value != null) {
+      params.set('id_cartera', String(carteraFiltro.value))
+    }
+    const term = busqueda.value.trim()
+    if (term) {
+      params.set('search', term)
+    }
     const { data } = await api.get<Paginated<Cliente>>(`/clientes/?${params.toString()}`)
     total.value = data.count
     rows.value = data.results
@@ -199,22 +319,18 @@ function onPage(e: { page: number; first: number; rows: number }) {
   void load()
 }
 
-function onSearchInput() {
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    page.value = 1
-    void load()
-  }, 350)
-}
-
-function limpiarBusqueda() {
-  if (searchTimer) clearTimeout(searchTimer)
-  search.value = ''
+function onCarteraChange() {
   page.value = 1
   void load()
 }
 
-onMounted(() => {
+function buscarClientes() {
+  page.value = 1
+  void load()
+}
+
+onMounted(async () => {
+  await cargarCarteras()
   void load()
 })
 </script>
@@ -223,23 +339,35 @@ onMounted(() => {
   <div class="page page-twelve-col">
     <h1 class="title span-full">Ver Clientes Findeco</h1>
     <div class="span-full acciones">
-      <IconField icon-position="left" class="buscador">
-        <InputIcon class="pi pi-search" />
-        <InputText
-          v-model="search"
-          placeholder="Buscar por nombre, DNI, teléfono..."
+      <div class="filtro-cartera findeco-select-wrap">
+        <Select
+          v-model="carteraFiltro"
+          :options="carteraOpciones"
+          option-label="label"
+          option-value="value"
+          placeholder="Seleccionar cartera"
+          :loading="loadingCarteras"
+          :disabled="loadingCarteras"
           fluid
-          @input="onSearchInput"
-          @keyup.enter="onSearchInput"
+          @change="onCarteraChange"
         />
-        <InputIcon
-          v-if="search"
-          class="pi pi-times buscador-clear"
-          title="Limpiar búsqueda"
-          @click="limpiarBusqueda"
+      </div>
+      <div class="filtro-busqueda">
+        <InputText
+          v-model="busqueda"
+          placeholder="Buscar por nombre, apellido o DNI"
+          fluid
+          @keyup.enter="buscarClientes"
         />
-      </IconField>
-      <Button label="Actualizar tabla" icon="pi pi-refresh" severity="secondary" outlined :loading="loading" @click="load" />
+      </div>
+      <Button
+        label="Buscar"
+        icon="pi pi-search"
+        severity="secondary"
+        outlined
+        :loading="loading"
+        @click="buscarClientes"
+      />
     </div>
 
     <Message v-if="error" severity="error" class="msg span-full" :closable="false">{{ error }}</Message>
@@ -329,21 +457,36 @@ onMounted(() => {
         </Column>
         <Column
           v-if="canWriteClientes"
-          header=""
+          header="Acciones"
           :exportable="false"
-          :style="{ width: '2.75rem' }"
+          :style="{ width: '6.5rem' }"
         >
           <template #body="{ data }: { data: Cliente }">
-            <Button
-              icon="pi pi-pencil"
-              rounded
-              text
-              size="small"
-              severity="secondary"
-              title="Editar cliente"
-              :aria-label="`Editar cliente ${data.nombre}`"
-              @click="abrirEditar(data)"
-            />
+            <div class="acciones-cliente">
+              <Button
+                icon="pi pi-pencil"
+                rounded
+                text
+                size="small"
+                severity="secondary"
+                title="Editar cliente"
+                :aria-label="`Editar cliente ${data.nombre}`"
+                :disabled="deletingClienteId === data.id_cliente || savingEdit"
+                @click="abrirEditar(data)"
+              />
+              <Button
+                icon="pi pi-trash"
+                rounded
+                text
+                size="small"
+                severity="danger"
+                title="Eliminar cliente"
+                :aria-label="`Eliminar cliente ${data.nombre}`"
+                :loading="deletingClienteId === data.id_cliente"
+                :disabled="deletingClienteId != null || savingEdit"
+                @click="confirmarEliminarCliente(data)"
+              />
+            </div>
           </template>
         </Column>
       </DataTable>
@@ -365,15 +508,15 @@ onMounted(() => {
             <label for="edit-cli-nombre" class="lbl-mayus">Nombre</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-dni" v-model="editForm.dni" fluid autocomplete="off" />
+            <DniHondurasInput id="edit-cli-dni" v-model="editForm.dni" />
             <label for="edit-cli-dni" class="lbl-mayus">DNI</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-rtn" v-model="editForm.rtn" fluid autocomplete="off" />
+            <RtnHondurasInput id="edit-cli-rtn" v-model="editForm.rtn" />
             <label for="edit-cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
-            <InputText id="edit-cli-tel" v-model="editForm.telefono" fluid type="tel" autocomplete="tel" />
+            <TelefonoHondurasInput id="edit-cli-tel" v-model="editForm.telefono" />
             <label for="edit-cli-tel" class="lbl-mayus">Teléfono</label>
           </FloatLabel>
           <FloatLabel class="cliente-edit-cell">
@@ -404,12 +547,9 @@ onMounted(() => {
                   <label for="edit-cli-ref-parentesco" class="lbl-mayus">Parentesco</label>
                 </FloatLabel>
                 <FloatLabel class="ref-mini-cell">
-                  <InputText
+                  <TelefonoHondurasInput
                     id="edit-cli-ref-tel"
                     v-model="editForm.referencia_telefono"
-                    fluid
-                    type="tel"
-                    autocomplete="tel"
                   />
                   <label for="edit-cli-ref-tel" class="lbl-mayus">Teléfono referencia</label>
                 </FloatLabel>
@@ -467,17 +607,19 @@ onMounted(() => {
   margin-bottom: 0.25rem;
 }
 
-.buscador {
-  width: min(28rem, 100%);
+.filtro-cartera {
+  width: min(22rem, 100%);
 }
 
-.buscador :deep(.p-inputtext) {
-  width: 100%;
+.filtro-busqueda {
+  width: min(24rem, 100%);
+  flex: 1 1 14rem;
 }
 
-.buscador-clear {
-  cursor: pointer;
-  pointer-events: auto;
+.acciones-cliente {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
 }
 
 .estado {

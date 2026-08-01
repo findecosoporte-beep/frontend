@@ -11,16 +11,28 @@ import Message from 'primevue/message'
 import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
-import Tag from 'primevue/tag'
+import Textarea from 'primevue/textarea'
 import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
-import { formatDate, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
+import {
+  esDniHnValido,
+  mensajeDniHnInvalido,
+  normalizarDniHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
   interesTotalPctMensual,
@@ -38,26 +50,54 @@ import type {
   Prestamo,
   SimulacionPrestamo,
   UsuarioRow,
-  Zona,
 } from '@/types/api'
 
 const toast = useToast()
 const confirm = useConfirm()
-const { canWritePrestamos, canWriteClientes, canManageUsuarios } = usePermissions()
+const { canWritePrestamos, canWriteClientes, canManageUsuarios, canAnularPagos } = usePermissions()
+
+const eliminarForzadoVisible = ref(false)
+const eliminarForzadoLoading = ref(false)
+const eliminarForzadoComprobando = ref(false)
+const eliminarForzadoMotivo = ref('')
+const eliminarForzadoPrestamo = ref<Prestamo | null>(null)
 
 const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100]
-const prestamosList = ref<Prestamo[]>([])
+const prestamosList = ref<PrestamoFilaListado[]>([])
 const listLoading = ref(false)
 const listError = ref('')
 const listPage = ref(1)
 const listPageSize = ref(20)
 const listTotal = ref(0)
 const listSearch = ref('')
-const listFirst = computed(() => (listPage.value - 1) * listPageSize.value)
+const listadoPrimera = ref(0)
+const exportingExcel = ref(false)
+
+interface PrestamoFilaListado extends Prestamo {
+  nombre_cliente: string
+  cartera_nombre: string
+  estado_etiqueta: string
+  monto_texto: string
+  tasa_texto: string
+  plazo_texto: string
+  fecha_entrega_texto: string
+  registrado_texto: string
+  modificado_texto: string
+}
 
 const editDialogVisible = ref(false)
 const savingEdit = ref(false)
+/** True si el préstamo ya tiene cobros vigentes: bloquea campos del plan de cuotas. */
+const editPlanBloqueado = ref(false)
 const editingPrestamoId = ref<number | null>(null)
+const editAuditoria = ref<{
+  creado_en: string | null
+  creado_por: number | null
+  creado_por_nombre: string | null
+  actualizado_en: string | null
+  modificado_por: number | null
+  modificado_por_nombre: string | null
+} | null>(null)
 const editForm = ref({
   numero_prestamo: '',
   id_cliente: null as number | null,
@@ -96,7 +136,6 @@ const ESTADOS_PRESTAMO_ACTIVO = new Set(['activo', 'mora', 'pendiente_aprobacion
 const usuarioOptions = ref<
   Array<{ id_usuario: number; nombre: string; rol: string; label: string }>
 >([])
-const zonaOptions = ref<Zona[]>([])
 const carteraOptions = ref<
   Array<{ id_cartera: number; id_zona: number | null; dia_cobro: DiaCobroCartera; label: string }>
 >([])
@@ -401,14 +440,18 @@ function numField(value: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function nombreClienteListado(idCliente: number): string {
-  return clientesById.value[idCliente]?.nombre?.trim() || `Cliente #${idCliente}`
+function nombreClienteListado(idCliente: number, fallbackNombre?: string | null): string {
+  const cached = clientesById.value[idCliente]?.nombre?.trim()
+  if (cached) return cached
+  const fromApi = fallbackNombre?.trim()
+  if (fromApi) return fromApi
+  return `Cliente #${idCliente}`
 }
 
 function nombreCarteraListado(p: Prestamo): string {
-  const embebido = p.cartera?.nombre?.trim()
-  if (embebido) return embebido
-  const idC = p.id_cartera ?? null
+  const nested = p.cartera?.nombre?.trim()
+  if (nested) return nested
+  const idC = p.id_cartera
   if (idC == null) return '—'
   return carteraOptions.value.find((c) => c.id_cartera === idC)?.label?.split(' — ')[0] ?? `Cartera #${idC}`
 }
@@ -417,12 +460,40 @@ function etiquetaEstadoPrestamo(estado: string): string {
   return estadoEditOpts.find((o) => o.value === estado)?.label ?? estado
 }
 
-function severityEstadoPrestamo(estado: string) {
-  if (estado === 'activo') return 'success'
-  if (estado === 'mora') return 'danger'
-  if (estado === 'pagado') return 'info'
-  if (estado === 'cancelado') return 'secondary'
-  return 'warn'
+function descargarBlob(blob: Blob, nombre: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = nombre
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function exportarPrestamosExcel() {
+  exportingExcel.value = true
+  try {
+    const term = listSearch.value.trim()
+    const { data } = await api.get<Blob>('/prestamos/exportar-excel/', {
+      responseType: 'blob',
+      params: term ? { search: term } : undefined,
+    })
+    descargarBlob(data, 'prestamos_findeco.xlsx')
+    toast.add({
+      severity: 'success',
+      summary: 'Exportación lista',
+      detail: 'Se descargó el Excel con los préstamos.',
+      life: 3500,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo exportar',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    exportingExcel.value = false
+  }
 }
 
 function formatTasaPct(value: string | number | null | undefined): string {
@@ -431,11 +502,49 @@ function formatTasaPct(value: string | number | null | undefined): string {
   return `${n.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }
 
+function textoUsuarioAuditoria(
+  idUsuario: number | null | undefined,
+  nombre: string | null | undefined,
+): string {
+  if (idUsuario == null) return '—'
+  const etiqueta = nombre?.trim() || `Usuario #${idUsuario}`
+  return `${etiqueta} (ID ${idUsuario})`
+}
+
+function textoRegistroPrestamo(p: Prestamo): string {
+  if (!p.creado_en && p.creado_por == null) return '—'
+  const fecha = formatDateTime(p.creado_en)
+  const quien = textoUsuarioAuditoria(p.creado_por, p.creado_por_nombre)
+  return quien === '—' ? fecha : `${fecha} · ${quien}`
+}
+
+function textoUltimaModificacionPrestamo(p: Prestamo): string {
+  if (!p.actualizado_en && p.modificado_por == null) return '—'
+  const fecha = formatDateTime(p.actualizado_en)
+  const quien = textoUsuarioAuditoria(p.modificado_por, p.modificado_por_nombre)
+  return quien === '—' ? fecha : `${fecha} · ${quien}`
+}
+
 function resolveCobradorIdFromPrestamo(p: Prestamo): number | null {
   const nombre = (p.supervisor ?? '').trim().toLowerCase()
   if (!nombre) return null
   const hit = cobradorOptions.value.find((u) => u.nombre.trim().toLowerCase() === nombre)
   return hit?.id_usuario ?? null
+}
+
+function enriquecerFilaPrestamo(p: Prestamo): PrestamoFilaListado {
+  return {
+    ...p,
+    nombre_cliente: nombreClienteListado(p.id_cliente, p.cliente_nombre),
+    cartera_nombre: nombreCarteraListado(p),
+    estado_etiqueta: etiquetaEstadoPrestamo(p.estado),
+    monto_texto: formatMoney(p.monto),
+    tasa_texto: formatTasaPct(p.tasa_interes),
+    plazo_texto: String(p.plazo ?? ''),
+    fecha_entrega_texto: formatDate(p.fecha_entrega),
+    registrado_texto: textoRegistroPrestamo(p),
+    modificado_texto: textoUltimaModificacionPrestamo(p),
+  }
 }
 
 async function loadPrestamosList() {
@@ -450,8 +559,10 @@ async function loadPrestamosList() {
     const term = listSearch.value.trim()
     if (term) params.set('search', term)
     const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
-    prestamosList.value = data.results
     listTotal.value = data.count
+    if (typeof data.page === 'number') listPage.value = data.page
+    listadoPrimera.value = (listPage.value - 1) * listPageSize.value
+    prestamosList.value = data.results.map(enriquecerFilaPrestamo)
   } catch (e) {
     listError.value = getApiErrorMessage(e)
     prestamosList.value = []
@@ -461,19 +572,46 @@ async function loadPrestamosList() {
   }
 }
 
-function onListPage(event: { page: number; rows: number }) {
-  listPage.value = event.page + 1
-  listPageSize.value = event.rows
-  void loadPrestamosList()
-}
-
 function onListSearch() {
   listPage.value = 1
+  listadoPrimera.value = 0
   void loadPrestamosList()
 }
 
-function openEditPrestamo(row: Prestamo) {
+function limpiarBusquedaListado() {
+  listSearch.value = ''
+  listPage.value = 1
+  listadoPrimera.value = 0
+  void loadPrestamosList()
+}
+
+function onListadoPage(event: { page: number; first: number; rows: number }) {
+  if (listLoading.value) return
+  listPageSize.value = event.rows
+  listPage.value = Math.floor(event.first / event.rows) + 1
+  listadoPrimera.value = event.first
+  void loadPrestamosList()
+}
+
+async function prestamoTieneCobrosVigentes(idPrestamo: number): Promise<boolean> {
+  const { data } = await api.get<Paginated<{ id_pago: number; anulado?: boolean }>>(
+    `/pagos/?id_prestamo=${idPrestamo}&page_size=20`,
+  )
+  return data.results.some((p) => p.anulado !== true)
+}
+
+async function openEditPrestamo(row: Prestamo) {
+  await ensureCatalogosFormulario()
   editingPrestamoId.value = row.id_prestamo
+  editPlanBloqueado.value = false
+  editAuditoria.value = {
+    creado_en: row.creado_en ?? null,
+    creado_por: row.creado_por ?? null,
+    creado_por_nombre: row.creado_por_nombre ?? null,
+    actualizado_en: row.actualizado_en ?? null,
+    modificado_por: row.modificado_por ?? null,
+    modificado_por_nombre: row.modificado_por_nombre ?? null,
+  }
   editForm.value = {
     numero_prestamo: row.numero_prestamo?.trim() ?? '',
     id_cliente: row.id_cliente,
@@ -494,6 +632,11 @@ function openEditPrestamo(row: Prestamo) {
     ciclos: Number(row.ciclos) || 0,
   }
   editDialogVisible.value = true
+  try {
+    editPlanBloqueado.value = await prestamoTieneCobrosVigentes(row.id_prestamo)
+  } catch {
+    editPlanBloqueado.value = false
+  }
   if (!editForm.value.numero_prestamo.trim()) {
     void asignarNumeroPrestamoEditado()
   }
@@ -589,6 +732,8 @@ async function saveEditPrestamo() {
     await api.patch(`/prestamos/${editingPrestamoId.value}/`, buildEditPayload())
     toast.add({ severity: 'success', summary: 'Préstamo actualizado', life: 3000 })
     editDialogVisible.value = false
+    editAuditoria.value = null
+    editPlanBloqueado.value = false
     await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
@@ -597,7 +742,61 @@ async function saveEditPrestamo() {
   }
 }
 
-function confirmarEliminarPrestamo(row: Prestamo) {
+async function prestamoTieneCobrosOServicios(idPrestamo: number): Promise<boolean> {
+  const [pagosResp, serviciosResp] = await Promise.all([
+    api.get<Paginated<{ id_pago: number }>>(`/pagos/?id_prestamo=${idPrestamo}&page_size=1`),
+    api.get<Paginated<{ id_servicio: number }>>(`/servicios/?id_prestamo=${idPrestamo}&page_size=1`),
+  ])
+  const tienePagos = (pagosResp.data.count ?? pagosResp.data.results?.length ?? 0) > 0
+  const tieneServicios = (serviciosResp.data.count ?? serviciosResp.data.results?.length ?? 0) > 0
+  return tienePagos || tieneServicios
+}
+
+function abrirDialogoEliminarForzado(row: Prestamo) {
+  eliminarForzadoPrestamo.value = row
+  eliminarForzadoMotivo.value = ''
+  eliminarForzadoVisible.value = true
+}
+
+function cerrarDialogoEliminarForzado() {
+  eliminarForzadoVisible.value = false
+  eliminarForzadoPrestamo.value = null
+  eliminarForzadoMotivo.value = ''
+  eliminarForzadoLoading.value = false
+}
+
+async function confirmarEliminarForzado() {
+  const row = eliminarForzadoPrestamo.value
+  const motivo = eliminarForzadoMotivo.value.trim()
+  if (!row) return
+  if (!motivo) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Motivo requerido',
+      detail: 'Indique el motivo de la eliminación forzada.',
+      life: 4000,
+    })
+    return
+  }
+  eliminarForzadoLoading.value = true
+  try {
+    await api.post(`/prestamos/${row.id_prestamo}/eliminar-forzado/`, { motivo })
+    toast.add({
+      severity: 'success',
+      summary: 'Préstamo eliminado',
+      detail: 'Se anularon los cobros vigentes y se eliminó el préstamo.',
+      life: 4000,
+    })
+    cerrarDialogoEliminarForzado()
+    await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+  } finally {
+    eliminarForzadoLoading.value = false
+  }
+}
+
+function ejecutarEliminarSimple(row: Prestamo) {
   confirm.require({
     message: `¿Eliminar el préstamo ${row.numero_prestamo}? Esta acción no se puede deshacer.`,
     header: 'Confirmar eliminación',
@@ -611,10 +810,53 @@ function confirmarEliminarPrestamo(row: Prestamo) {
         toast.add({ severity: 'success', summary: 'Préstamo eliminado', life: 3000 })
         await Promise.all([loadPrestamosList(), cargarPrestamosParaRenovacion()])
       } catch (e) {
-        toast.add({ severity: 'error', summary: 'Error', detail: getApiErrorMessage(e), life: 6000 })
+        const detail = getApiErrorMessage(e)
+        if (canAnularPagos.value && /cobro|servicio|eliminar-forzado/i.test(detail)) {
+          abrirDialogoEliminarForzado(row)
+          toast.add({
+            severity: 'warn',
+            summary: 'Requiere eliminación forzada',
+            detail: 'El préstamo tiene cobros o servicios. Confirme con motivo para anularlos y eliminar.',
+            life: 5000,
+          })
+          return
+        }
+        toast.add({ severity: 'error', summary: 'Error', detail, life: 6000 })
       }
     },
   })
+}
+
+async function confirmarEliminarPrestamo(row: Prestamo) {
+  if (eliminarForzadoComprobando.value) return
+  eliminarForzadoComprobando.value = true
+  try {
+    const bloqueado = await prestamoTieneCobrosOServicios(row.id_prestamo)
+    if (!bloqueado) {
+      ejecutarEliminarSimple(row)
+      return
+    }
+    if (canAnularPagos.value) {
+      abrirDialogoEliminarForzado(row)
+      return
+    }
+    toast.add({
+      severity: 'warn',
+      summary: 'No se puede eliminar',
+      detail:
+        'Este préstamo tiene cobros o servicios. Un administrador o supervisor debe usar la eliminación forzada, o anule cobros en Historial de pagos.',
+      life: 7000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: getApiErrorMessage(e, 'No se pudo verificar cobros del préstamo.'),
+      life: 6000,
+    })
+  } finally {
+    eliminarForzadoComprobando.value = false
+  }
 }
 
 function aplicarReglasSemanalEdit() {
@@ -645,7 +887,9 @@ async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
 const zonaAsignadaNombre = computed(() => {
   const idZ = form.value.id_zona
   if (idZ == null) return ''
-  return zonaOptions.value.find((z) => z.id_zona === idZ)?.nombre ?? ''
+  const fromCartera = carteraOptions.value.find((c) => c.id_zona === idZ)
+  if (fromCartera) return fromCartera.label.split(' — ')[0] ?? ''
+  return ''
 })
 
 function mapClienteOption(r: Cliente) {
@@ -689,12 +933,21 @@ function abrirNuevoClienteModal() {
 
 async function guardarNuevoCliente() {
   const nombre = nuevoClienteForm.value.nombre.trim()
-  const dni = nuevoClienteForm.value.dni.trim()
+  const dni = normalizarDniHn(nuevoClienteForm.value.dni)
   if (!nombre || !dni) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
       life: 4500,
     })
     return
@@ -709,12 +962,23 @@ async function guardarNuevoCliente() {
     return
   }
 
+  const telefono = normalizarTelefonoHn(nuevoClienteForm.value.telefono)
+  if (!esTelefonoHnValidoOpcional(telefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+
   savingNuevoCliente.value = true
   try {
     const payload = {
       nombre,
       dni,
-      telefono: emptyToNull(nuevoClienteForm.value.telefono),
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(nuevoClienteForm.value.direccion_residencia),
       direccion_negocio: null,
       referencia_parentesco: null,
@@ -899,7 +1163,14 @@ function sincronizarCarteraDesdeCliente(idCliente: number | null) {
 }
 
 async function cargarPrestamosParaRenovacion() {
-  const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
+  // Solo estados relevantes (no descarga anulados/cancelados ni el catálogo completo).
+  const estados = ['activo', 'mora', 'pendiente_aprobacion', 'pagado'] as const
+  const lotes = await Promise.all(
+    estados.map((estado) =>
+      fetchAllPages<Prestamo>(`/prestamos/?estado=${estado}&page_size=100&ordering=-id_prestamo`),
+    ),
+  )
+  const prestamos = lotes.flat()
   prestamosRegistrados.value = prestamos
   const ids = new Set<number>()
   for (const p of prestamos) {
@@ -917,17 +1188,39 @@ function calcularCiclosRenovacion(idCliente: number): number {
   return maxCiclos + 1
 }
 
-function sincronizarCiclosDesdeCliente(idCliente: number | null) {
-  form.value.ciclos = idCliente == null ? 0 : calcularCiclosRenovacion(idCliente)
+async function sincronizarCiclosDesdeCliente(idCliente: number | null) {
+  if (idCliente == null) {
+    form.value.ciclos = 0
+    return
+  }
+  if (prestamosRegistrados.value.some((p) => p.id_cliente === idCliente)) {
+    form.value.ciclos = calcularCiclosRenovacion(idCliente)
+    return
+  }
+  try {
+    const delCliente = await fetchAllPages<Prestamo>(
+      `/prestamos/?id_cliente=${idCliente}&page_size=100&ordering=-id_prestamo`,
+    )
+    if (!delCliente.length) {
+      form.value.ciclos = 0
+      return
+    }
+    const maxCiclos = Math.max(...delCliente.map((p) => Number(p.ciclos) || 0))
+    form.value.ciclos = maxCiclos + 1
+  } catch {
+    form.value.ciclos = 0
+  }
 }
 
-async function loadOptions() {
-  const [clientes, usuarios, zonas, carteras] = await Promise.all([
+/** Catálogos pesados solo al abrir formularios (no al ver el listado). */
+let catalogosFormularioCargados = false
+
+async function ensureCatalogosFormulario() {
+  if (catalogosFormularioCargados) return
+  const [clientes, usuarios, carteras] = await Promise.all([
     fetchAllPages<Cliente>('/clientes/?page_size=100'),
     fetchAllPages<UsuarioRow>('/usuarios/?page_size=100'),
-    fetchAllPages<Zona>('/zonas/?page_size=100'),
     fetchAllPages<Cartera>('/carteras/?page_size=100'),
-    cargarPrestamosParaRenovacion(),
   ])
   clienteOptions.value = clientes
     .map(mapClienteOption)
@@ -936,7 +1229,6 @@ async function loadOptions() {
   usuarioOptions.value = usuarios
     .map(mapUsuarioOption)
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-  zonaOptions.value = zonas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
   carteraOptions.value = carteras
     .slice()
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
@@ -946,31 +1238,18 @@ async function loadOptions() {
       dia_cobro: c.dia_cobro,
       label: `${c.nombre} — ${diasCobroLabel[c.dia_cobro] ?? c.dia_cobro}`,
     }))
+  catalogosFormularioCargados = true
 }
 
 /**
- * Genera el siguiente número de préstamo tomando el mayor consecutivo existente.
- * Conserva el prefijo y el ancho (ceros a la izquierda) del último número usado.
+ * Genera el siguiente número de préstamo vía API (sin descargar el catálogo completo).
  */
 async function generarNumeroPrestamo(): Promise<string> {
   try {
-    const prestamos = await fetchAllPages<Prestamo>('/prestamos/?page_size=100')
-    let maxSeq = 0
-    let prefijo = 'PR-'
-    let ancho = 5
-    for (const p of prestamos) {
-      const numero = (p.numero_prestamo ?? '').trim()
-      const m = numero.match(/^(.*?)(\d+)$/)
-      if (!m) continue
-      const seq = Number.parseInt(m[2], 10)
-      if (!Number.isFinite(seq)) continue
-      if (seq > maxSeq) {
-        maxSeq = seq
-        prefijo = m[1] ?? ''
-        ancho = m[2].length
-      }
-    }
-    return `${prefijo}${String(maxSeq + 1).padStart(ancho, '0')}`
+    const { data } = await api.get<{ numero_prestamo: string }>('/prestamos/siguiente-numero/')
+    const numero = data.numero_prestamo?.trim()
+    if (numero) return numero
+    return `PR-${Date.now()}`
   } catch {
     return `PR-${Date.now()}`
   }
@@ -1002,12 +1281,18 @@ async function regenerarNumeroPrestamoEdit() {
   await asignarNumeroPrestamoEditado()
 }
 
-async function prepararDialogoPrestamo(idCliente: number | null) {
+async function prepararDialogoPrestamo(
+  idCliente: number | null,
+  opts?: { skipRenovacionLoad?: boolean },
+) {
   simulacion.value = null
   simulacionError.value = ''
   simulacionNotice.value = ''
   simulationSignature.value = ''
-  await cargarPrestamosParaRenovacion()
+  await ensureCatalogosFormulario()
+  if (!opts?.skipRenovacionLoad) {
+    await cargarPrestamosParaRenovacion()
+  }
   form.value = {
     numero_prestamo: '',
     id_cliente: idCliente,
@@ -1029,7 +1314,7 @@ async function prepararDialogoPrestamo(idCliente: number | null) {
     ciclos: 0,
   }
   sincronizarCarteraDesdeCliente(form.value.id_cliente)
-  sincronizarCiclosDesdeCliente(form.value.id_cliente)
+  await sincronizarCiclosDesdeCliente(form.value.id_cliente)
   aplicarReglasTasaPeriodo()
   wizardStep.value = 1
   dialogVisible.value = true
@@ -1043,6 +1328,7 @@ async function openCreate() {
 
 async function openRenovacion() {
   formularioModo.value = 'renovar'
+  await ensureCatalogosFormulario()
   await cargarPrestamosParaRenovacion()
   if (!clienteOptionsRenovacion.value.length) {
     toast.add({
@@ -1053,7 +1339,9 @@ async function openRenovacion() {
     })
     return
   }
-  await prepararDialogoPrestamo(clienteOptionsRenovacion.value[0]?.id_cliente ?? null)
+  await prepararDialogoPrestamo(clienteOptionsRenovacion.value[0]?.id_cliente ?? null, {
+    skipRenovacionLoad: true,
+  })
 }
 
 function goToNextStep() {
@@ -1089,7 +1377,7 @@ watch(
   () => form.value.id_cliente,
   (idCliente) => {
     sincronizarCarteraDesdeCliente(idCliente)
-    sincronizarCiclosDesdeCliente(idCliente)
+    void sincronizarCiclosDesdeCliente(idCliente)
   },
 )
 
@@ -1246,7 +1534,7 @@ function valorPrint(value: string | null | undefined, fallback = 'N/A'): string 
 function buildPrintClienteSection(): string {
   const cliente = clienteCalculoDetalle.value
   const cartera = carteraOptions.value.find((c) => c.id_cartera === form.value.id_cartera)
-  const zona = zonaOptions.value.find((z) => z.id_zona === form.value.id_zona)
+  const zonaNombre = cartera?.label?.split(' — ')[0] ?? ''
   const formaPagoLabel =
     formaPagoOpts.find((o) => o.value === form.value.forma_pago)?.label ?? form.value.forma_pago
   const plazoUnidad = form.value.forma_pago === 'semanal' ? 'semanas' : 'meses'
@@ -1280,7 +1568,7 @@ function buildPrintClienteSection(): string {
             <div><strong>Fecha entrega:</strong> ${form.value.fecha_entrega ? escapeHtml(formatDate(form.value.fecha_entrega)) : 'N/A'}</div>
             <div><strong>Fecha vencimiento:</strong> ${fechaVencimientoCalculada.value ? escapeHtml(formatDate(fechaVencimientoCalculada.value)) : 'N/A'}</div>
             <div><strong>Cartera:</strong> ${valorPrint(cartera?.label.split(' — ')[0])}</div>
-            <div><strong>Zona:</strong> ${valorPrint(zona?.nombre)}</div>
+            <div><strong>Zona:</strong> ${valorPrint(zonaNombre)}</div>
             <div><strong>Asesor:</strong> ${asesor ? escapeHtml(asesor) : 'N/A'}</div>
             <div><strong>Cobrador:</strong> ${cobrador ? escapeHtml(cobrador) : 'N/A'}</div>
           </div>
@@ -1495,13 +1783,8 @@ async function save() {
   }
 }
 
-onMounted(async () => {
-  try {
-    await loadOptions()
-    await loadPrestamosList()
-  } catch (e) {
-    toast.add({ severity: 'warn', summary: 'Opciones', detail: getApiErrorMessage(e), life: 5000 })
-  }
+onMounted(() => {
+  void loadPrestamosList()
 })
 
 watch(
@@ -1535,8 +1818,8 @@ watch(
 </script>
 
 <template>
-  <div class="page">
-    <div class="prestamos-header">
+  <div class="page page-twelve-col">
+    <div class="prestamos-header span-full">
       <h1 class="title">Préstamos</h1>
       <div v-if="canWritePrestamos" class="prestamos-header-actions">
         <Button label="Nuevo préstamo" icon="pi pi-plus" @click="openCreate" />
@@ -1550,7 +1833,7 @@ watch(
       </div>
     </div>
 
-    <section class="prestamos-listado">
+    <section class="prestamos-listado panel-tabla tabla-width-full">
       <div class="listado-toolbar">
         <InputText
           v-model="listSearch"
@@ -1560,6 +1843,13 @@ watch(
         />
         <Button label="Buscar" icon="pi pi-search" severity="secondary" @click="onListSearch" />
         <Button
+          label="Limpiar búsqueda"
+          icon="pi pi-filter-slash"
+          severity="secondary"
+          outlined
+          @click="limpiarBusquedaListado"
+        />
+        <Button
           label="Actualizar"
           icon="pi pi-refresh"
           severity="secondary"
@@ -1567,54 +1857,99 @@ watch(
           :loading="listLoading"
           @click="loadPrestamosList"
         />
+        <Button
+          label="Exportar Excel"
+          icon="pi pi-file-excel"
+          severity="secondary"
+          outlined
+          :loading="exportingExcel"
+          @click="exportarPrestamosExcel"
+        />
       </div>
 
       <Message v-if="listError" severity="error" class="listado-msg" :closable="false">{{ listError }}</Message>
 
       <DataTable
+        v-model:first="listadoPrimera"
         :value="prestamosList"
         lazy
         paginator
-        :first="listFirst"
         :rows="listPageSize"
-        :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
         :total-records="listTotal"
+        :rows-per-page-options="ROWS_PER_PAGE_OPTIONS"
         :loading="listLoading"
         data-key="id_prestamo"
         responsive-layout="scroll"
-        striped-rows
         size="small"
-        class="prestamos-tabla"
-        @page="onListPage"
+        class="prestamos-tabla datatable-prestamos"
+        paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
+        current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
+        @page="onListadoPage"
       >
-        <Column header="Nº préstamo" :style="{ minWidth: '9rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ data.numero_prestamo || data.id_prestamo }}</template>
-        </Column>
-        <Column header="Cliente" :style="{ minWidth: '12rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ nombreClienteListado(data.id_cliente) }}</template>
-        </Column>
-        <Column header="Cartera" :style="{ minWidth: '9rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ nombreCarteraListado(data) }}</template>
-        </Column>
-        <Column header="Monto" :style="{ minWidth: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
-        </Column>
-        <Column header="Plazo" :style="{ width: '5rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
-        </Column>
-        <Column header="Tasa" :style="{ width: '6rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
-        </Column>
-        <Column header="Estado" :style="{ width: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">
-            <Tag :value="etiquetaEstadoPrestamo(data.estado)" :severity="severityEstadoPrestamo(data.estado)" />
+        <Column
+          field="numero_prestamo"
+          header="Nº préstamo"
+          :style="{ minWidth: '9rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            {{ data.numero_prestamo || data.id_prestamo }}
           </template>
         </Column>
-        <Column header="Entrega" :style="{ minWidth: '8rem' }">
-          <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
+        <Column
+          field="nombre_cliente"
+          header="Cliente"
+          :style="{ minWidth: '12rem' }"
+        />
+        <Column
+          field="cartera_nombre"
+          header="Cartera"
+          :style="{ minWidth: '9rem' }"
+        />
+        <Column
+          field="monto_texto"
+          header="Monto"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="plazo_texto"
+          header="Plazo"
+          :style="{ width: '5.5rem' }"
+        />
+        <Column
+          field="tasa_texto"
+          header="Tasa"
+          :style="{ width: '6.5rem' }"
+        />
+        <Column
+          field="estado_etiqueta"
+          header="Estado"
+          :style="{ width: '9rem' }"
+        />
+        <Column
+          field="fecha_entrega_texto"
+          header="Entrega"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="registrado_texto"
+          header="Registrado"
+          :style="{ minWidth: '11rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            <span class="auditoria-celda">{{ data.registrado_texto }}</span>
+          </template>
         </Column>
-        <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }">
-          <template #body="{ data }: { data: Prestamo }">
+        <Column
+          field="modificado_texto"
+          header="Última modificación"
+          :style="{ minWidth: '11rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            <span class="auditoria-celda">{{ data.modificado_texto }}</span>
+          </template>
+        </Column>
+        <Column v-if="canWritePrestamos" header="Acciones" :style="{ width: '7rem' }" :exportable="false">
+          <template #body="{ data }: { data: PrestamoFilaListado }">
             <div class="acciones-tabla">
               <Button
                 icon="pi pi-pencil"
@@ -1630,6 +1965,7 @@ watch(
                 text
                 rounded
                 aria-label="Eliminar préstamo"
+                :loading="eliminarForzadoComprobando"
                 @click="confirmarEliminarPrestamo(data)"
               />
             </div>
@@ -1637,6 +1973,49 @@ watch(
         </Column>
       </DataTable>
     </section>
+
+    <Dialog
+      v-model:visible="eliminarForzadoVisible"
+      modal
+      header="Eliminar préstamo y anular cobros"
+      :style="{ width: 'min(32rem, 95vw)' }"
+      @hide="cerrarDialogoEliminarForzado"
+    >
+      <p v-if="eliminarForzadoPrestamo" class="eliminar-forzado-aviso">
+        El préstamo <strong>{{ eliminarForzadoPrestamo.numero_prestamo }}</strong> tiene cobros o
+        servicios. Se anularán los cobros vigentes, se borrarán pagos/servicios y se eliminará el
+        préstamo. Esta acción no se puede deshacer.
+      </p>
+      <div class="eliminar-forzado-field">
+        <label for="motivo-eliminar-forzado">Motivo</label>
+        <Textarea
+          id="motivo-eliminar-forzado"
+          v-model="eliminarForzadoMotivo"
+          rows="3"
+          auto-resize
+          class="w-full"
+          placeholder="Ej.: préstamo cargado por error, cliente duplicado…"
+        />
+      </div>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          text
+          type="button"
+          :disabled="eliminarForzadoLoading"
+          @click="cerrarDialogoEliminarForzado"
+        />
+        <Button
+          label="Anular cobros y eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          type="button"
+          :loading="eliminarForzadoLoading"
+          @click="() => void confirmarEliminarForzado()"
+        />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"
@@ -2070,6 +2449,31 @@ watch(
           </div>
           <small class="hint-text">Número asignado automáticamente por el sistema.</small>
         </div>
+        <div class="full prestamo-auditoria-panel">
+          <p class="auditoria-titulo">Trazabilidad</p>
+          <div class="auditoria-grid">
+            <div>
+              <span class="auditoria-label">Creado</span>
+              <span class="auditoria-valor">{{ formatDateTime(editAuditoria?.creado_en) }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Creado por</span>
+              <span class="auditoria-valor">{{
+                textoUsuarioAuditoria(editAuditoria?.creado_por, editAuditoria?.creado_por_nombre)
+              }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Última modificación</span>
+              <span class="auditoria-valor">{{ formatDateTime(editAuditoria?.actualizado_en) }}</span>
+            </div>
+            <div>
+              <span class="auditoria-label">Modificado por</span>
+              <span class="auditoria-valor">{{
+                textoUsuarioAuditoria(editAuditoria?.modificado_por, editAuditoria?.modificado_por_nombre)
+              }}</span>
+            </div>
+          </div>
+        </div>
         <div>
           <label class="lbl" for="ep-estado">Estado</label>
           <Select
@@ -2109,6 +2513,10 @@ watch(
             fluid
           />
         </div>
+        <div v-if="editPlanBloqueado" class="full hint-plan-bloqueado">
+          Este préstamo ya tiene cobros: monto, plazo, tasa, forma de pago, fecha de entrega y cartera
+          no se pueden cambiar (el plan de cuotas queda bloqueado).
+        </div>
         <div>
           <label class="lbl" for="ep-cartera">Cartera</label>
           <Select
@@ -2117,16 +2525,25 @@ watch(
             :options="carteraOptions"
             option-label="label"
             option-value="id_cartera"
+            :disabled="editPlanBloqueado"
             fluid
           />
         </div>
         <div>
           <label class="lbl" for="ep-monto">Monto</label>
-          <InputNumber id="ep-monto" v-model="editForm.monto" mode="currency" currency="HNL" locale="es-HN" fluid />
+          <InputNumber
+            id="ep-monto"
+            v-model="editForm.monto"
+            mode="currency"
+            currency="HNL"
+            locale="es-HN"
+            :disabled="editPlanBloqueado"
+            fluid
+          />
         </div>
         <div>
           <label class="lbl" for="ep-plazo">{{ editForm.forma_pago === 'semanal' ? 'Plazo (semanas)' : 'Plazo (meses)' }}</label>
-          <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid />
+          <InputNumber id="ep-plazo" v-model="editForm.plazo" :min="1" fluid disabled />
         </div>
         <div>
           <label class="lbl" for="ep-tasa">{{
@@ -2141,7 +2558,9 @@ watch(
             v-model="editForm.tasa_interes"
             :min-fraction-digits="2"
             :max-fraction-digits="2"
-            :disabled="editForm.forma_pago === 'semanal' || editForm.forma_pago === 'mensual'"
+            :disabled="
+              editPlanBloqueado || editForm.forma_pago === 'semanal' || editForm.forma_pago === 'mensual'
+            "
             fluid
           />
         </div>
@@ -2153,6 +2572,7 @@ watch(
             :options="formaPagoOpts"
             option-label="label"
             option-value="value"
+            :disabled="editPlanBloqueado"
             fluid
           />
         </div>
@@ -2173,7 +2593,13 @@ watch(
         </div>
         <div>
           <label class="lbl" for="ep-entrega">Fecha entrega</label>
-          <InputText id="ep-entrega" v-model="editForm.fecha_entrega" type="date" fluid />
+          <InputText
+            id="ep-entrega"
+            v-model="editForm.fecha_entrega"
+            type="date"
+            :disabled="editPlanBloqueado"
+            fluid
+          />
         </div>
         <div>
           <label class="lbl" for="ep-producto">Producto</label>
@@ -2208,11 +2634,11 @@ watch(
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-dni">DNI</label>
-          <InputText id="np-cli-dni" v-model="nuevoClienteForm.dni" fluid autocomplete="off" />
+          <DniHondurasInput id="np-cli-dni" v-model="nuevoClienteForm.dni" />
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-tel">Teléfono</label>
-          <InputText id="np-cli-tel" v-model="nuevoClienteForm.telefono" fluid type="tel" autocomplete="tel" />
+          <TelefonoHondurasInput id="np-cli-tel" v-model="nuevoClienteForm.telefono" />
         </div>
         <div class="nuevo-cliente-field">
           <label for="np-cli-dia">Día de cobro semanal</label>
@@ -2364,9 +2790,31 @@ watch(
 </template>
 
 <style scoped>
-.page {
-  max-width: min(100%, 88rem);
+/* Grid de 12 columnas; la tabla usa ancho completo (igual que Ver Clientes). */
+.page-twelve-col {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  align-content: start;
+  max-width: 100%;
   width: 100%;
+}
+
+.span-full {
+  grid-column: 1 / -1;
+}
+
+.tabla-width-full {
+  grid-column: 1 / -1;
+}
+
+.panel-tabla {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }
 
 .prestamos-header {
@@ -2375,7 +2823,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.25rem;
 }
 
 .prestamos-header-actions {
@@ -2394,12 +2842,8 @@ watch(
 }
 
 .prestamos-listado {
-  margin-bottom: 1.5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.5rem;
+  margin-bottom: 0;
   padding: 1rem;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }
 
 .listado-toolbar {
@@ -2419,8 +2863,19 @@ watch(
   margin-bottom: 0.75rem;
 }
 
-.prestamos-tabla :deep(.p-datatable-wrapper) {
+.datatable-prestamos :deep(.p-datatable-wrapper) {
+  overflow-x: auto;
   border-radius: 0.45rem;
+}
+
+.datatable-prestamos :deep(table) {
+  width: 100%;
+  min-width: 78rem;
+}
+
+.prestamos-tabla :deep(.p-datatable-filter-row .p-inputtext) {
+  width: 100%;
+  font-size: 0.8rem;
 }
 
 .acciones-tabla {
@@ -2634,6 +3089,76 @@ watch(
 
 .sim-table :deep(.p-datatable-table) {
   min-width: 36rem;
+}
+
+.auditoria-celda {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.prestamo-auditoria-panel {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--p-content-border-color, #e2e8f0);
+  border-radius: 8px;
+  background: var(--p-surface-50, #f8fafc);
+}
+
+.auditoria-titulo {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.hint-plan-bloqueado {
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.auditoria-grid {
+  display: grid;
+  gap: 0.55rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.auditoria-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--p-text-muted-color, #64748b);
+}
+
+.auditoria-valor {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--p-text-color, #0f172a);
+}
+
+.eliminar-forzado-aviso {
+  margin: 0 0 1rem;
+  line-height: 1.45;
+  color: var(--p-text-color, #0f172a);
+}
+
+.eliminar-forzado-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.eliminar-forzado-field label {
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 @media (max-width: 1100px) {

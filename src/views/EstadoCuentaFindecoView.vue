@@ -11,8 +11,11 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
-import { formatDate, formatMoney, formatTime } from '@/utils/format'
-import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
+import { esDniHnValido, mensajeDniHnInvalido, normalizarDniHn } from '@/utils/documentoHonduras'
+import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
+import { formatDate, formatMoney } from '@/utils/format'
 import { pendienteCuota } from '@/utils/cobroPago'
 import {
   buildFilasCuotaEstado,
@@ -20,11 +23,17 @@ import {
 } from '@/utils/estadoCuotaFilas'
 import {
   abonadoPorCuotaDesdeMovimientos,
-  abonosCapitalDesdePagos,
 } from '@/utils/movimientosPago'
-import EstadoCuentaPdfDialog from '@/components/EstadoCuentaPdfDialog.vue'
-import { compartirEstadoCuentaPdf, fetchEstadoCuentaPdfBlob } from '@/utils/estadoCuentaPdf'
-import type { Cartera, Cliente, Paginated, Pago, Prestamo, PrestamoCuotaRow } from '@/types/api'
+import { totalInteresDesdeCondiciones } from '@/utils/prestamoCalc'
+import type {
+  Cartera,
+  Cliente,
+  Paginated,
+  Pago,
+  Prestamo,
+  PrestamoCuotaRow,
+  ReporteIntegracionResponse,
+} from '@/types/api'
 
 const toast = useToast()
 
@@ -53,9 +62,9 @@ const clienteActivo = ref<Cliente | null>(null)
 const cuotasPlan = ref<PrestamoCuotaRow[]>([])
 const abonos = ref<Pago[]>([])
 const historialPrestamos = ref<Prestamo[]>([])
+const saldoActualPorPrestamoId = ref<Record<number, number>>({})
 const loadingPlan = ref(false)
 const loadingHistorialPrestamos = ref(false)
-const facturaAbriendoId = ref<number | null>(null)
 const pdfEstadoCuentaVisible = ref(false)
 const pdfCompartiendo = ref(false)
 
@@ -91,21 +100,43 @@ const historialPrestamosOrdenado = computed(() =>
   }),
 )
 
-async function verFacturaPago(idPago: number) {
-  facturaAbriendoId.value = idPago
-  try {
-    await abrirFacturaPago(idPago)
-  } catch (e) {
-    toast.add({
-      severity: 'error',
-      summary: 'Factura',
-      detail: getApiErrorMessage(e),
-      life: 5000,
-    })
-  } finally {
-    facturaAbriendoId.value = null
-  }
+interface FilaHistorialPrestamo {
+  id_prestamo: number
+  prestamo: string
+  monto: number
+  interes: number
+  plazo: number
+  tasa: number
+  producto: string
+  saldo: number
+  estado: string
 }
+
+const filasHistorialPrestamos = computed((): FilaHistorialPrestamo[] =>
+  historialPrestamosOrdenado.value.map((p) => {
+    const monto = numMonto(p.monto)
+    const tasa = numMonto(p.tasa_interes)
+    const plazo = Number(p.plazo) || 0
+    const interes = totalInteresDesdeCondiciones(monto, plazo, p.forma_pago || 'mensual', tasa)
+    const saldoReportado = saldoActualPorPrestamoId.value[p.id_prestamo]
+    let saldo = saldoReportado
+    if (saldo == null) {
+      if (p.estado === 'pagado' || p.estado === 'cancelado') saldo = 0
+      else saldo = monto
+    }
+    return {
+      id_prestamo: p.id_prestamo,
+      prestamo: p.numero_prestamo?.trim() || String(p.id_prestamo),
+      monto,
+      interes,
+      plazo,
+      tasa,
+      producto: p.producto?.trim() || '—',
+      saldo,
+      estado: p.estado ?? '',
+    }
+  }),
+)
 
 async function verEstadoFinancieroPdf() {
   if (idPrestamoActivo.value == null) return
@@ -173,14 +204,112 @@ const pagosOrdenados = computed(() =>
 )
 
 const abonadoPorCuota = computed(() => abonadoPorCuotaDesdeMovimientos(pagosOrdenados.value))
-const abonosCapital = computed(() => abonosCapitalDesdePagos(pagosOrdenados.value))
+
+interface FilaAbonoRegistrado {
+  n: number
+  id_pago: number
+  fecha_pago: string
+  documento: string
+  capital: number
+  interes: number
+  total: number
+  saldo_capital: number
+}
+
+function etiquetaDocumentoAbono(p: Pago): string {
+  const detalle = p.detalle_distribucion
+  if (detalle?.length) {
+    const partes: string[] = []
+    for (const linea of detalle) {
+      if (linea.abono_capital) {
+        partes.push(linea.liquida_prestamo ? 'Abono a capital (liquida)' : 'Abono a capital')
+        continue
+      }
+      if (linea.cuota == null) continue
+      const base = `Cuota ${linea.cuota}`
+      partes.push(linea.parcial ? `${base} (parcial)` : base)
+    }
+    const unicas = [...new Set(partes)]
+    if (unicas.length) return unicas.join(', ')
+  }
+  const doc = (p.documento ?? '').trim()
+  return doc || `Pago ${p.id_pago}`
+}
+
+const filasAbonosRegistrados = computed((): FilaAbonoRegistrado[] => {
+  const montoInicial = numMonto(prestamoActivo.value?.monto)
+  let saldoCapital = montoInicial
+  const conteoDocumento = new Map<string, number>()
+  return pagosOrdenados.value
+    .filter((p) => !p.anulado)
+    .map((p, index) => {
+      const capital = numMonto(p.capital)
+      const interes = numMonto(p.interes)
+      const mora = numMonto(p.mora)
+      saldoCapital = Math.round(Math.max(0, saldoCapital - capital) * 100) / 100
+      let documento = etiquetaDocumentoAbono(p)
+      const claveDoc = documento.toLowerCase()
+      const visto = (conteoDocumento.get(claveDoc) ?? 0) + 1
+      conteoDocumento.set(claveDoc, visto)
+      // Sin detalle_distribucion, dos cobros con el mismo documento se distinguen.
+      if (visto > 1 && !(p.detalle_distribucion && p.detalle_distribucion.length)) {
+        documento = `${documento} (${visto})`
+      }
+      return {
+        n: index + 1,
+        id_pago: p.id_pago,
+        fecha_pago: p.fecha_pago,
+        documento,
+        capital,
+        interes,
+        total: Math.round((capital + interes + mora) * 100) / 100,
+        saldo_capital: saldoCapital,
+      }
+    })
+})
 
 const filasCuotasEstado = computed((): FilaCuotaEstado[] =>
   buildFilasCuotaEstado(cuotasPlan.value, abonos.value),
 )
 
 const cuotasPendientes = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pendiente'))
-const cuotasPagadas = computed(() => filasCuotasEstado.value.filter((f) => f.estado === 'pagada'))
+
+const totalesPlanPagos = computed(() => {
+  let capital = 0
+  let interes = 0
+  let total = 0
+  for (const fila of filasCuotasEstado.value) {
+    capital += numMonto(fila.capital_programado)
+    interes += numMonto(fila.interes_programado)
+    total += numMonto(fila.total_programado)
+  }
+  const ultima = filasCuotasEstado.value[filasCuotasEstado.value.length - 1]
+  return {
+    capital: Math.round(capital * 100) / 100,
+    interes: Math.round(interes * 100) / 100,
+    total: Math.round(total * 100) / 100,
+    /** Saldo tras la última cuota (no es suma de saldos intermedios). */
+    saldoCapital: ultima ? numMonto(ultima.saldo_capital_programado) : 0,
+  }
+})
+
+const totalesAbonos = computed(() => {
+  let capital = 0
+  let interes = 0
+  let total = 0
+  for (const fila of filasAbonosRegistrados.value) {
+    capital += fila.capital
+    interes += fila.interes
+    total += fila.total
+  }
+  const ultima = filasAbonosRegistrados.value[filasAbonosRegistrados.value.length - 1]
+  return {
+    capital: Math.round(capital * 100) / 100,
+    interes: Math.round(interes * 100) / 100,
+    total: Math.round(total * 100) / 100,
+    saldoCapital: ultima ? ultima.saldo_capital : 0,
+  }
+})
 
 const totalesPlanDesembolso = computed(() => {
   let capital = 0
@@ -389,6 +518,14 @@ const resumenSaldos = computed((): { filas: FilaResumenSaldos[]; fechaPagoVencid
   return { filas, fechaPagoVencido }
 })
 
+/** Sello visual sobre la tabla de saldos cuando el préstamo está liquidado. */
+const mostrarSelloPagado = computed(() => {
+  if (estadoPrestamoActivo.value === 'pagado') return true
+  const total = resumenSaldos.value.filas.find((f) => f.esTotal)
+  if (!total) return false
+  return total.inicial > 0 && total.actual <= 0.009
+})
+
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
   let nextUrl: string | null = initialPath
@@ -439,19 +576,38 @@ function textoCarteraDesdePrestamo(p: Prestamo): string {
 async function cargarHistorialPrestamos(idCliente: number) {
   loadingHistorialPrestamos.value = true
   historialPrestamos.value = []
+  saldoActualPorPrestamoId.value = {}
   try {
-    historialPrestamos.value = await fetchAllPages<Prestamo>(
-      `/prestamos/?id_cliente=${idCliente}&page_size=100&ordering=-fecha_entrega,-id_prestamo`,
-    )
+    // Un cliente suele tener pocos préstamos: una página basta; no hay que bajar el catálogo global.
+    const [prestamosResp, reporte] = await Promise.all([
+      api.get<Paginated<Prestamo>>(
+        `/prestamos/?id_cliente=${idCliente}&page_size=50&ordering=-fecha_entrega,-id_prestamo`,
+      ),
+      api
+        .get<ReporteIntegracionResponse>(
+          `/prestamos/reporte-integracion/?id_cliente=${idCliente}&all=1`,
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    ])
+    historialPrestamos.value = prestamosResp.data.results
+    const saldos: Record<number, number> = {}
+    for (const fila of reporte?.filas ?? []) {
+      saldos[fila.id_prestamo] = Number.parseFloat(fila.saldo_actual) || 0
+    }
+    saldoActualPorPrestamoId.value = saldos
   } catch {
     historialPrestamos.value = []
+    saldoActualPorPrestamoId.value = {}
   } finally {
     loadingHistorialPrestamos.value = false
   }
 }
 
-async function seleccionarPrestamoHistorial(p: Prestamo) {
-  if (p.id_prestamo === idPrestamoActivo.value) return
+async function seleccionarPrestamoHistorial(idPrestamo: number) {
+  if (idPrestamo === idPrestamoActivo.value) return
+  const p = historialPrestamos.value.find((row) => row.id_prestamo === idPrestamo)
+  if (!p) return
   await ensureCarterasCargadas()
   idPrestamoActivo.value = p.id_prestamo
   estadoPrestamoActivo.value = p.estado ?? null
@@ -467,14 +623,17 @@ async function cargarPlanYPagos(idPrestamo: number) {
   cuotasPlan.value = []
   abonos.value = []
   try {
-    const [cuotas, pagosRows] = await Promise.all([
-      fetchAllPages<PrestamoCuotaRow>(
+    // Cuotas/pagos de UN préstamo: page_size alto en una sola petición evita el loop fetchAll.
+    const [cuotasResp, pagosResp] = await Promise.all([
+      api.get<Paginated<PrestamoCuotaRow>>(
         `/prestamo-cuotas/?id_prestamo=${idPrestamo}&page_size=100&ordering=numero_cuota`,
       ),
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${idPrestamo}&page_size=100&ordering=fecha_pago,id_pago`),
+      api.get<Paginated<Pago>>(
+        `/pagos/?id_prestamo=${idPrestamo}&page_size=100&ordering=fecha_pago,id_pago`,
+      ),
     ])
-    cuotasPlan.value = cuotas
-    abonos.value = pagosRows
+    cuotasPlan.value = cuotasResp.data.results
+    abonos.value = pagosResp.data.results
   } catch {
     cuotasPlan.value = []
     abonos.value = []
@@ -594,7 +753,12 @@ async function buscarPorCliente() {
 async function buscarPorIdentidad() {
   const v = requiereValor(campos.value.identidad, 'IDENTIDAD')
   if (v == null) return
-  const { data } = await api.get<Paginated<Cliente>>(`/clientes/?dni=${encodeURIComponent(v)}&page_size=5`)
+  const dni = normalizarDniHn(v)
+  if (!esDniHnValido(dni)) {
+    error.value = mensajeDniHnInvalido()
+    return
+  }
+  const { data } = await api.get<Paginated<Cliente>>(`/clientes/?dni=${encodeURIComponent(dni)}&page_size=5`)
   if (!data.results.length) {
     error.value = 'No se encontró cliente con esa identidad.'
     return
@@ -676,6 +840,7 @@ async function buscarPorCampo(campo: CampoBusqueda) {
   cuotasPlan.value = []
   abonos.value = []
   historialPrestamos.value = []
+  saldoActualPorPrestamoId.value = {}
   loading.value = true
   try {
     if (campo === 'n') await buscarPorNumeroPrestamo()
@@ -708,6 +873,7 @@ function limpiarFormulario() {
   cuotasPlan.value = []
   abonos.value = []
   historialPrestamos.value = []
+  saldoActualPorPrestamoId.value = {}
   pdfEstadoCuentaVisible.value = false
 }
 
@@ -744,7 +910,7 @@ function limpiarFormulario() {
           </div>
           <div class="fila-busqueda">
             <span class="ficha-label">IDENTIDAD:</span>
-            <InputText v-model="campos.identidad" class="fila-input" placeholder="DNI / identidad" :disabled="loading" />
+            <DniHondurasInput v-model="campos.identidad" class="fila-input" placeholder="DNI / identidad" :disabled="loading" />
           </div>
           <div class="fila-busqueda">
             <span class="ficha-label">TELEFONO:</span>
@@ -901,7 +1067,14 @@ function limpiarFormulario() {
             </div>
           </section>
 
-          <div class="ec-tabla-saldos-wrap">
+          <div class="ec-tabla-saldos-wrap" :class="{ 'ec-tabla-saldos-wrap--pagado': mostrarSelloPagado }">
+            <div
+              v-if="mostrarSelloPagado"
+              class="ec-sello-pagado"
+              aria-label="Préstamo pagado"
+            >
+              PAGADO
+            </div>
             <table class="ec-tabla-saldos">
               <thead>
                 <tr>
@@ -934,194 +1107,179 @@ function limpiarFormulario() {
           </div>
 
           <div class="seccion-tablas">
-            <h2 class="subtitulo">Cuotas pendientes</h2>
-            <p v-if="!loadingPlan && !cuotasPendientes.length" class="tabla-vacia">
-              No hay cuotas pendientes en el plan de pago.
+            <h2 class="subtitulo">Plan de pagos</h2>
+            <p v-if="!loadingPlan && !filasCuotasEstado.length" class="tabla-vacia">
+              Este préstamo no tiene plan de pagos registrado.
             </p>
             <DataTable
               v-else
-              :value="cuotasPendientes"
+              :value="filasCuotasEstado"
               data-key="numero_cuota"
               class="tabla-plan"
               size="small"
               :loading="loadingPlan"
             >
-              <Column field="numero_cuota" header="N" />
+              <Column field="numero_cuota" header="N">
+                <template #footer>
+                  <strong>TOTAL</strong>
+                </template>
+              </Column>
               <Column header="Fecha programada">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatDate(data.fecha_programada) }}
                 </template>
+                <template #footer>—</template>
               </Column>
-              <Column header="Fecha canceló">
-                <template #body>—</template>
+              <Column header="Capital">
+                <template #body="{ data }: { data: FilaCuotaEstado }">
+                  {{ formatMoney(data.capital_programado) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesPlanPagos.capital) }}</strong>
+                </template>
               </Column>
-              <Column header="CUOTA">
+              <Column header="Interés">
+                <template #body="{ data }: { data: FilaCuotaEstado }">
+                  {{ formatMoney(data.interes_programado) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesPlanPagos.interes) }}</strong>
+                </template>
+              </Column>
+              <Column header="Total cuota + interés">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.total_programado) }}
                 </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesPlanPagos.total) }}</strong>
+                </template>
               </Column>
-              <Column header="SALDO">
+              <Column header="Saldo capital">
                 <template #body="{ data }: { data: FilaCuotaEstado }">
                   {{ formatMoney(data.saldo_capital_programado) }}
                 </template>
-              </Column>
-              <Column header="ESTADO">
-                <template #body>
-                  <span class="estado-cuota-texto">Pendiente</span>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesPlanPagos.saldoCapital) }}</strong>
                 </template>
               </Column>
             </DataTable>
 
-            <h2 class="subtitulo subtitulo--segundo">Cuotas pagadas</h2>
-            <p v-if="!loadingPlan && !cuotasPagadas.length" class="tabla-vacia">
-              Aún no hay cuotas pagadas registradas en este préstamo.
+            <h2 class="subtitulo subtitulo--segundo">Abonos</h2>
+            <p v-if="!loadingPlan && !filasAbonosRegistrados.length" class="tabla-vacia">
+              No hay abonos registrados en este préstamo.
             </p>
             <DataTable
               v-else
-              :value="cuotasPagadas"
-              data-key="numero_cuota"
-              class="tabla-plan"
-              size="small"
-              :loading="loadingPlan"
-            >
-              <Column field="numero_cuota" header="N" />
-              <Column header="Fecha programada">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  {{ formatDate(data.fecha_programada) }}
-                </template>
-              </Column>
-              <Column header="Fecha canceló">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  {{ data.fecha_pago ? formatDate(data.fecha_pago) : '—' }}
-                </template>
-              </Column>
-              <Column header="HORA">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
-                </template>
-              </Column>
-              <Column header="CUOTA">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  {{ formatMoney(data.total_programado) }}
-                </template>
-              </Column>
-              <Column header="DOCUMENTO">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  {{ data.documento || `Cuota ${data.numero_cuota}` }}
-                </template>
-              </Column>
-              <Column header="FACTURA">
-                <template #body="{ data }: { data: FilaCuotaEstado }">
-                  <Button
-                    v-if="data.id_pago && !esPagoFacturaSecundario(data)"
-                    icon="pi pi-file-pdf"
-                    label="Ver factura"
-                    size="small"
-                    severity="secondary"
-                    outlined
-                    :loading="facturaAbriendoId === data.id_pago"
-                    :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                    @click="verFacturaPago(data.id_pago)"
-                  />
-                  <span v-else class="texto-muted">—</span>
-                </template>
-              </Column>
-            </DataTable>
-
-            <h2 class="subtitulo subtitulo--segundo">Abonos a capital</h2>
-            <p v-if="!loadingPlan && !abonosCapital.length" class="tabla-vacia">
-              No hay abonos a capital registrados en este préstamo.
-            </p>
-            <DataTable
-              v-else
-              :value="abonosCapital"
+              :value="filasAbonosRegistrados"
               data-key="id_pago"
               class="tabla-abonos-capital tabla-plan"
               size="small"
               :loading="loadingPlan"
             >
+              <Column field="n" header="N">
+                <template #footer>
+                  <strong>TOTAL</strong>
+                </template>
+              </Column>
               <Column header="Fecha">
-                <template #body="{ data }">
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
                   {{ formatDate(data.fecha_pago) }}
                 </template>
-              </Column>
-              <Column header="Hora">
-                <template #body="{ data }">
-                  {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
-                </template>
-              </Column>
-              <Column header="Monto">
-                <template #body="{ data }">
-                  {{ formatMoney(data.total) }}
-                </template>
+                <template #footer>—</template>
               </Column>
               <Column header="Documento">
-                <template #body="{ data }">
-                  {{ data.documento || 'Abono a capital' }}
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
+                  {{ data.documento }}
+                </template>
+                <template #footer>
+                  <strong>Abonado</strong>
                 </template>
               </Column>
-              <Column header="Factura">
-                <template #body="{ data }">
-                  <Button
-                    icon="pi pi-file-pdf"
-                    label="Ver factura"
-                    size="small"
-                    severity="secondary"
-                    outlined
-                    :loading="facturaAbriendoId === data.id_pago"
-                    :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                    @click="verFacturaPago(data.id_pago)"
-                  />
+              <Column header="Capital">
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
+                  {{ formatMoney(data.capital) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.capital) }}</strong>
+                </template>
+              </Column>
+              <Column header="Interés">
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
+                  {{ formatMoney(data.interes) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.interes) }}</strong>
+                </template>
+              </Column>
+              <Column header="Total">
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
+                  {{ formatMoney(data.total) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.total) }}</strong>
+                </template>
+              </Column>
+              <Column header="Saldo capital">
+                <template #body="{ data }: { data: FilaAbonoRegistrado }">
+                  {{ formatMoney(data.saldo_capital) }}
+                </template>
+                <template #footer>
+                  <strong>{{ formatMoney(totalesAbonos.saldoCapital) }}</strong>
                 </template>
               </Column>
             </DataTable>
 
             <h2 class="subtitulo subtitulo--segundo">Historial de préstamos</h2>
-            <p v-if="!loadingHistorialPrestamos && !historialPrestamosOrdenado.length" class="tabla-vacia">
+            <p v-if="!loadingHistorialPrestamos && !filasHistorialPrestamos.length" class="tabla-vacia">
               No hay préstamos registrados para este cliente.
             </p>
             <DataTable
               v-else
-              :value="historialPrestamosOrdenado"
+              :value="filasHistorialPrestamos"
               data-key="id_prestamo"
               class="tabla-abonos tabla-ec-fin tabla-historial-prestamos"
               size="small"
               striped-rows
               :loading="loadingHistorialPrestamos"
-              :row-class="(data: Prestamo) => (data.id_prestamo === idPrestamoActivo ? 'fila-prestamo-activo' : '')"
+              :row-class="(data: FilaHistorialPrestamo) => (data.id_prestamo === idPrestamoActivo ? 'fila-prestamo-activo' : '')"
             >
-              <Column header="Nº" :style="{ width: '14%' }">
-                <template #body="{ data }: { data: Prestamo }">
-                  {{ data.numero_prestamo || data.id_prestamo }}
+              <Column header="Préstamo">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
+                  {{ data.prestamo }}
                 </template>
               </Column>
-              <Column header="FECHA ENTREGA" :style="{ width: '14%' }">
-                <template #body="{ data }: { data: Prestamo }">
-                  {{ formatDate(data.fecha_entrega) }}
-                </template>
-              </Column>
-              <Column header="MONTO" :style="{ width: '14%' }">
-                <template #body="{ data }: { data: Prestamo }">
+              <Column header="Monto">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
                   {{ formatMoney(data.monto) }}
                 </template>
               </Column>
-              <Column header="PLAZO" :style="{ width: '10%' }">
-                <template #body="{ data }: { data: Prestamo }">
+              <Column header="Interés">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
+                  {{ formatMoney(data.interes) }}
+                </template>
+              </Column>
+              <Column header="Plazo">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
                   {{ data.plazo }}
                 </template>
               </Column>
-              <Column header="CARTERA" :style="{ width: '18%' }">
-                <template #body="{ data }: { data: Prestamo }">
-                  {{ textoCarteraDesdePrestamo(data) || '—' }}
+              <Column header="Tasa">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
+                  {{ data.tasa }}%
                 </template>
               </Column>
-              <Column header="ESTADO" :style="{ width: '16%' }">
-                <template #body="{ data }: { data: Prestamo }">
-                  <Tag :severity="severidadEstadoPrestamo(data.estado)" :value="etiquetaEstadoPrestamo(data.estado)" />
+              <Column header="Producto">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
+                  {{ data.producto }}
                 </template>
               </Column>
-              <Column header="ACCIÓN" :style="{ width: '14%' }">
-                <template #body="{ data }: { data: Prestamo }">
+              <Column header="Saldo">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
+                  {{ formatMoney(data.saldo) }}
+                </template>
+              </Column>
+              <Column header="Acción" :style="{ width: '7rem' }">
+                <template #body="{ data }: { data: FilaHistorialPrestamo }">
                   <Tag v-if="data.id_prestamo === idPrestamoActivo" severity="info" value="Actual" />
                   <Button
                     v-else
@@ -1129,7 +1287,7 @@ function limpiarFormulario() {
                     size="small"
                     severity="secondary"
                     outlined
-                    @click="seleccionarPrestamoHistorial(data)"
+                    @click="seleccionarPrestamoHistorial(data.id_prestamo)"
                   />
                 </template>
               </Column>
@@ -1137,7 +1295,7 @@ function limpiarFormulario() {
           </div>
         </template>
         <div v-else class="placeholder-resultados" aria-hidden="true">
-          <p>Las cuotas pendientes, pagadas y el historial de préstamos aparecerán aquí después de localizar un préstamo.</p>
+          <p>El plan de pagos, los abonos y el historial de préstamos aparecerán aquí después de localizar un préstamo.</p>
         </div>
       </div>
     </div>
@@ -1309,8 +1467,36 @@ function limpiarFormulario() {
 }
 
 .ec-tabla-saldos-wrap {
+  position: relative;
   margin-bottom: 1.15rem;
   overflow-x: auto;
+}
+
+.ec-tabla-saldos-wrap--pagado {
+  overflow: hidden;
+}
+
+.ec-sello-pagado {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  font-size: clamp(2.75rem, 8vw, 4.5rem);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  color: rgba(185, 28, 28, 0.55);
+  text-transform: uppercase;
+  border: 4px solid rgba(185, 28, 28, 0.45);
+  border-radius: 0.35rem;
+  padding: 0.4rem 1.15rem;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .ec-tabla-saldos {
@@ -1498,9 +1684,29 @@ function limpiarFormulario() {
   background: #fff;
 }
 
+.tabla-plan :deep(.p-datatable-tfoot > tr > td) {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #cbd5e1;
+  text-align: center;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
 .estado-cuota-texto {
   color: #334155;
   font-size: 0.88rem;
+}
+
+.estado-cuota-texto--pagada {
+  color: #047857;
+  font-weight: 600;
+}
+
+.estado-cuota-texto--pendiente {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .tabla-abonos {

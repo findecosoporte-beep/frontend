@@ -2,7 +2,6 @@ import { jsPDF } from 'jspdf'
 
 export interface DesembolsosFindecoPdfPrestamoRow {
   numero: number
-  codigo: string
   cliente: string
   fechaEntrega: string
   monto: string
@@ -11,27 +10,28 @@ export interface DesembolsosFindecoPdfPrestamoRow {
   interes: string
 }
 
-export interface DesembolsosFindecoPdfFilaFecha {
-  fecha: string
-  cantidad: number
-  monto: string
-  interes: string
+export interface DesembolsosFindecoPdfEmisor {
+  razonSocial: string
+  nombreComercial: string
+  rtn: string
+  direccion: string
+  ciudad: string
+  telefono: string
+  correo: string
 }
 
 export interface DesembolsosFindecoPdfBloque {
   nombreCartera: string
-  cantidad: number
-  montoTotal: string
-  interesTotal: string
-  porFecha: DesembolsosFindecoPdfFilaFecha[]
   prestamos: DesembolsosFindecoPdfPrestamoRow[]
+  totales: { cantidad: number; monto: string; interes: string }
 }
 
 export interface DesembolsosFindecoPdfData {
   titulo: string
   carteraTitulo: string
   etiquetaPeriodo: string
-  totales: { cantidad: number; monto: string; interes: string }
+  emisor: DesembolsosFindecoPdfEmisor
+  logoDataUrl?: string | null
   bloques: DesembolsosFindecoPdfBloque[]
 }
 
@@ -121,77 +121,124 @@ function drawTextCell(
 
 function drawTable(
   doc: jsPDF,
-  startY: number,
+  y: number,
   columns: TableColumn[],
   rows: string[][],
-  options?: { headerFill?: boolean; bodyFontSize?: number },
+  options?: { bodyFontSize?: number; boldLastRow?: boolean },
 ): number {
-  const pageW = doc.internal.pageSize.getWidth()
-  const tableW = pageW - MARGIN * 2
-  const scaledWidths = scaledColumnWidths(doc, columns)
   const bodyFontSize = options?.bodyFontSize ?? FONT_BODY
+  const boldLastRow = options?.boldLastRow === true
+  const widths = scaledColumnWidths(doc, columns)
 
-  let y = startY
-
-  const measureRowHeight = (cells: string[], header = false): number => {
-    const fontSize = header ? FONT_SMALL : bodyFontSize
-    let rowH = ROW_H_MIN
-    cells.forEach((cell, i) => {
-      rowH = Math.max(rowH, measureCellHeight(doc, cell, scaledWidths[i], fontSize))
-    })
-    return rowH
-  }
-
-  const drawHeader = () => {
-    const headerCells = columns.map((col) => col.header)
-    const headerH = measureRowHeight(headerCells, true)
-    y = ensureSpace(doc, y, headerH + 2)
-    let x = MARGIN
-    if (options?.headerFill !== false) {
-      doc.setFillColor(235, 235, 235)
-      doc.rect(MARGIN, y, tableW, headerH, 'FD')
-    } else {
-      doc.rect(MARGIN, y, tableW, headerH, 'D')
+  function drawHeaderRow(startY: number): number {
+    let headerH = ROW_H_MIN
+    for (let i = 0; i < columns.length; i += 1) {
+      headerH = Math.max(headerH, measureCellHeight(doc, columns[i].header, widths[i], FONT_BODY))
     }
-    columns.forEach((col, i) => {
-      if (i > 0) {
-        doc.line(x, y, x, y + headerH)
-      }
-      drawTextCell(doc, col.header, x, y, scaledWidths[i], headerH, col.align ?? 'left', true, FONT_SMALL)
-      x += scaledWidths[i]
-    })
-    y += headerH
+    startY = ensureSpace(doc, startY, headerH + 1)
+    let x = MARGIN
+    for (let i = 0; i < columns.length; i += 1) {
+      doc.rect(x, startY, widths[i], headerH)
+      drawTextCell(doc, columns[i].header, x, startY, widths[i], headerH, columns[i].align ?? 'left', true)
+      x += widths[i]
+    }
+    return startY + headerH
   }
 
-  drawHeader()
+  y = drawHeaderRow(y)
 
-  for (const row of rows) {
-    const rowH = measureRowHeight(row)
-    y = ensureSpace(doc, y, rowH + 2)
+  rows.forEach((row, rowIndex) => {
+    const isLast = boldLastRow && rowIndex === rows.length - 1
+    let rowH = ROW_H_MIN
+    for (let i = 0; i < columns.length; i += 1) {
+      rowH = Math.max(rowH, measureCellHeight(doc, row[i] ?? '', widths[i], bodyFontSize))
+    }
+    const pageH = doc.internal.pageSize.getHeight()
+    if (y + rowH > pageH - MARGIN) {
+      doc.addPage()
+      y = MARGIN
+      y = drawHeaderRow(y)
+    }
     let x = MARGIN
-    doc.setFillColor(255, 255, 255)
-    doc.rect(MARGIN, y, tableW, rowH, 'D')
-    row.forEach((cell, i) => {
-      if (i > 0) {
-        doc.line(x, y, x, y + rowH)
-      }
+    for (let i = 0; i < columns.length; i += 1) {
+      doc.rect(x, y, widths[i], rowH)
       drawTextCell(
         doc,
-        cell,
+        row[i] ?? '',
         x,
         y,
-        scaledWidths[i],
+        widths[i],
         rowH,
-        columns[i]?.align ?? 'left',
-        false,
+        columns[i].align ?? 'left',
+        isLast,
         bodyFontSize,
       )
-      x += scaledWidths[i]
-    })
+      x += widths[i]
+    }
     y += rowH
+  })
+
+  return y + 2
+}
+
+function drawCenteredText(doc: jsPDF, text: string, y: number, fontSize: number, bold = false): number {
+  const pageW = doc.internal.pageSize.getWidth()
+  doc.setFont('helvetica', bold ? 'bold' : 'normal')
+  doc.setFontSize(fontSize)
+  const lines = doc.splitTextToSize(text, pageW - MARGIN * 2) as string[]
+  const lh = lineHeightForFont(fontSize) + 0.6
+  for (const line of lines) {
+    const tw = doc.getTextWidth(line)
+    doc.text(line, (pageW - tw) / 2, y)
+    y += lh
+  }
+  return y
+}
+
+function drawLogoAndEmisor(doc: jsPDF, data: DesembolsosFindecoPdfData): number {
+  const pageW = doc.internal.pageSize.getWidth()
+  let y = MARGIN
+
+  if (data.logoDataUrl) {
+    const maxW = 48
+    const maxH = 16
+    try {
+      const format = data.logoDataUrl.includes('image/jpeg') ? 'JPEG' : 'PNG'
+      doc.addImage(data.logoDataUrl, format, (pageW - maxW) / 2, y, maxW, maxH, undefined, 'FAST')
+      y += maxH + 3
+    } catch {
+      // Si el logo no carga, continuar solo con texto.
+    }
   }
 
-  return y + 3
+  const emisor = data.emisor
+  const razon = emisor.razonSocial.trim() || 'FINDECO'
+  y = drawCenteredText(doc, razon, y + 2, 11, true)
+
+  const comercial = emisor.nombreComercial.trim()
+  if (comercial && comercial.toLowerCase() !== razon.toLowerCase()) {
+    y = drawCenteredText(doc, comercial, y + 0.5, 8, false)
+  }
+
+  const lineasContacto: string[] = []
+  if (emisor.rtn.trim()) lineasContacto.push(`RTN: ${emisor.rtn.trim()}`)
+  if (emisor.telefono.trim()) lineasContacto.push(`Tel: ${emisor.telefono.trim()}`)
+  if (emisor.ciudad.trim()) lineasContacto.push(emisor.ciudad.trim())
+  if (lineasContacto.length) {
+    y = drawCenteredText(doc, lineasContacto.join('  ·  '), y + 0.8, 7.5, false)
+  }
+  if (emisor.direccion.trim()) {
+    y = drawCenteredText(doc, emisor.direccion.trim(), y + 0.4, 7.5, false)
+  }
+  if (emisor.correo.trim()) {
+    y = drawCenteredText(doc, emisor.correo.trim(), y + 0.4, 7.5, false)
+  }
+
+  y += 2
+  doc.setLineWidth(0.4)
+  doc.line(MARGIN, y, pageW - MARGIN, y)
+  doc.setLineWidth(0.15)
+  return y + 6
 }
 
 function drawSectionTitle(doc: jsPDF, y: number, text: string): number {
@@ -205,39 +252,19 @@ function drawSectionTitle(doc: jsPDF, y: number, text: string): number {
   return y + 7
 }
 
-function drawSubtitle(doc: jsPDF, y: number, text: string): number {
-  y = ensureSpace(doc, y, 8)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(FONT_BODY)
-  doc.text(text, MARGIN, y)
-  return y + 5
-}
-
 export function generateDesembolsosFindecoPdf(data: DesembolsosFindecoPdfData): Blob {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' })
   applyReportStyle(doc)
 
   const pageW = doc.internal.pageSize.getWidth()
+  let y = drawLogoAndEmisor(doc, data)
 
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(FONT_TITLE)
-  const titleW = doc.getTextWidth(data.titulo)
-  doc.text(data.titulo, (pageW - titleW) / 2, MARGIN + 4)
+  y = drawCenteredText(doc, data.titulo, y, FONT_TITLE, true)
+  y += 2
 
-  doc.setLineWidth(0.4)
-  doc.line(MARGIN, MARGIN + 7, pageW - MARGIN, MARGIN + 7)
-  doc.setLineWidth(0.15)
-
-  let y = MARGIN + 13
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(FONT_BODY)
-  const meta = [
-    `Cartera: ${data.carteraTitulo}`,
-    `Periodo: ${data.etiquetaPeriodo}`,
-    `Préstamos: ${data.totales.cantidad}`,
-    `Monto: ${data.totales.monto}`,
-    `Interés: ${data.totales.interes}`,
-  ].join('  ·  ')
+  const meta = [`Cartera: ${data.carteraTitulo}`, `Periodo: ${data.etiquetaPeriodo}`].join('  ·  ')
   const metaLines = doc.splitTextToSize(meta, pageW - MARGIN * 2) as string[]
   for (const line of metaLines) {
     doc.text(line, MARGIN, y)
@@ -245,60 +272,42 @@ export function generateDesembolsosFindecoPdf(data: DesembolsosFindecoPdfData): 
   }
   y += 2
 
-  y = drawSectionTitle(doc, y, 'Resumen por cartera')
-  y = drawTable(
-    doc,
-    y,
-    [
-      { header: 'Cartera', width: 50, align: 'left' },
-      { header: 'Préstamos', width: 18, align: 'right' },
-      { header: 'Monto', width: 28, align: 'right' },
-      { header: 'Interés', width: 28, align: 'right' },
-    ],
-    data.bloques.map((b) => [b.nombreCartera, String(b.cantidad), b.montoTotal, b.interesTotal]),
-  )
-
   for (const bloque of data.bloques) {
     y = drawSectionTitle(doc, y + 2, bloque.nombreCartera)
-
-    y = drawSubtitle(doc, y, 'Desglose por día de entrega')
+    const filas = bloque.prestamos.map((p) => [
+      String(p.numero),
+      p.cliente,
+      p.fechaEntrega,
+      p.monto,
+      p.tasa,
+      p.plazo,
+      p.interes,
+    ])
+    if (bloque.prestamos.length > 0) {
+      filas.push([
+        String(bloque.totales.cantidad),
+        'TOTAL',
+        '',
+        bloque.totales.monto,
+        '',
+        '',
+        bloque.totales.interes,
+      ])
+    }
     y = drawTable(
       doc,
       y,
       [
-        { header: 'Fecha', width: 30, align: 'left' },
-        { header: 'Préstamos', width: 18, align: 'right' },
+        { header: 'N', width: 10, align: 'center' },
+        { header: 'Nombre', width: 90, align: 'left' },
+        { header: 'Entrega', width: 22, align: 'center' },
         { header: 'Monto', width: 28, align: 'right' },
+        { header: 'Tasa', width: 18, align: 'right' },
+        { header: 'Plazo', width: 14, align: 'center' },
         { header: 'Interés', width: 28, align: 'right' },
       ],
-      bloque.porFecha.map((f) => [f.fecha, String(f.cantidad), f.monto, f.interes]),
-    )
-
-    y = drawSubtitle(doc, y, 'Detalle')
-    y = drawTable(
-      doc,
-      y,
-      [
-        { header: 'N', width: 8, align: 'center' },
-        { header: 'Nº préstamo', width: 22, align: 'left' },
-        { header: 'Nombre', width: 72, align: 'left' },
-        { header: 'Entrega', width: 18, align: 'center' },
-        { header: 'Monto', width: 24, align: 'right' },
-        { header: 'Tasa', width: 14, align: 'right' },
-        { header: 'Plazo', width: 12, align: 'center' },
-        { header: 'Interés', width: 24, align: 'right' },
-      ],
-      bloque.prestamos.map((p) => [
-        String(p.numero),
-        p.codigo,
-        p.cliente,
-        p.fechaEntrega,
-        p.monto,
-        p.tasa,
-        p.plazo,
-        p.interes,
-      ]),
-      { bodyFontSize: FONT_SMALL },
+      filas,
+      { bodyFontSize: FONT_SMALL, boldLastRow: bloque.prestamos.length > 0 },
     )
   }
 

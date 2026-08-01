@@ -63,6 +63,11 @@ const router = createRouter({
           component: () => import('@/views/HistorialPagosCobrosView.vue'),
         },
         {
+          path: 'cobros/historial-facturas',
+          name: 'historial-facturas-cobros',
+          component: () => import('@/views/HistorialFacturasCobrosView.vue'),
+        },
+        {
           path: 'pagos',
           redirect: { name: 'cobros' },
         },
@@ -74,16 +79,6 @@ const router = createRouter({
           path: 'usuarios',
           name: 'usuarios',
           component: () => import('@/views/UsuariosView.vue'),
-        },
-        {
-          path: 'configuracion/facturacion-sar',
-          name: 'configuracion-facturacion-sar',
-          component: () => import('@/views/ConfiguracionFacturacionView.vue'),
-        },
-        {
-          path: 'reportes/sar-trimestral',
-          name: 'reporte-sar-trimestral',
-          component: () => import('@/views/ReporteSarView.vue'),
         },
       ],
     },

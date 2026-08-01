@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
+import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -14,7 +15,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import type {
   AnularPagoResponse,
   Cartera,
@@ -46,6 +47,7 @@ const MESES = [
 
 const modoOpciones = [
   { label: 'Por día', value: 'dia' as const },
+  { label: 'Por semana', value: 'semana' as const },
   { label: 'Por mes', value: 'mes' as const },
   { label: 'Por año', value: 'anio' as const },
 ]
@@ -57,8 +59,29 @@ function hoyIso(): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-const modo = ref<'dia' | 'mes' | 'anio'>('dia')
+function isoDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/** Lunes y domingo de la semana que contiene la fecha de referencia. */
+function rangoSemanaActual(refIso = hoyIso()): { inicio: string; fin: string } {
+  const ref = new Date(`${refIso}T12:00:00`)
+  const day = ref.getDay() // 0=dom … 6=sáb
+  const diffLunes = day === 0 ? -6 : 1 - day
+  const lunes = new Date(ref)
+  lunes.setDate(ref.getDate() + diffLunes)
+  const domingo = new Date(lunes)
+  domingo.setDate(lunes.getDate() + 6)
+  return { inicio: isoDate(lunes), fin: isoDate(domingo) }
+}
+
+const modo = ref<'dia' | 'semana' | 'mes' | 'anio'>('semana')
 const fechaDia = ref(hoyIso())
+const semanaRangoInicial = rangoSemanaActual()
+const fechaInicioSemana = ref(semanaRangoInicial.inicio)
+const fechaFinSemana = ref(semanaRangoInicial.fin)
 const mes = ref(new Date().getMonth() + 1)
 const anio = ref(new Date().getFullYear())
 const carteraFiltro = ref<number | null>(null)
@@ -74,34 +97,57 @@ const reporte = ref<HistorialPagosCobrosResponse | null>(null)
 const dialogAnularVisible = ref(false)
 const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
 const motivoAnulacion = ref('')
-const busquedaCobro = ref('')
 const paginaPrimera = ref(0)
+
+const CAMPOS_FILTRO_TABLA = [
+  'cartera_nombre',
+  'nombre_cliente',
+  'dni_cliente',
+  'numero_prestamo',
+  'documento',
+  'fecha_programada',
+  'fecha_pago',
+  'registrado_por_nombre',
+  'registrado_en',
+  'capital',
+  'total',
+] as const
+
+function crearFiltrosVacios() {
+  const filtros: Record<string, { value: string | null; matchMode: string }> = {
+    global: { value: null, matchMode: FilterMatchMode.CONTAINS },
+  }
+  for (const campo of CAMPOS_FILTRO_TABLA) {
+    filtros[campo] = { value: null, matchMode: FilterMatchMode.CONTAINS }
+  }
+  return filtros
+}
+
+const filtrosTabla = ref(crearFiltrosVacios())
+
+const globalFilterFields = [
+  ...CAMPOS_FILTRO_TABLA,
+  'registrado_por_etiqueta',
+  'registrado_por',
+  'id_pago',
+]
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
-function coincideBusquedaCobro(fila: HistorialPagosCobrosFila, q: string): boolean {
-  const campos = [
-    fila.nombre_cliente,
-    fila.dni_cliente,
-    fila.numero_prestamo,
-    fila.cartera_nombre,
-    fila.documento,
-    fila.capital,
-    fila.total,
-    fila.fecha_programada,
-    fila.fecha_pago,
-    fila.hora_pago,
-    String(fila.id_pago),
-  ]
-  return campos.some((c) => (c ?? '').toString().toLowerCase().includes(q))
+function reiniciarFiltrosTabla() {
+  filtrosTabla.value = crearFiltrosVacios()
+  paginaPrimera.value = 0
 }
 
-const filasFiltradas = computed(() => {
-  const filas = reporte.value?.filas ?? []
-  const q = busquedaCobro.value.trim().toLowerCase()
-  if (!q) return filas
-  return filas.filter((fila) => coincideBusquedaCobro(fila, q))
-})
+function nombreUsuarioCobro(fila: HistorialPagosCobrosFila): string {
+  return fila.registrado_por_nombre?.trim() || '—'
+}
+
+function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
+  return fila.registrado_en || formatDateTime(fila.cobrado_en) || '—'
+}
+
+const filasHistorial = computed(() => reporte.value?.filas ?? [])
 
 const carteraOpciones = computed(() => [
   { label: 'Todas', value: null as number | null },
@@ -118,6 +164,10 @@ const periodoLegible = computed(() => {
   if (!reporte.value) return '—'
   const { modo: m, fecha_inicio, fecha_fin } = reporte.value
   if (m === 'dia') return formatDate(fecha_inicio)
+  if (m === 'semana' || m === 'semanal') {
+    if (fecha_inicio === fecha_fin) return formatDate(fecha_inicio)
+    return `${formatDate(fecha_inicio)} – ${formatDate(fecha_fin)}`
+  }
   if (m === 'mes') {
     const d = new Date(`${fecha_inicio}T12:00:00`)
     const nombreMes = MESES[d.getMonth()]?.label ?? ''
@@ -155,6 +205,10 @@ function buildHistorialQueryString(): string {
   if (modo.value === 'dia') {
     qs.set('fecha', fechaDia.value)
     qs.set('anio', String(new Date(`${fechaDia.value}T12:00:00`).getFullYear()))
+  } else if (modo.value === 'semana') {
+    qs.set('fecha_inicio', fechaInicioSemana.value)
+    qs.set('fecha_fin', fechaFinSemana.value)
+    qs.set('anio', String(new Date(`${fechaInicioSemana.value}T12:00:00`).getFullYear()))
   } else if (modo.value === 'mes') {
     qs.set('mes', String(mes.value))
     qs.set('anio', String(anio.value))
@@ -190,9 +244,29 @@ function fallbackNombreExport(extension: 'xlsx' | 'pdf'): string {
 
 async function consultarHistorial() {
   error.value = ''
+  if (modo.value === 'semana') {
+    if (!fechaInicioSemana.value || !fechaFinSemana.value) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Semana',
+        detail: 'Indique fecha de inicio y fecha final.',
+        life: 4000,
+      })
+      return
+    }
+    if (fechaFinSemana.value < fechaInicioSemana.value) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Semana',
+        detail: 'La fecha final no puede ser anterior a la de inicio.',
+        life: 4000,
+      })
+      return
+    }
+  }
   loading.value = true
   reporte.value = null
-  busquedaCobro.value = ''
+  reiniciarFiltrosTabla()
   paginaPrimera.value = 0
   try {
     const { data } = await api.get<HistorialPagosCobrosResponse>(
@@ -280,25 +354,6 @@ async function exportarHistorialPdf() {
   }
 }
 
-function imprimirHistorial() {
-  if (!reporte.value?.filas.length) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Imprimir',
-      detail: 'Consulte primero un periodo con registros.',
-      life: 3500,
-    })
-    return
-  }
-  const cleanup = () => {
-    document.body.classList.remove('printing-historial-pagos')
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  document.body.classList.add('printing-historial-pagos')
-  window.print()
-}
-
 function abrirDialogoAnular(fila: { id_pago: number; nombre_cliente: string; total: string }) {
   pagoSeleccionado.value = fila
   motivoAnulacion.value = ''
@@ -354,6 +409,11 @@ onMounted(async () => {
     await auth.fetchProfile()
   }
   await cargarCarteras()
+  await consultarHistorial()
+})
+
+watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFiltro], () => {
+  void consultarHistorial()
 })
 </script>
 
@@ -379,6 +439,27 @@ onMounted(async () => {
           <label class="filtro-label" for="hist-fecha">Día</label>
           <InputText id="hist-fecha" v-model="fechaDia" type="date" class="filtro-input" />
         </div>
+
+        <template v-if="modo === 'semana'">
+          <div class="filtro-field">
+            <label class="filtro-label" for="hist-fecha-inicio">Fecha inicio</label>
+            <InputText
+              id="hist-fecha-inicio"
+              v-model="fechaInicioSemana"
+              type="date"
+              class="filtro-input"
+            />
+          </div>
+          <div class="filtro-field">
+            <label class="filtro-label" for="hist-fecha-fin">Fecha final</label>
+            <InputText
+              id="hist-fecha-fin"
+              v-model="fechaFinSemana"
+              type="date"
+              class="filtro-input"
+            />
+          </div>
+        </template>
 
         <template v-if="modo === 'mes'">
           <div class="filtro-field">
@@ -440,15 +521,6 @@ onMounted(async () => {
             @click="consultarHistorial"
           />
           <Button
-            label="Imprimir"
-            icon="pi pi-print"
-            type="button"
-            severity="success"
-            outlined
-            :disabled="!reporte?.filas.length || loading"
-            @click="imprimirHistorial"
-          />
-          <Button
             label="Excel"
             icon="pi pi-file-excel"
             type="button"
@@ -487,48 +559,118 @@ onMounted(async () => {
       </header>
 
       <div class="historial-buscar no-print">
-        <label class="filtro-label" for="hist-buscar">Buscar cobro</label>
-        <InputText
-          id="hist-buscar"
-          v-model="busquedaCobro"
-          class="filtro-input historial-buscar-input"
-          placeholder="Cliente, DNI, préstamo, documento, cartera…"
-          @update:model-value="paginaPrimera = 0"
-        />
+        <label class="filtro-label" for="hist-buscar">Buscar en todo</label>
+        <div class="historial-buscar-fila">
+          <InputText
+            id="hist-buscar"
+            v-model="filtrosTabla.global.value"
+            class="filtro-input historial-buscar-input"
+            placeholder="Cliente, DNI, préstamo, cartera, usuario…"
+            @update:model-value="paginaPrimera = 0"
+          />
+          <Button
+            label="Limpiar filtros"
+            icon="pi pi-filter-slash"
+            severity="secondary"
+            outlined
+            size="small"
+            type="button"
+            @click="reiniciarFiltrosTabla"
+          />
+        </div>
       </div>
 
       <DataTable
+        v-model:filters="filtrosTabla"
         v-model:first="paginaPrimera"
-        :value="filasFiltradas"
+        :value="filasHistorial"
+        :global-filter-fields="globalFilterFields"
         :loading="loading"
         data-key="id_pago"
+        filter-display="row"
         paginator
         :rows="FILAS_POR_PAGINA"
         paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
         current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
+        removable-sort
         responsive-layout="scroll"
         class="historial-table no-print-table"
       >
-        <Column header="Fecha programada">
+        <Column
+          field="cartera_nombre"
+          header="Cartera"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '8rem' }"
+        />
+        <Column
+          field="nombre_cliente"
+          header="Cliente"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        />
+        <Column field="dni_cliente" header="DNI" sortable filter filter-placeholder="Filtrar" />
+        <Column field="numero_prestamo" header="Préstamo" sortable filter filter-placeholder="Filtrar" />
+        <Column field="documento" header="Documento" sortable filter filter-placeholder="Filtrar" />
+        <Column
+          field="fecha_programada"
+          header="Fecha programada"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+        >
           <template #body="{ data }">
             {{ data.fecha_programada ? formatDate(data.fecha_programada) : '—' }}
           </template>
         </Column>
-        <Column header="Fecha canceló">
+        <Column field="fecha_pago" header="Fecha canceló" sortable filter filter-placeholder="Filtrar">
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
         </Column>
-        <Column header="Hora">
-          <template #body="{ data }">{{ data.hora_pago || formatTime(data.cobrado_en) }}</template>
+        <Column
+          field="registrado_por_nombre"
+          header="Usuario"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        >
+          <template #body="{ data }">
+            <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
+          </template>
         </Column>
-        <Column field="nombre_cliente" header="Cliente" />
-        <Column field="dni_cliente" header="DNI" />
-        <Column field="numero_prestamo" header="Préstamo" />
-        <Column field="cartera_nombre" header="Cartera" />
-        <Column field="documento" header="Documento" />
-        <Column header="Capital" style="text-align: right">
+        <Column
+          field="registrado_en"
+          header="Fecha registro"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          :style="{ minWidth: '10rem' }"
+        >
+          <template #body="{ data }">
+            <span class="auditoria-celda">{{ fechaRegistroCobro(data) }}</span>
+          </template>
+        </Column>
+        <Column
+          field="capital"
+          header="Capital"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          style="text-align: right"
+        >
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
         </Column>
-        <Column header="Total" style="text-align: right">
+        <Column
+          field="total"
+          header="Total"
+          sortable
+          filter
+          filter-placeholder="Filtrar"
+          style="text-align: right"
+        >
           <template #body="{ data }">{{ formatMoney(data.total) }}</template>
         </Column>
         <Column v-if="canAnularPagos" header="Acciones" class="no-print-col">
@@ -584,37 +726,6 @@ onMounted(async () => {
         </template>
       </Dialog>
 
-      <table class="historial-print-table" aria-hidden="true">
-        <thead>
-          <tr>
-            <th>F. programada</th>
-            <th>F. canceló</th>
-            <th>Hora</th>
-            <th>Cliente</th>
-            <th>DNI</th>
-            <th>Préstamo</th>
-            <th>Cartera</th>
-            <th>Doc.</th>
-            <th>Capital</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="fila in filasFiltradas" :key="fila.id_pago">
-            <td>{{ fila.fecha_programada ? formatDate(fila.fecha_programada) : '—' }}</td>
-            <td>{{ formatDate(fila.fecha_pago) }}</td>
-            <td>{{ fila.hora_pago || formatTime(fila.cobrado_en) }}</td>
-            <td>{{ fila.nombre_cliente }}</td>
-            <td>{{ fila.dni_cliente }}</td>
-            <td>{{ fila.numero_prestamo }}</td>
-            <td>{{ fila.cartera_nombre }}</td>
-            <td>{{ fila.documento || '—' }}</td>
-            <td class="num">{{ formatMoney(fila.capital) }}</td>
-            <td class="num">{{ formatMoney(fila.total) }}</td>
-          </tr>
-        </tbody>
-      </table>
-
       <footer class="historial-totales">
         <span><strong>Capital:</strong> {{ formatMoney(reporte.resumen.total_capital) }}</span>
         <span class="historial-total-grande"
@@ -650,12 +761,30 @@ onMounted(async () => {
   flex-direction: column;
   gap: 0.35rem;
   margin-bottom: 0.85rem;
-  max-width: 28rem;
+  max-width: 36rem;
+}
+
+.historial-buscar-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .historial-buscar-input {
-  width: 100%;
+  flex: 1;
+  min-width: 14rem;
+}
+
+.historial-table :deep(.p-datatable-filter-row .p-inputtext) {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.45rem;
   min-width: 0;
+  width: 100%;
+}
+
+.historial-table :deep(.p-datatable-thead > tr > th) {
+  white-space: nowrap;
 }
 
 .historial-subtitulo {
@@ -768,23 +897,17 @@ onMounted(async () => {
   color: var(--p-text-muted-color);
 }
 
-.historial-print-table {
-  display: none;
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.72rem;
+.auditoria-celda {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--p-text-muted-color, #64748b);
 }
 
-.historial-print-table th,
-.historial-print-table td {
-  border: 1px solid #333;
-  padding: 0.25rem 0.35rem;
-  text-align: left;
-}
-
-.historial-print-table .num {
-  text-align: right;
-  white-space: nowrap;
+.auditoria-nombre {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 @media (max-width: 767px) {
@@ -815,36 +938,6 @@ onMounted(async () => {
 
   .filtro-acciones :deep(.p-button) {
     flex: 1;
-  }
-}
-
-@media print {
-  .no-print {
-    display: none !important;
-  }
-
-  .historial-sheet {
-    border: none;
-    border-radius: 0;
-    padding: 0;
-  }
-
-  .no-print-table {
-    display: none !important;
-  }
-
-  .historial-print-table {
-    display: table !important;
-  }
-
-  body.printing-historial-pagos .sidebar,
-  body.printing-historial-pagos .topbar {
-    display: none !important;
-  }
-
-  body.printing-historial-pagos .layout-main {
-    margin: 0 !important;
-    padding: 0 !important;
   }
 }
 </style>

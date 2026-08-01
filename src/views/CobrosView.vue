@@ -2,43 +2,25 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from 'vue-router'
 
-import Button from 'primevue/button'
-import Column from 'primevue/column'
-import DataTable from 'primevue/datatable'
-import Dialog from 'primevue/dialog'
-import InputNumber from 'primevue/inputnumber'
-import InputText from 'primevue/inputtext'
-import Select from 'primevue/select'
-
 import { useToast } from 'primevue/usetoast'
 
+import CarteraDropdown from '@/components/CarteraDropdown.vue'
+import CobroCajaDialog from '@/components/CobroCajaDialog.vue'
+import type { CobroCajaFormView } from '@/components/CobroCajaDialog.vue'
+import HojaCobroCard from '@/components/HojaCobroCard.vue'
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime, formatMoney, formatTime } from '@/utils/format'
-import { montoAbonoCapitalInteres } from '@/utils/cobroPago'
-import {
-  buildFilasCuotaEstado,
-  filasCuotaEstadoAModalPlan,
-  ordenarPagosPrestamo,
-  pagosVigentes,
-  pagoPorCuotaDesdeFilas,
-  type FilaCuotaEstado,
-} from '@/utils/estadoCuotaFilas'
-import { abrirFacturaPago, esPagoFacturaSecundario } from '@/utils/facturaPago'
-import {
-  abrirWhatsAppConMensaje,
-  mensajeEstadoCuentaModal,
-} from '@/utils/whatsappCliente'
+import { formatMoney } from '@/utils/format'
+import { abrirFacturaPago } from '@/utils/facturaPago'
+import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
 import type {
   Cliente,
   Pago,
   Paginated,
   Prestamo,
-  PrestamoCuotaRow,
   ReporteIntegracionFila,
-  ReporteIntegracionResumen,
   ReporteIntegracionResponse,
   Cartera,
   DiaCobroCartera,
@@ -56,171 +38,16 @@ const cobradorCarteraIds = computed(
 )
 
 const hojaCobrosCarteraFiltro = ref<number | ''>('')
-const hojaCobrosEstadoFiltro = ref<
-  | ''
-  | 'activo,pendiente_aprobacion,mora'
-  | 'pendiente_aprobacion'
-  | 'activo'
-  | 'pagado'
-  | 'mora'
-  | 'cancelado'
->('activo,pendiente_aprobacion,mora')
+const HOJA_COBROS_ESTADO = 'activo,pendiente_aprobacion,mora' as const
 const hojaCobrosLoading = ref(false)
-const hojaCobrosCargada = ref(false)
-const HOJA_COBROS_PAGE_SIZE = 10
-const hojaCobrosPage = ref(1)
-const hojaCobrosPageSize = ref(HOJA_COBROS_PAGE_SIZE)
 const hojaCobrosTotal = ref(0)
 const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
-const hojaCobrosFilasPrint = ref<ReporteIntegracionFila[]>([])
-const hojaCobrosResumen = ref<ReporteIntegracionResumen | null>(null)
-const hojaCobrosFechaReporte = ref('')
-const hojaCobrosGeneradoEn = ref('')
-const hojaPreviewVisible = ref(false)
-const hojaPreviewCargando = ref(false)
-const hojaImprimiendo = ref(false)
 
-const hojaTableFirst = computed(() => (hojaCobrosPage.value - 1) * hojaCobrosPageSize.value)
-
-const clienteSearch = ref('')
-
-const prestamoOptions = ref<{ id_prestamo: number; label: string }[]>([])
-const usuarioOptions = ref<{ id_usuario: number; nombre: string }[]>([])
-const prestamoMeta = ref<
-  Array<{
-    id_prestamo: number
-    id_cliente: number
-    id_zona: number | null
-    dni: string
-    nombre: string
-    zona: string
-    forma_pago: string
-    numero_prestamo: string
-    estado: string
-  }>
->([])
-
-const proximaCuotaSemanalLoading = ref(false)
-const proximaCuotaSemanalInfo = ref<{
-  numero_cuota: number
-  fecha_programada: string
-  capital_programado: number
-  interes_programado: number
-  total_programado: number
-  monto_pendiente: number
-  saldo_capital_programado: number
-  saldo_inicial?: number
-  saldo_actual?: number
-} | null>(null)
-const proximaCuotaSemanalMensaje = ref('')
-const proximaCuotaAtrasadas = ref({ count: 0, numeros: '' })
-const buscarClienteLoading = ref(false)
-const clienteMeta = ref<
-  Array<{
-    id_cliente: number
-    dni: string
-    nombre: string
-    telefono: string
-    direccion_residencia: string
-    actividad_economica: string
-  }>
->([])
-
-const clienteForm = ref({
-  nombre: '',
-  dni: '',
-  telefono: '',
-  direccion_residencia: '',
-  actividad_economica: '',
-})
-
-const prestamoForm = ref({
-  numero_prestamo: '',
-  id_cliente: null as number | null,
-  id_usuario: null as number | null,
-  monto: null as number | null,
-  plazo: 12,
-  tasa_interes: null as number | null,
-  forma_pago: 'mensual',
-  forma_desembolso: 'efectivo',
-  comision: 0,
-  fecha_entrega: '',
-  estado: 'activo',
-})
-
-const hasClientSearchExecuted = ref(false)
-const estadoCuentaVisible = ref(false)
-const estadoCuentaLoading = ref(false)
-const estadoCuentaError = ref('')
-const estadoCuentaRows = ref<Pago[]>([])
-const estadoCuentaPlanRows = ref<
-  Array<{
-    numero_cuota: number
-    fecha_programada: string
-    fecha_cancelo: string | null
-    hora_pago: string | null
-    cobrado_en: string | null
-    total_programado: number
-    estado: string
-    documento: string | null
-    id_pago: number | null
-    id_pago_factura: number | null
-  }>
->([])
-const cuotasVisible = ref(false)
-const cuotasLoading = ref(false)
-const cuotasError = ref('')
-const cuotasRows = ref<Array<{ periodo: number; fecha_limite: string; capital: number; interes: number; saldo: number }>>(
-  [],
-)
-const cuotasPagosRegistrados = ref<Pago[]>([])
-const cuotasPrestamoId = ref<number | null>(null)
-const filasCalendarioEstado = ref<FilaCuotaEstado[]>([])
-const cuotasTotal = computed(() => cuotasRows.value.length)
-
-interface FilaCalendarioCobros {
-  periodo: number
-  fecha_limite: string
-  capital: number
-  interes: number
-  saldo: number
-  estado: string
-}
-
-const cuotasCalendarioFilas = computed((): FilaCalendarioCobros[] =>
-  filasCalendarioEstado.value.map((fila) => ({
-    periodo: fila.numero_cuota,
-    fecha_limite: fila.fecha_programada,
-    capital: Number(fila.capital_programado) || 0,
-    interes: Number(fila.interes_programado) || 0,
-    saldo: Number(fila.saldo_capital_programado) || 0,
-    estado: fila.estado === 'pagada' ? 'Pagada' : 'Pendiente',
-  })),
-)
-
-const cuotasPagadasRows = computed(() =>
-  cuotasCalendarioFilas.value.filter((fila) => fila.estado === 'Pagada'),
-)
-
-const cuotasAlertasRows = computed(() => {
-  const today = getTodayISO()
-  return cuotasCalendarioFilas.value
-    .filter((fila) => fila.estado === 'Pendiente' && fila.fecha_limite.slice(0, 10) < today)
-    .map((fila) => ({
-      ...fila,
-      dias_atraso: Math.max(0, calculateDaysDiff(fila.fecha_limite.slice(0, 10), today)),
-    }))
-})
 const cajaVisible = ref(false)
-const cajaLoading = ref(false)
 const cajaSaving = ref(false)
 const cajaError = ref('')
-const estadoCuentaResumen = ref({
-  totalPagos: 0,
-  totalCapital: 0,
-  totalInteres: 0,
-  estadoPrestamo: '',
-})
+const cajaFormError = ref('')
+const cajaMontoRecibido = ref('0')
 const cajaForm = ref({
   id_prestamo: null as number | null,
   numero_prestamo: '',
@@ -231,6 +58,7 @@ const cajaForm = ref({
   cartera_dia_cobro: '' as DiaCobroCartera | '',
   cliente_dia_cobro_semanal: '' as DiaCobroCartera | '',
   fecha_entrega: '',
+  fecha_vencimiento: '',
   cuota_numero: 0,
   fecha_cuota: '',
   fecha_pago: '',
@@ -240,27 +68,20 @@ const cajaForm = ref({
   saldo_inicial: 0,
   saldo_actual: 0,
   saldo: 0,
-  monto_recibido: 0,
-})
-const cajaFormError = ref('')
-const searchResult = ref<{
-  id_cliente: number
-  nombre: string
-  dni: string
-  telefono: string
-  direccion_residencia: string
-  actividad_economica: string
-  hasPrestamo: boolean
-  prestamoId: number | null
-  prestamoLabel: string | null
-} | null>(null)
-const form = ref({
-  id_prestamo: null as number | null,
-  fecha_pago: '',
-  documento: '',
-  capital: null as number | null,
-  interes: null as number | null,
-  saldo: null as number | null,
+  telefono: '',
+  direccion_residencia: '',
+  direccion_negocio: '',
+  referencia: '',
+  referencia_parentesco: '',
+  referencia_telefono: '',
+  monto_prestamo: 0,
+  cuota_programada: 0,
+  total_cuotas: 0,
+  fecha_ultimo_pago: '',
+  monto_ultimo_pago: '',
+  cuota_pendiente_abonado: '',
+  cuotas_atrasadas: 0,
+  cuotas_atrasadas_numeros: '',
 })
 
 function getTodayISO(): string {
@@ -273,24 +94,13 @@ function getTodayISO(): string {
 const hojaCarteras = ref<Cartera[]>([])
 let carterasHojaCache: Cartera[] | null = null
 
-const prestamosCatalogoReady = ref(false)
-const prestamosCatalogoCargando = ref(false)
-
-const carteraHojaOpciones = computed(() =>
-  hojaCarteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number })),
-)
-
 function carteraHojaRequerida(): boolean {
   return hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null
 }
 
 function limpiarResultadosHojaCobros() {
   hojaCobrosFilas.value = []
-  hojaCobrosFilasPrint.value = []
-  hojaCobrosResumen.value = null
   hojaCobrosTotal.value = 0
-  hojaCobrosCargada.value = false
-  hojaCobrosPage.value = 1
   hojaCobrosLoading.value = false
 }
 
@@ -298,117 +108,22 @@ function reiniciarHojaCobrosSinCartera() {
   limpiarResultadosHojaCobros()
 }
 
-const estadoHojaOpciones = computed(() => [
-  { label: 'Para cobro (activos, pendientes y mora)', value: 'activo,pendiente_aprobacion,mora' as const },
-  { label: 'Todos los estados', value: '' as const },
-  { label: 'Pendiente aprobación', value: 'pendiente_aprobacion' as const },
-  { label: 'Activo', value: 'activo' as const },
-  { label: 'Pagado', value: 'pagado' as const },
-  { label: 'Mora', value: 'mora' as const },
-  { label: 'Cancelado', value: 'cancelado' as const },
-])
-
-const hojaCobrosTituloCartera = computed(() => {
-  if (hojaCobrosCarteraFiltro.value === '' || hojaCobrosCarteraFiltro.value == null) {
-    return 'TODAS LAS CARTERAS'
-  }
-  const c = hojaCarteras.value.find((x) => x.id_cartera === hojaCobrosCarteraFiltro.value)
-  return (c?.nombre ?? 'CARTERA').toUpperCase()
-})
-
-const MESES_HOJA = [
-  'ENERO',
-  'FEBRERO',
-  'MARZO',
-  'ABRIL',
-  'MAYO',
-  'JUNIO',
-  'JULIO',
-  'AGOSTO',
-  'SEPTIEMBRE',
-  'OCTUBRE',
-  'NOVIEMBRE',
-  'DICIEMBRE',
-] as const
-
-const DIAS_HOJA = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'] as const
-
-function formatFechaHojaLegible(iso: string): string {
-  const d = new Date(`${iso}T12:00:00`)
-  if (Number.isNaN(d.getTime())) return iso.toUpperCase()
-  const dia = String(d.getDate()).padStart(2, '0')
-  return `${DIAS_HOJA[d.getDay()]} ${dia} DE ${MESES_HOJA[d.getMonth()]} ${d.getFullYear()}`
-}
-
-const hojaCobrosFechaLegible = computed(() =>
-  hojaCobrosFechaReporte.value ? formatFechaHojaLegible(hojaCobrosFechaReporte.value) : formatFechaHojaLegible(getTodayISO()),
-)
-
-const hojaCobrosGeneradoLegible = computed(() =>
-  hojaCobrosGeneradoEn.value ? formatDateTime(hojaCobrosGeneradoEn.value) : formatDateTime(new Date().toISOString()),
-)
-
-function formatNumeroHoja(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '') return ''
-  const n = typeof value === 'string' ? Number.parseFloat(value) : value
-  if (Number.isNaN(n)) return String(value)
-  return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
-}
-
-function textoCuotasAtrasadas(fila: ReporteIntegracionFila): string {
-  const n = fila.cuotas_atrasadas ?? 0
-  if (n <= 0) return ''
-  const nums = fila.cuotas_atrasadas_numeros?.trim()
-  if (nums) return `${n} atrasada${n === 1 ? '' : 's'} (#${nums.replace(/,\s*/g, ', #')})`
-  return `${n} atrasada${n === 1 ? '' : 's'}`
-}
-
-const hojaCobrosTotales = computed(() => {
-  const r = hojaCobrosResumen.value
-  if (r) {
-    return {
-      saldoInicial: Number.parseFloat(r.total_saldo_inicial) || 0,
-      cuota: Number.parseFloat(r.total_cuota ?? '') || 0,
-      saldoActual: Number.parseFloat(r.total_saldo_actual) || 0,
-    }
-  }
-  return { saldoInicial: 0, cuota: 0, saldoActual: 0 }
-})
-
-const hojaPreviewTotales = computed(() => {
-  let saldoInicial = 0
-  let cuota = 0
-  let saldoActual = 0
-  for (const f of hojaCobrosFilasPrint.value) {
-    saldoInicial += Number.parseFloat(f.saldo_inicial) || 0
-    cuota += Number.parseFloat(f.cuota) || 0
-    saldoActual += Number.parseFloat(f.saldo_actual) || 0
-  }
-  return { saldoInicial, cuota, saldoActual }
-})
-
-function numeroFilaHoja(indexEnPagina: number): number {
-  return hojaTableFirst.value + indexEnPagina + 1
-}
-
 function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
   const qs = new URLSearchParams()
   if (hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null) {
     qs.set('id_cartera', String(hojaCobrosCarteraFiltro.value))
   }
-  if (hojaCobrosEstadoFiltro.value) {
-    qs.set('estado', hojaCobrosEstadoFiltro.value)
-  }
+  qs.set('estado', HOJA_COBROS_ESTADO)
   if (extra) {
     for (const [k, v] of Object.entries(extra)) qs.set(k, v)
   }
   return qs
 }
 
-async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: boolean }) {
+async function cargarHojaCobrosFindeco(options?: { silentEmpty?: boolean }): Promise<void> {
   if (!carteraHojaRequerida()) {
     reiniciarHojaCobrosSinCartera()
-    if (!options?.silentEmpty && !options?.all) {
+    if (!options?.silentEmpty) {
       toast.add({
         severity: 'warn',
         summary: 'Hoja de cobros',
@@ -416,118 +131,48 @@ async function cargarHojaCobrosFindeco(options?: { all?: boolean; silentEmpty?: 
         life: 4000,
       })
     }
-    return []
+    return
   }
-  if (!options?.all) hojaCobrosLoading.value = true
+  hojaCobrosLoading.value = true
   try {
-    const qs = buildHojaCobrosQuery(
-      options?.all
-        ? { all: '1' }
-        : {
-            page: String(hojaCobrosPage.value),
-            page_size: String(hojaCobrosPageSize.value),
-          },
-    )
+    const qs = buildHojaCobrosQuery({ all: '1' })
     const url = `/prestamos/reporte-integracion/?${qs.toString()}`
     const { data } = await api.get<ReporteIntegracionResponse>(url)
-    if (options?.all) {
-      return data.filas ?? []
-    }
-    hojaCobrosFilas.value = (data.filas ?? []).slice(0, hojaCobrosPageSize.value)
-    hojaCobrosResumen.value = data.resumen ?? null
-    hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
-    hojaCobrosGeneradoEn.value = data.generado_en ?? ''
-    hojaCobrosTotal.value = data.count ?? data.resumen?.prestamos ?? hojaCobrosFilas.value.length
-    if (typeof data.page === 'number') hojaCobrosPage.value = data.page
-    hojaCobrosCargada.value = true
+    hojaCobrosFilas.value = data.filas ?? []
+    hojaCobrosTotal.value = hojaCobrosFilas.value.length
     if (!hojaCobrosTotal.value && !options?.silentEmpty) {
       toast.add({
         severity: 'info',
         summary: 'Hoja de cobros',
-        detail: 'No hay préstamos para los filtros seleccionados.',
+        detail: 'No hay préstamos en esta cartera.',
         life: 4000,
       })
     }
   } catch (e) {
-    if (!options?.all) {
-      toast.add({
-        severity: 'error',
-        summary: 'Hoja de cobros',
-        detail: getApiErrorMessage(e),
-        life: 6000,
-      })
-    } else {
-      throw e
-    }
-  } finally {
-    if (!options?.all) hojaCobrosLoading.value = false
-  }
-  return []
-}
-
-async function abrirVistaPreviaHoja() {
-  if (!hojaCobrosTotal.value && !hojaCobrosFilas.value.length) {
-    toast.add({ severity: 'warn', summary: 'Hoja de cobros', detail: 'No hay datos para imprimir.', life: 4000 })
-    return
-  }
-  hojaPreviewCargando.value = true
-  try {
-    const filas = await cargarHojaCobrosFindeco({ all: true })
-    if (!filas.length) {
-      toast.add({
-        severity: 'warn',
-        summary: 'Hoja de cobros',
-        detail: 'No hay préstamos para los filtros seleccionados.',
-        life: 4000,
-      })
-      return
-    }
-    hojaCobrosFilasPrint.value = filas
-    hojaPreviewVisible.value = true
-  } catch (e) {
+    hojaCobrosFilas.value = []
+    hojaCobrosTotal.value = 0
     toast.add({
       severity: 'error',
       summary: 'Hoja de cobros',
-      detail: getApiErrorMessage(e, 'No se pudo cargar la vista previa.'),
+      detail: getApiErrorMessage(e),
       life: 6000,
     })
   } finally {
-    hojaPreviewCargando.value = false
     hojaCobrosLoading.value = false
   }
 }
 
-function cerrarVistaPreviaHoja() {
-  hojaPreviewVisible.value = false
+function onFilaCobroClick(fila: ReporteIntegracionFila) {
+  if (!canWritePagos.value) return
+  if (fila.cuota_siguiente_numero == null) return
+  void abrirCobroDesdeHoja(fila)
 }
 
-function ejecutarImpresionDesdePreview() {
-  hojaImprimiendo.value = true
-  const cleanup = () => {
-    document.body.classList.remove('printing-hoja-cobros')
-    hojaImprimiendo.value = false
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  document.body.classList.add('printing-hoja-cobros')
-  window.print()
-}
-
-function onHojaCobrosPage(e: { first: number; rows: number }) {
-  if (hojaCobrosLoading.value || !carteraHojaRequerida()) return
-  hojaCobrosPageSize.value = e.rows
-  hojaCobrosPage.value = Math.floor(e.first / e.rows) + 1
-  void cargarHojaCobrosFindeco({ silentEmpty: true })
-}
-
-watch(hojaCobrosCarteraFiltro, () => {
+watch(hojaCobrosCarteraFiltro, (idCartera) => {
   limpiarResultadosHojaCobros()
-})
-
-watch(hojaCobrosEstadoFiltro, () => {
-  if (!carteraHojaRequerida() || !hojaCobrosCargada.value) return
-  hojaCobrosPage.value = 1
-  void cargarHojaCobrosFindeco({ silentEmpty: true })
+  if (idCartera !== '' && idCartera != null) {
+    void cargarHojaCobrosFindeco()
+  }
 })
 
 async function cargarCatalogoCarterasHoja() {
@@ -587,73 +232,6 @@ async function resolverCarteraCobro(prestamoId: number): Promise<CarteraCobroInf
   return carteraDesdePrestamo(pr, clienteDia)
 }
 
-function calculateDaysDiff(fromISO: string, toISO: string): number {
-  const from = new Date(`${fromISO}T00:00:00`)
-  const to = new Date(`${toISO}T00:00:00`)
-  const diff = to.getTime() - from.getTime()
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
-}
-
-const facturaAbriendoId = ref<number | null>(null)
-
-async function verFacturaPago(idPago: number) {
-  facturaAbriendoId.value = idPago
-  try {
-    await abrirFacturaPago(idPago)
-  } catch (e) {
-    toast.add({
-      severity: 'error',
-      summary: 'Factura',
-      detail: getApiErrorMessage(e),
-      life: 5000,
-    })
-  } finally {
-    facturaAbriendoId.value = null
-  }
-}
-
-const cuotasPagoPorPeriodo = computed(() =>
-  pagoPorCuotaDesdeFilas(filasCalendarioEstado.value, cuotasPagosRegistrados.value),
-)
-
-const cajaTotalCobrar = computed(() => {
-  return Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
-})
-
-const cajaCuotaPendiente = computed(() => {
-  const pend = Number(cajaForm.value.monto_pendiente_cuota)
-  if (pend > 0) return pend
-  const c = Number(cajaForm.value.capital) || 0
-  const i = Number(cajaForm.value.interes) || 0
-  return c + i
-})
-
-const cajaHayExcedente = computed(() => {
-  const recibido = Number(cajaForm.value.monto_recibido) || 0
-  return recibido > cajaCuotaPendiente.value + 0.001
-})
-
-const cajaHayPagoParcial = computed(() => {
-  const recibido = Number(cajaForm.value.monto_recibido) || 0
-  if (recibido <= 0) return false
-  return recibido + 0.001 < cajaTotalCobrar.value
-})
-
-const cajaPendienteCuotaTrasCobro = computed(() => {
-  const recibido = Number(cajaForm.value.monto_recibido) || 0
-  const abono = montoAbonoCapitalInteres(recibido)
-  const pendiente = Number(cajaForm.value.monto_pendiente_cuota) || cajaCuotaPendiente.value
-  return Math.max(0, Number((pendiente - abono).toFixed(2)))
-})
-
-/** Saldo pendiente tras el cobro (misma métrica que SALDO ACTUAL en la hoja). */
-const cajaSaldoPosterior = computed(() => {
-  const actual = Number(cajaForm.value.saldo_actual) || 0
-  const recibido = Number(cajaForm.value.monto_recibido) || 0
-  const abono = montoAbonoCapitalInteres(recibido)
-  return Math.max(0, Number((actual - abono).toFixed(2)))
-})
-
 function puedeCobrarCartera(idCartera: number | null | undefined): boolean {
   if (!esCobrador.value) return true
   if (idCartera == null) return false
@@ -662,14 +240,48 @@ function puedeCobrarCartera(idCartera: number | null | undefined): boolean {
 
 const cajaCarteraBloqueada = computed(() => !puedeCobrarCartera(cajaForm.value.id_cartera))
 
-const cajaCarteraEtiqueta = computed(() => {
-  const nombre = cajaForm.value.cartera_nombre?.trim()
-  if (!nombre) return 'Sin cartera asignada'
-  return nombre
-})
+const cajaFormView = computed((): CobroCajaFormView => ({
+  cliente: cajaForm.value.cliente,
+  dni: cajaForm.value.dni,
+  numero_prestamo: cajaForm.value.numero_prestamo,
+  cuota_numero: cajaForm.value.cuota_numero,
+  telefono: cajaForm.value.telefono,
+  direccion_residencia: cajaForm.value.direccion_residencia,
+  direccion_negocio: cajaForm.value.direccion_negocio,
+  referencia: cajaForm.value.referencia,
+  referencia_parentesco: cajaForm.value.referencia_parentesco,
+  referencia_telefono: cajaForm.value.referencia_telefono,
+  monto_prestamo: cajaForm.value.monto_prestamo,
+  cuota_programada: cajaForm.value.cuota_programada,
+  total_cuotas: cajaForm.value.total_cuotas,
+  fecha_entrega: cajaForm.value.fecha_entrega,
+  fecha_vencimiento: cajaForm.value.fecha_vencimiento,
+  fecha_ultimo_pago: cajaForm.value.fecha_ultimo_pago,
+  monto_ultimo_pago: cajaForm.value.monto_ultimo_pago,
+  cuota_pendiente_monto: cajaForm.value.monto_pendiente_cuota,
+  cuota_pendiente_programada: cajaForm.value.cuota_programada,
+  cuota_pendiente_abonado: cajaForm.value.cuota_pendiente_abonado,
+  cuotas_atrasadas: cajaForm.value.cuotas_atrasadas,
+  cuotas_atrasadas_numeros: cajaForm.value.cuotas_atrasadas_numeros,
+  saldo_actual: cajaForm.value.saldo_actual,
+}))
 
-function montoRecibidoPorDefecto(montoPendienteCuota: number) {
-  return Number(montoPendienteCuota.toFixed(2))
+const cajaPuedeConfirmar = computed(
+  () =>
+    cajaForm.value.id_prestamo != null &&
+    !!cajaForm.value.fecha_pago &&
+    cajaForm.value.cuota_numero > 0,
+)
+
+function datosContactoDesdeCliente(cliente: Cliente | null | undefined) {
+  return {
+    telefono: cliente?.telefono?.trim() ?? '',
+    direccion_residencia: cliente?.direccion_residencia?.trim() ?? '',
+    direccion_negocio: cliente?.direccion_negocio?.trim() ?? '',
+    referencia: cliente?.referencia?.trim() ?? '',
+    referencia_parentesco: cliente?.referencia_parentesco?.trim() ?? '',
+    referencia_telefono: cliente?.referencia_telefono?.trim() ?? '',
+  }
 }
 
 function montoPendienteDesdeFilaReporte(
@@ -685,86 +297,30 @@ function montoPendienteDesdeFilaReporte(
 
 async function cargarSaldosReportePrestamo(
   prestamoId: number,
-): Promise<{ saldo_inicial: number; saldo_actual: number } | null> {
+): Promise<{
+  saldo_inicial: number
+  saldo_actual: number
+  fila: ReporteIntegracionFila | null
+} | null> {
   try {
     const { data } = await api.get<ReporteIntegracionResponse>(
       `/prestamos/reporte-integracion/?id_prestamo=${prestamoId}&all=1`,
     )
-    const fila = data.filas?.[0]
-    if (!fila) return null
+    const fila = data.filas?.[0] ?? null
+    if (!fila) return { saldo_inicial: 0, saldo_actual: 0, fila: null }
     return {
       saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
       saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
+      fila,
     }
   } catch {
     return null
   }
 }
 
-async function cargarProximaCuotaParaCobro(prestamoId: number | null) {
-  proximaCuotaSemanalInfo.value = null
-  proximaCuotaSemanalMensaje.value = ''
-  proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
-  if (prestamoId == null) return
-
-  proximaCuotaSemanalLoading.value = true
-  try {
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?id_prestamo=${prestamoId}&all=1`,
-    )
-    const fila = data.filas?.[0]
-    if (!fila?.cuota_siguiente_numero) {
-      proximaCuotaSemanalMensaje.value = 'Todas las cuotas de este préstamo ya figuran pagadas.'
-      return
-    }
-    const capital = Number.parseFloat(fila.cuota_siguiente_capital ?? '') || 0
-    const interes = Number.parseFloat(fila.cuota_siguiente_interes ?? '') || 0
-    const montoPendiente = montoPendienteDesdeFilaReporte(fila)
-    proximaCuotaSemanalInfo.value = {
-      numero_cuota: fila.cuota_siguiente_numero,
-      fecha_programada: fila.cuota_siguiente_fecha ?? '',
-      capital_programado: capital,
-      interes_programado: interes,
-      total_programado: montoPendiente,
-      monto_pendiente: montoPendiente,
-      saldo_capital_programado: Number.parseFloat(fila.cuota_siguiente_saldo_capital ?? '') || 0,
-      saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
-      saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
-    }
-    proximaCuotaAtrasadas.value = {
-      count: fila.cuotas_atrasadas ?? 0,
-      numeros: fila.cuotas_atrasadas_numeros ?? '',
-    }
-  } catch (e) {
-    proximaCuotaSemanalMensaje.value = getApiErrorMessage(e, 'No se pudo cargar la cuota pendiente.')
-  } finally {
-    proximaCuotaSemanalLoading.value = false
-  }
-}
-
-function ensureSearchContextFromPrestamo(prestamoId: number) {
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === prestamoId)
-  if (!meta) return
-  const cliente = clienteMeta.value.find((c) => c.id_cliente === meta.id_cliente)
-  searchResult.value = {
-    id_cliente: meta.id_cliente,
-    nombre: meta.nombre,
-    dni: meta.dni,
-    telefono: cliente?.telefono ?? '',
-    direccion_residencia: cliente?.direccion_residencia ?? '',
-    actividad_economica: cliente?.actividad_economica ?? '',
-    hasPrestamo: true,
-    prestamoId: meta.id_prestamo,
-    prestamoLabel: `${meta.numero_prestamo} (${meta.estado})`,
-  }
-}
-
 function resolverNumeroPrestamoCaja(idPrestamo: number, numero?: string | null): string {
   const directo = (numero ?? '').trim()
   if (directo) return directo
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === idPrestamo)
-  const desdeMeta = meta?.numero_prestamo?.trim()
-  if (desdeMeta) return desdeMeta
   return String(idPrestamo)
 }
 
@@ -787,6 +343,22 @@ function abrirDialogoCaja(payload: {
   saldo?: number
   fecha_cuota?: string
   fecha_pago?: string
+  fecha_vencimiento?: string | null
+  telefono?: string
+  direccion_residencia?: string
+  direccion_negocio?: string
+  referencia?: string
+  referencia_parentesco?: string
+  referencia_telefono?: string
+  monto_prestamo?: number
+  cuota_programada?: number
+  total_cuotas?: number
+  fecha_ultimo_pago?: string
+  monto_ultimo_pago?: string
+  cuota_pendiente_abonado?: string
+  cuotas_atrasadas?: number
+  cuotas_atrasadas_numeros?: string
+  omitirFiltroCarteraHoja?: boolean
 }) {
   const idCartera = payload.id_cartera ?? null
   if (!puedeCobrarCartera(idCartera)) {
@@ -799,6 +371,7 @@ function abrirDialogoCaja(payload: {
     return
   }
   if (
+    !payload.omitirFiltroCarteraHoja &&
     hojaCobrosCarteraFiltro.value !== '' &&
     idCartera != null &&
     hojaCobrosCarteraFiltro.value !== idCartera
@@ -819,6 +392,7 @@ function abrirDialogoCaja(payload: {
     payload.monto_pendiente_cuota ?? Number((payload.capital + payload.interes).toFixed(2))
   const fechaEntrega = payload.fecha_entrega?.trim().slice(0, 10) ?? ''
   const fechaPago = getTodayISO()
+  const fechaCuota = payload.fecha_cuota?.trim().slice(0, 10) || fechaPago
   cajaForm.value = {
     id_prestamo: payload.id_prestamo,
     numero_prestamo: resolverNumeroPrestamoCaja(payload.id_prestamo, payload.numero_prestamo),
@@ -829,8 +403,9 @@ function abrirDialogoCaja(payload: {
     cartera_dia_cobro: payload.cartera_dia_cobro ?? '',
     cliente_dia_cobro_semanal: payload.cliente_dia_cobro_semanal ?? '',
     fecha_entrega: fechaEntrega,
+    fecha_vencimiento: payload.fecha_vencimiento?.trim().slice(0, 10) ?? '',
     cuota_numero: payload.cuota_numero,
-    fecha_cuota: fechaPago,
+    fecha_cuota: fechaCuota,
     fecha_pago: fechaPago,
     capital: payload.capital,
     interes: payload.interes,
@@ -838,14 +413,26 @@ function abrirDialogoCaja(payload: {
     saldo_inicial: saldoInicial,
     saldo_actual: saldoActual,
     saldo: saldoActual,
-    monto_recibido: montoRecibidoPorDefecto(montoPendienteCuota),
+    telefono: payload.telefono ?? '',
+    direccion_residencia: payload.direccion_residencia ?? '',
+    direccion_negocio: payload.direccion_negocio ?? '',
+    referencia: payload.referencia ?? '',
+    referencia_parentesco: payload.referencia_parentesco ?? '',
+    referencia_telefono: payload.referencia_telefono ?? '',
+    monto_prestamo: payload.monto_prestamo ?? saldoInicial,
+    cuota_programada: payload.cuota_programada ?? montoPendienteCuota,
+    total_cuotas: payload.total_cuotas ?? 0,
+    fecha_ultimo_pago: payload.fecha_ultimo_pago ?? '',
+    monto_ultimo_pago: payload.monto_ultimo_pago ?? '',
+    cuota_pendiente_abonado: payload.cuota_pendiente_abonado ?? '',
+    cuotas_atrasadas: payload.cuotas_atrasadas ?? 0,
+    cuotas_atrasadas_numeros: payload.cuotas_atrasadas_numeros ?? '',
   }
+  cajaMontoRecibido.value = '0'
   cajaVisible.value = true
 }
 
 async function resolverDniPrestamo(prestamoId: number): Promise<string> {
-  const meta = prestamoMeta.value.find((p) => p.id_prestamo === prestamoId)
-  if (meta?.dni) return meta.dni
   try {
     const resolved = await resolverClientePorPrestamo(prestamoId)
     return resolved.dni
@@ -854,7 +441,10 @@ async function resolverDniPrestamo(prestamoId: number): Promise<string> {
   }
 }
 
-async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
+async function abrirCobroDesdeHoja(
+  fila: ReporteIntegracionFila,
+  options?: { omitirFiltroCarteraHoja?: boolean },
+) {
   if (!canWritePagos.value) {
     toast.add({
       severity: 'warn',
@@ -877,7 +467,22 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
   const capital = Number(fila.cuota_siguiente_capital ?? 0)
   const interes = Number(fila.cuota_siguiente_interes ?? 0)
   const montoPendiente = montoPendienteDesdeFilaReporte(fila)
-  const dni = await resolverDniPrestamo(fila.id_prestamo)
+  const totalCuotas = totalCuotasDesdeReporte(fila)
+
+  let cliente: Cliente | null = null
+  let prestamo: Prestamo | null = null
+  let dni = ''
+  try {
+    const { data: pr } = await api.get<Prestamo>(`/prestamos/${fila.id_prestamo}/`)
+    prestamo = pr
+    const { data: cl } = await api.get<Cliente>(`/clientes/${pr.id_cliente}/`)
+    cliente = cl
+    dni = cl.dni ?? ''
+  } catch {
+    dni = await resolverDniPrestamo(fila.id_prestamo)
+  }
+
+  const contacto = datosContactoDesdeCliente(cliente)
   abrirDialogoCaja({
     id_prestamo: fila.id_prestamo,
     numero_prestamo: fila.numero_prestamo,
@@ -888,6 +493,7 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
     cartera_dia_cobro: (fila.cartera_dia_cobro ?? '') as DiaCobroCartera | '',
     cliente_dia_cobro_semanal: (fila.cliente_dia_cobro_semanal ?? '') as DiaCobroCartera | '',
     fecha_entrega: fila.fecha_entrega ?? undefined,
+    fecha_vencimiento: fila.fecha_vencimiento ?? undefined,
     cuota_numero: cuotaN,
     fecha_cuota: fila.cuota_siguiente_fecha ?? undefined,
     capital,
@@ -895,400 +501,21 @@ async function abrirCobroDesdeHoja(fila: ReporteIntegracionFila) {
     monto_pendiente_cuota: montoPendiente,
     saldo_inicial: Number.parseFloat(fila.saldo_inicial) || 0,
     saldo_actual: Number.parseFloat(fila.saldo_actual) || 0,
+    telefono: contacto.telefono || fila.telefono || '',
+    direccion_residencia: contacto.direccion_residencia,
+    direccion_negocio: contacto.direccion_negocio,
+    referencia: contacto.referencia,
+    referencia_parentesco: contacto.referencia_parentesco,
+    referencia_telefono: contacto.referencia_telefono,
+    monto_prestamo:
+      Number.parseFloat(String(fila.monto ?? prestamo?.monto ?? fila.saldo_inicial)) || 0,
+    cuota_programada: Number.parseFloat(fila.cuota) || 0,
+    total_cuotas: totalCuotas,
+    cuota_pendiente_abonado: fila.cuota_siguiente_abonado ?? '',
+    cuotas_atrasadas: fila.cuotas_atrasadas ?? 0,
+    cuotas_atrasadas_numeros: fila.cuotas_atrasadas_numeros ?? '',
+    omitirFiltroCarteraHoja: options?.omitirFiltroCarteraHoja,
   })
-}
-
-function coincideNumeroPrestamo(numero: string, q: string): boolean {
-  const normalizado = numero.trim().toLowerCase()
-  const criterio = q.trim().toLowerCase()
-  if (!normalizado || !criterio) return false
-  return normalizado === criterio || normalizado.includes(criterio)
-}
-
-function encontrarPrestamoEnMeta(q: string, soloExacto = false) {
-  const criterio = q.trim().toLowerCase()
-  const exacto = prestamoMeta.value.find(
-    (p) => p.numero_prestamo.trim().toLowerCase() === criterio,
-  )
-  if (exacto) return exacto
-  if (soloExacto) return undefined
-  return prestamoMeta.value.find((p) => coincideNumeroPrestamo(p.numero_prestamo, q))
-}
-
-async function buscarPrestamoEnApi(q: string): Promise<{
-  id_prestamo: number
-  id_cliente: number
-  numero_prestamo: string
-  estado: string
-  nombre: string
-  dni: string
-} | null> {
-  const { data } = await api.get<Paginated<Prestamo>>(
-    `/prestamos/?search=${encodeURIComponent(q)}&page_size=20`,
-  )
-  const criterio = q.trim().toLowerCase()
-  const exacto = data.results.find(
-    (p) => (p.numero_prestamo ?? '').trim().toLowerCase() === criterio,
-  )
-  const parcial = data.results.find((p) => coincideNumeroPrestamo(p.numero_prestamo ?? '', q))
-  const hit = exacto ?? parcial ?? null
-  if (!hit) return null
-
-  const clienteCache = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
-  if (clienteCache) {
-    return {
-      id_prestamo: hit.id_prestamo,
-      id_cliente: hit.id_cliente,
-      numero_prestamo: hit.numero_prestamo,
-      estado: hit.estado ?? '',
-      nombre: clienteCache.nombre,
-      dni: clienteCache.dni,
-    }
-  }
-
-  const resolved = await resolverClientePorPrestamo(hit.id_prestamo)
-  return {
-    id_prestamo: hit.id_prestamo,
-    id_cliente: hit.id_cliente,
-    numero_prestamo: hit.numero_prestamo,
-    estado: hit.estado ?? '',
-    nombre: resolved.nombre,
-    dni: resolved.dni,
-  }
-}
-
-async function resolverPrestamoPorBusqueda(q: string) {
-  const local = encontrarPrestamoEnMeta(q)
-  if (local) {
-    return {
-      id_prestamo: local.id_prestamo,
-      id_cliente: local.id_cliente,
-      numero_prestamo: local.numero_prestamo,
-      estado: local.estado,
-      nombre: local.nombre,
-      dni: local.dni,
-    }
-  }
-  return buscarPrestamoEnApi(q)
-}
-
-async function aplicarBusquedaPorPrestamo(hit: {
-  id_prestamo: number
-  id_cliente: number
-  numero_prestamo: string
-  estado: string
-  nombre: string
-  dni: string
-}) {
-  const cliente = clienteMeta.value.find((c) => c.id_cliente === hit.id_cliente)
-  searchResult.value = {
-    id_cliente: hit.id_cliente,
-    nombre: hit.nombre,
-    dni: hit.dni,
-    telefono: cliente?.telefono ?? '',
-    direccion_residencia: cliente?.direccion_residencia ?? '',
-    actividad_economica: cliente?.actividad_economica ?? '',
-    hasPrestamo: true,
-    prestamoId: hit.id_prestamo,
-    prestamoLabel: `${hit.numero_prestamo} (${hit.estado})`,
-  }
-  if (hit.estado === 'cancelado' || hit.estado === 'pagado') {
-    proximaCuotaSemanalMensaje.value = 'El préstamo no está activo para cobrar.'
-    return
-  }
-  await cargarProximaCuotaParaCobro(hit.id_prestamo)
-}
-
-async function buscarCliente() {
-  const q = clienteSearch.value.trim()
-  if (!q) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Buscar cliente',
-      detail: 'Ingresa el DNI, nombre o número de préstamo.',
-      life: 3500,
-    })
-    return
-  }
-  buscarClienteLoading.value = true
-  hasClientSearchExecuted.value = true
-  searchResult.value = null
-  proximaCuotaSemanalInfo.value = null
-  proximaCuotaSemanalMensaje.value = ''
-  proximaCuotaAtrasadas.value = { count: 0, numeros: '' }
-  try {
-    const prestamoExactoLocal = prestamosCatalogoReady.value
-      ? encontrarPrestamoEnMeta(q, true)
-      : undefined
-    if (prestamoExactoLocal) {
-      await aplicarBusquedaPorPrestamo({
-        id_prestamo: prestamoExactoLocal.id_prestamo,
-        id_cliente: prestamoExactoLocal.id_cliente,
-        numero_prestamo: prestamoExactoLocal.numero_prestamo,
-        estado: prestamoExactoLocal.estado,
-        nombre: prestamoExactoLocal.nombre,
-        dni: prestamoExactoLocal.dni,
-      })
-      return
-    }
-
-    let cliente = prestamosCatalogoReady.value
-      ? clienteMeta.value.find((c) => c.dni === q)
-      : undefined
-    if (!cliente && prestamosCatalogoReady.value) {
-      cliente = clienteMeta.value.find((c) => c.nombre.toLowerCase().includes(q.toLowerCase()))
-    }
-    if (!cliente) {
-      const { data } = await api.get<Paginated<Cliente>>(
-        `/clientes/?search=${encodeURIComponent(q)}&page_size=10`,
-      )
-      const hit = data.results[0]
-      if (hit) {
-        cliente = {
-          id_cliente: hit.id_cliente,
-          dni: hit.dni ?? '',
-          nombre: hit.nombre ?? 'Cliente',
-          telefono: hit.telefono ?? '',
-          direccion_residencia: hit.direccion_residencia ?? '',
-          actividad_economica: hit.actividad_economica ?? '',
-        }
-      }
-    }
-    if (!cliente) {
-      const prestamoHit = await resolverPrestamoPorBusqueda(q)
-      if (prestamoHit) {
-        await aplicarBusquedaPorPrestamo(prestamoHit)
-        return
-      }
-      toast.add({
-        severity: 'info',
-        summary: 'Sin resultados',
-        detail: 'No se encontró cliente ni préstamo con ese criterio.',
-        life: 4000,
-      })
-      return
-    }
-    let prestamos = prestamosCatalogoReady.value
-      ? prestamoMeta.value.filter(
-          (p) =>
-            p.id_cliente === cliente!.id_cliente &&
-            p.estado !== 'cancelado' &&
-            p.estado !== 'pagado',
-        )
-      : []
-    if (!prestamos.length) {
-      const { data: prestamosApi } = await api.get<Paginated<Prestamo>>(
-        `/prestamos/?id_cliente=${cliente.id_cliente}&page_size=50`,
-      )
-      prestamos = prestamosApi.results
-        .filter((p) => p.estado !== 'cancelado' && p.estado !== 'pagado')
-        .map((p) => ({
-          id_prestamo: p.id_prestamo,
-          id_cliente: p.id_cliente,
-          id_zona: p.id_zona ?? null,
-          dni: cliente!.dni,
-          nombre: cliente!.nombre,
-          zona: (p.zona?.nombre ?? p.sucursal ?? '').trim(),
-          forma_pago: p.forma_pago ?? 'mensual',
-          numero_prestamo: p.numero_prestamo ?? '',
-          estado: p.estado ?? '',
-        }))
-    }
-    const activo =
-      prestamos.find((p) => p.estado === 'activo' || p.estado === 'mora') ?? prestamos[0] ?? null
-    searchResult.value = {
-      id_cliente: cliente.id_cliente,
-      nombre: cliente.nombre,
-      dni: cliente.dni,
-      telefono: cliente.telefono,
-      direccion_residencia: cliente.direccion_residencia,
-      actividad_economica: cliente.actividad_economica,
-      hasPrestamo: prestamos.length > 0,
-      prestamoId: activo?.id_prestamo ?? null,
-      prestamoLabel: activo ? `${activo.numero_prestamo} (${activo.estado})` : null,
-    }
-    if (activo?.id_prestamo) {
-      await cargarProximaCuotaParaCobro(activo.id_prestamo)
-    } else {
-      proximaCuotaSemanalMensaje.value = 'El cliente no tiene préstamos activos para cobrar.'
-    }
-  } catch (e) {
-    toast.add({
-      severity: 'error',
-      summary: 'Buscar cliente',
-      detail: getApiErrorMessage(e),
-      life: 6000,
-    })
-  } finally {
-    buscarClienteLoading.value = false
-  }
-}
-
-async function abrirCobroDesdeBusqueda() {
-  if (!canWritePagos.value) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Cobros',
-      detail: 'Tu rol no puede registrar cobros.',
-      life: 4000,
-    })
-    return
-  }
-  const pid = searchResult.value?.prestamoId
-  if (pid == null) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Cobros',
-      detail: 'El cliente no tiene un préstamo seleccionable.',
-      life: 4000,
-    })
-    return
-  }
-  if (!proximaCuotaSemanalInfo.value) {
-    await cargarProximaCuotaParaCobro(pid)
-  }
-  const info = proximaCuotaSemanalInfo.value
-  if (!info) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Sin cuota pendiente',
-      detail: proximaCuotaSemanalMensaje.value || 'No hay cuota pendiente por cobrar.',
-      life: 4500,
-    })
-    return
-  }
-  let carteraInfo: CarteraCobroInfo = {
-    id_cartera: null,
-    cartera_nombre: '',
-    cartera_dia_cobro: '',
-    cliente_dia_cobro_semanal: '',
-    fecha_entrega: '',
-  }
-  try {
-    carteraInfo = await resolverCarteraCobro(pid)
-  } catch {
-    /* sin cartera */
-  }
-  const saldos = await cargarSaldosReportePrestamo(pid)
-  abrirDialogoCaja({
-    id_prestamo: pid,
-    cliente: searchResult.value?.nombre ?? 'Cliente',
-    dni: searchResult.value?.dni ?? '',
-    ...carteraInfo,
-    cuota_numero: info.numero_cuota,
-    fecha_cuota: info.fecha_programada,
-    capital: info.capital_programado,
-    interes: info.interes_programado,
-    monto_pendiente_cuota: info.monto_pendiente,
-    saldo_inicial: saldos?.saldo_inicial ?? info.saldo_actual ?? info.saldo_capital_programado,
-    saldo_actual: saldos?.saldo_actual ?? info.saldo_actual ?? info.saldo_capital_programado,
-  })
-}
-
-async function abrirEstadoCuenta(prestamoId?: number | null) {
-  const pid = prestamoId ?? searchResult.value?.prestamoId
-  if (pid == null) return
-  ensureSearchContextFromPrestamo(pid)
-  estadoCuentaVisible.value = true
-  estadoCuentaLoading.value = true
-  estadoCuentaError.value = ''
-  estadoCuentaRows.value = []
-  estadoCuentaPlanRows.value = []
-  try {
-    const [pagos, cuotas, { data: pr }] = await Promise.all([
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=200`),
-      fetchAllPages<PrestamoCuotaRow>(
-        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=200&ordering=numero_cuota`,
-      ),
-      api.get<Prestamo>(`/prestamos/${pid}/`),
-    ])
-    const pagosActivos = pagosVigentes(pagos)
-    estadoCuentaRows.value = [...ordenarPagosPrestamo(pagosActivos)].reverse()
-    const filasEstado = buildFilasCuotaEstado(cuotas, pagos)
-    estadoCuentaPlanRows.value = filasCuotaEstadoAModalPlan(filasEstado)
-    estadoCuentaResumen.value = {
-      totalPagos: pagosActivos.length,
-      totalCapital: pagosActivos.reduce((s, p) => s + (Number(p.capital) || 0), 0),
-      totalInteres: pagosActivos.reduce((s, p) => s + (Number(p.interes) || 0), 0),
-      estadoPrestamo: pr.estado ?? '',
-    }
-  } catch (e) {
-    estadoCuentaError.value = getApiErrorMessage(e, 'No se pudo cargar el estado de cuenta.')
-  } finally {
-    estadoCuentaLoading.value = false
-  }
-}
-
-function avisoWhatsAppSinTelefono() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'El cliente no tiene teléfono registrado.',
-    life: 4000,
-  })
-}
-
-function avisoWhatsAppNumeroInvalido() {
-  toast.add({
-    severity: 'warn',
-    summary: 'WhatsApp',
-    detail: 'No se pudo abrir WhatsApp. Verifique que el teléfono tenga formato válido (8 dígitos en Honduras).',
-    life: 5000,
-  })
-}
-
-function enviarWhatsAppEstadoCuentaModal() {
-  const cliente = searchResult.value
-  if (!cliente) return
-  const telefono = cliente.telefono?.trim()
-  if (!telefono) {
-    avisoWhatsAppSinTelefono()
-    return
-  }
-  const r = estadoCuentaResumen.value
-  const mensaje = mensajeEstadoCuentaModal({
-    nombre: cliente.nombre,
-    dni: cliente.dni || '—',
-    totalPagos: r.totalPagos,
-    totalCapital: formatMoney(r.totalCapital),
-    totalInteres: formatMoney(r.totalInteres),
-    estadoPrestamo: r.estadoPrestamo,
-  })
-  if (!abrirWhatsAppConMensaje(telefono, mensaje)) avisoWhatsAppNumeroInvalido()
-}
-
-async function abrirCuotas(prestamoId?: number | null) {
-  const pid = prestamoId ?? searchResult.value?.prestamoId
-  if (pid == null) return
-  ensureSearchContextFromPrestamo(pid)
-  cuotasVisible.value = true
-  cuotasLoading.value = true
-  cuotasError.value = ''
-  cuotasRows.value = []
-  cuotasPagosRegistrados.value = []
-  filasCalendarioEstado.value = []
-  cuotasPrestamoId.value = pid
-  try {
-    const [cuotas, pagos] = await Promise.all([
-      fetchAllPages<PrestamoCuotaRow>(
-        `/prestamo-cuotas/?id_prestamo=${pid}&page_size=500&ordering=numero_cuota`,
-      ),
-      fetchAllPages<Pago>(`/pagos/?id_prestamo=${pid}&page_size=500`),
-    ])
-    cuotasRows.value = cuotas.map((c) => ({
-      periodo: c.numero_cuota,
-      fecha_limite: c.fecha_programada,
-      capital: Number(c.capital_programado),
-      interes: Number(c.interes_programado),
-      saldo: Number(c.saldo_capital_programado),
-    }))
-    cuotasPagosRegistrados.value = pagos
-    filasCalendarioEstado.value = buildFilasCuotaEstado(cuotas, pagos)
-  } catch (e) {
-    cuotasError.value = getApiErrorMessage(e, 'No se pudo cargar el calendario de cuotas.')
-  } finally {
-    cuotasLoading.value = false
-  }
 }
 
 function parseQueryNumber(value: unknown): number | null {
@@ -1307,134 +534,9 @@ function firstQueryString(query: RouteLocationNormalized['query'], key: string):
 }
 
 async function resolverClientePorPrestamo(pid: number): Promise<{ nombre: string; dni: string }> {
-  const row = prestamoMeta.value.find((p) => p.id_prestamo === pid)
-  if (row) return { nombre: row.nombre, dni: row.dni }
   const { data: pr } = await api.get<Prestamo>(`/prestamos/${pid}/`)
   const { data: cl } = await api.get<Cliente>(`/clientes/${pr.id_cliente}/`)
   return { nombre: cl.nombre ?? 'Cliente', dni: cl.dni ?? '' }
-}
-
-async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
-  const items: T[] = []
-  let nextUrl: string | null = initialPath
-  while (nextUrl) {
-    const response: { data: Paginated<T> } = await api.get<Paginated<T>>(nextUrl)
-    const page: Paginated<T> = response.data
-    items.push(...page.results)
-    nextUrl = page.next
-  }
-  return items
-}
-
-async function loadPrestamos() {
-  const [prestamos, clientes, usuarios] = await Promise.all([
-    fetchAllPages<Prestamo>('/prestamos/?page_size=200'),
-    fetchAllPages<Cliente>('/clientes/?page_size=200'),
-    fetchAllPages<{ id_usuario: number; nombre: string }>('/usuarios/?page_size=200'),
-  ])
-  const clientesById = new Map(
-    clientes.map((cliente) => [cliente.id_cliente, cliente] as const),
-  )
-  clienteMeta.value = clientes.map((cliente) => ({
-    id_cliente: cliente.id_cliente,
-    dni: cliente.dni ?? '',
-    nombre: cliente.nombre ?? 'Cliente',
-    telefono: cliente.telefono ?? '',
-    direccion_residencia: cliente.direccion_residencia ?? '',
-    actividad_economica: cliente.actividad_economica ?? '',
-  }))
-  usuarioOptions.value = usuarios.map((usuario) => ({
-    id_usuario: usuario.id_usuario,
-    nombre: usuario.nombre,
-  }))
-
-  prestamoMeta.value = prestamos.map((prestamo) => {
-    const cliente = clientesById.get(prestamo.id_cliente)
-    return {
-      id_prestamo: prestamo.id_prestamo,
-      id_cliente: prestamo.id_cliente,
-      id_zona: prestamo.id_zona ?? null,
-      dni: cliente?.dni ?? '',
-      nombre: cliente?.nombre ?? 'Cliente',
-      zona: (prestamo.zona?.nombre ?? prestamo.sucursal ?? '').trim(),
-      forma_pago: prestamo.forma_pago ?? 'mensual',
-      numero_prestamo: prestamo.numero_prestamo ?? '',
-      estado: prestamo.estado ?? '',
-    }
-  })
-
-  prestamoOptions.value = prestamos.map((prestamo) => {
-    const cliente = clientesById.get(prestamo.id_cliente)
-    const dni = cliente?.dni ?? 'Sin DNI'
-    const nombre = cliente?.nombre ?? 'Cliente'
-    return {
-      id_prestamo: prestamo.id_prestamo,
-      label: `${prestamo.numero_prestamo} (#${prestamo.id_prestamo}) - ${nombre} [DNI: ${dni}]`,
-    }
-  })
-  prestamosCatalogoReady.value = true
-}
-
-async function ensurePrestamosCatalogo(): Promise<void> {
-  if (prestamosCatalogoReady.value) return
-  if (prestamosCatalogoCargando.value) {
-    while (prestamosCatalogoCargando.value) {
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    return
-  }
-  prestamosCatalogoCargando.value = true
-  try {
-    await loadPrestamos()
-  } finally {
-    prestamosCatalogoCargando.value = false
-  }
-}
-
-function resetClienteForm() {
-  clienteForm.value = {
-    nombre: '',
-    dni: '',
-    telefono: '',
-    direccion_residencia: '',
-    actividad_economica: '',
-  }
-}
-
-function resetPrestamoForm() {
-  prestamoForm.value = {
-    numero_prestamo: '',
-    id_cliente: clienteMeta.value[0]?.id_cliente ?? null,
-    id_usuario: usuarioOptions.value[0]?.id_usuario ?? null,
-    monto: null,
-    plazo: 12,
-    tasa_interes: null,
-    forma_pago: 'mensual',
-    forma_desembolso: 'efectivo',
-    comision: 0,
-    fecha_entrega: getTodayISO(),
-    estado: 'activo',
-  }
-}
-
-function openCreateFromQuery() {
-  const queryPrestamo = parseQueryNumber(route.query.id_prestamo)
-  const queryCapital = parseQueryNumber(route.query.capital)
-  const queryInteres = parseQueryNumber(route.query.interes)
-  const querySaldo = parseQueryNumber(route.query.saldo)
-  const queryFecha = typeof route.query.fecha_pago === 'string' ? route.query.fecha_pago : ''
-
-  clienteSearch.value = ''
-  hasClientSearchExecuted.value = true
-  searchResult.value = null
-  form.value = {
-    id_prestamo: queryPrestamo ?? prestamoOptions.value[0]?.id_prestamo ?? null,
-    fecha_pago: queryFecha,
-    documento: '',
-    capital: queryCapital,
-    interes: queryInteres,
-    saldo: querySaldo,
-  }
 }
 
 /** Deep link desde integración préstamos: abre diálogo caja listo para cobrar. */
@@ -1477,7 +579,7 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
   }
 
   const clienteNombre = clienteQs || nombreResolved
-  const saldos = await cargarSaldosReportePrestamo(pid)
+  const reporte = await cargarSaldosReportePrestamo(pid)
   let carteraInfo: CarteraCobroInfo = {
     id_cartera: null,
     cartera_nombre: '',
@@ -1490,20 +592,20 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
   } catch {
     /* sin cartera en enlace */
   }
-  let fechaCuota: string | undefined
-  let montoPendiente: number | undefined
-  let filaReporte: ReporteIntegracionFila | undefined
+  const filaReporte = reporte?.fila ?? undefined
+  const fechaCuota = filaReporte?.cuota_siguiente_fecha ?? undefined
+  const montoPendiente = filaReporte ? montoPendienteDesdeFilaReporte(filaReporte) : undefined
+  const totalCuotas = filaReporte ? totalCuotasDesdeReporte(filaReporte) : 0
+
+  let cliente: Cliente | null = null
   try {
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?id_prestamo=${pid}&all=1`,
-    )
-    filaReporte = data.filas?.[0]
-    fechaCuota = filaReporte?.cuota_siguiente_fecha ?? undefined
-    if (filaReporte) montoPendiente = montoPendienteDesdeFilaReporte(filaReporte)
+    const { data: pr } = await api.get<Prestamo>(`/prestamos/${pid}/`)
+    const { data: cl } = await api.get<Cliente>(`/clientes/${pr.id_cliente}/`)
+    cliente = cl
   } catch {
-    fechaCuota = undefined
-    montoPendiente = undefined
+    cliente = null
   }
+  const contacto = datosContactoDesdeCliente(cliente)
 
   abrirDialogoCaja({
     id_prestamo: pid,
@@ -1511,13 +613,29 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
     cliente: clienteNombre,
     dni: dniResolved,
     ...carteraInfo,
+    fecha_vencimiento: filaReporte?.fecha_vencimiento ?? undefined,
     cuota_numero: cuotaN,
     fecha_cuota: fechaCuota,
     capital,
     interes,
     monto_pendiente_cuota: montoPendiente ?? capital + interes,
-    saldo_inicial: saldos?.saldo_inicial ?? saldo ?? 0,
-    saldo_actual: saldos?.saldo_actual ?? saldo ?? 0,
+    saldo_inicial: reporte?.saldo_inicial ?? saldo ?? 0,
+    saldo_actual: reporte?.saldo_actual ?? saldo ?? 0,
+    telefono: contacto.telefono || filaReporte?.telefono || '',
+    direccion_residencia: contacto.direccion_residencia,
+    direccion_negocio: contacto.direccion_negocio,
+    referencia: contacto.referencia,
+    referencia_parentesco: contacto.referencia_parentesco,
+    referencia_telefono: contacto.referencia_telefono,
+    monto_prestamo:
+      Number.parseFloat(String(filaReporte?.monto ?? reporte?.saldo_inicial ?? saldo ?? 0)) || 0,
+    cuota_programada: Number.parseFloat(filaReporte?.cuota ?? '') || montoPendiente || 0,
+    total_cuotas: totalCuotas,
+    fecha_ultimo_pago: filaReporte?.fecha_ultimo_pago ?? '',
+    monto_ultimo_pago: filaReporte?.monto_ultimo_pago ?? '',
+    cuota_pendiente_abonado: filaReporte?.cuota_siguiente_abonado ?? '',
+    cuotas_atrasadas: filaReporte?.cuotas_atrasadas ?? 0,
+    cuotas_atrasadas_numeros: filaReporte?.cuotas_atrasadas_numeros ?? '',
   })
   return true
 }
@@ -1556,29 +674,22 @@ async function confirmarPagoCuota() {
     cajaFormError.value = 'No puede cobrar: el préstamo no pertenece a una cartera asignada a su usuario.'
     return
   }
-  if (
-    cajaForm.value.capital < 0 ||
-    cajaForm.value.interes < 0 ||
-    cajaForm.value.monto_recibido < 0
-  ) {
-    cajaFormError.value = 'Los montos no pueden ser negativos.'
-    return
-  }
-  const montoRecibido = Number(cajaForm.value.monto_recibido) || 0
+  const montoRecibido = Number.parseFloat(cajaMontoRecibido.value.replace(',', '.')) || 0
   if (montoRecibido <= 0) {
     cajaFormError.value = 'Indique el monto recibido del cliente.'
     return
   }
   cajaSaving.value = true
   try {
+    const saldoPosterior = Math.max(0, cajaForm.value.saldo_actual - montoRecibido)
     const payload: Record<string, string | number> = {
       id_prestamo: cajaForm.value.id_prestamo,
       fecha_pago: cajaForm.value.fecha_pago,
       documento: `Cuota ${cajaForm.value.cuota_numero}`,
-      capital: cajaForm.value.capital,
-      interes: cajaForm.value.interes,
+      capital: montoRecibido.toFixed(2),
+      interes: '0.00',
       mora: 0,
-      saldo: cajaSaldoPosterior.value,
+      saldo: saldoPosterior.toFixed(2),
       monto_recibido: montoRecibido.toFixed(2),
     }
 
@@ -1601,20 +712,17 @@ async function confirmarPagoCuota() {
         })
         .join('; ')
       detail = `Distribución: ${partes}`
-    } else if (cajaPendienteCuotaTrasCobro.value > 0.01) {
-      detail = `Se registró ${formatMoney(montoRecibido)}. Queda pendiente ${formatMoney(cajaPendienteCuotaTrasCobro.value)} en la cuota #${cajaForm.value.cuota_numero} (sin interés adicional).`
     }
 
     toast.add({
       severity: 'success',
-      summary: 'Pago registrado',
+      summary: 'Cobro registrado',
       detail,
       life: 4500,
     })
     if (pagoCreado?.id_pago) {
       await abrirFacturaPago(pagoCreado.id_pago)
     }
-    await cargarProximaCuotaParaCobro(cajaForm.value.id_prestamo)
     await cargarHojaCobrosFindeco({ silentEmpty: true })
     cajaVisible.value = false
   } catch (e) {
@@ -1635,70 +743,12 @@ async function confirmarPagoCuota() {
   }
 }
 
-async function cobrarDesdeAlerta(alerta: { periodo: number; capital: number; interes: number; saldo: number }) {
-  if (cuotasPrestamoId.value == null || !searchResult.value) return
-  const saldos = await cargarSaldosReportePrestamo(cuotasPrestamoId.value)
-  let carteraInfo: CarteraCobroInfo = {
-    id_cartera: null,
-    cartera_nombre: '',
-    cartera_dia_cobro: '',
-    cliente_dia_cobro_semanal: '',
-    fecha_entrega: '',
-  }
-  try {
-    carteraInfo = await resolverCarteraCobro(cuotasPrestamoId.value)
-  } catch {
-    /* sin cartera */
-  }
-  const filaCuota = cuotasRows.value.find((row) => row.periodo === alerta.periodo)
-  const fechaCuota = filaCuota?.fecha_limite
-  let montoPendiente = alerta.capital + alerta.interes
-  try {
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?id_prestamo=${cuotasPrestamoId.value}&all=1`,
-    )
-    const fila = data.filas?.[0]
-    if (fila) montoPendiente = montoPendienteDesdeFilaReporte(fila)
-  } catch {
-    /* sin reporte */
-  }
-  abrirDialogoCaja({
-    id_prestamo: cuotasPrestamoId.value,
-    cliente: searchResult.value.nombre,
-    dni: searchResult.value.dni,
-    ...carteraInfo,
-    cuota_numero: alerta.periodo,
-    fecha_cuota: fechaCuota,
-    capital: alerta.capital,
-    interes: alerta.interes,
-    monto_pendiente_cuota: montoPendiente,
-    saldo_inicial: saldos?.saldo_inicial ?? alerta.saldo,
-    saldo_actual: saldos?.saldo_actual ?? alerta.saldo,
-  })
-}
-
 onMounted(async () => {
   if (auth.isAuthenticated && !auth.profile) {
     await auth.fetchProfile()
   }
   await cargarCatalogoCarterasHoja()
-  resetClienteForm()
-  resetPrestamoForm()
-
   await consumirDeepLinkIntegracionEnQuery()
-
-  if (route.query.fromPrestamo === '1' && canWritePagos.value) {
-    await ensurePrestamosCatalogo()
-    openCreateFromQuery()
-    const cleanedQuery = { ...route.query }
-    delete cleanedQuery.fromPrestamo
-    delete cleanedQuery.id_prestamo
-    delete cleanedQuery.fecha_pago
-    delete cleanedQuery.capital
-    delete cleanedQuery.interes
-    delete cleanedQuery.saldo
-    await router.replace({ query: cleanedQuery })
-  }
 })
 </script>
 
@@ -1706,41 +756,12 @@ onMounted(async () => {
   <div class="page cobros-page">
     <section class="hoja-findeco-section">
       <div class="hoja-findeco-toolbar no-print">
-        <Select
+        <CarteraDropdown
           v-model="hojaCobrosCarteraFiltro"
-          :options="carteraHojaOpciones"
-          option-label="label"
-          option-value="value"
-          placeholder="Seleccione cartera"
-          class="hoja-cartera-select filtro-hoja-select"
-        />
-        <Select
-          v-model="hojaCobrosEstadoFiltro"
-          :options="estadoHojaOpciones"
-          option-label="label"
-          option-value="value"
-          placeholder="Estado préstamo"
-          class="hoja-estado-select filtro-hoja-select"
-          :disabled="!carteraHojaRequerida()"
-        />
-        <Button
-          label="Actualizar hoja"
-          icon="pi pi-refresh"
-          type="button"
-          severity="secondary"
-          :loading="hojaCobrosLoading"
-          :disabled="!carteraHojaRequerida()"
-          @click="() => void cargarHojaCobrosFindeco()"
-        />
-        <Button
-          label="Imprimir"
-          icon="pi pi-print"
-          type="button"
-          severity="success"
-          outlined
-          :loading="hojaPreviewCargando"
-          :disabled="!hojaCobrosTotal || hojaCobrosLoading || hojaPreviewCargando"
-          @click="abrirVistaPreviaHoja"
+          :carteras="hojaCarteras"
+          :disabled="hojaCobrosLoading"
+          :auto-open="!carteraHojaRequerida() && hojaCarteras.length > 0"
+          class="hoja-cartera-dropdown filtro-hoja-select"
         />
         <span v-if="hojaCobrosTotal" class="hoja-findeco-contador no-print">
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
@@ -1748,621 +769,45 @@ onMounted(async () => {
       </div>
 
       <p v-if="!carteraHojaRequerida()" class="hoja-findeco-aviso no-print">
-        Seleccione una cartera y pulse «Actualizar hoja» para consultar los préstamos.
-      </p>
-      <p
-        v-else-if="!hojaCobrosCargada && !hojaCobrosLoading"
-        class="hoja-findeco-aviso no-print"
-      >
-        Pulse «Actualizar hoja» para cargar los préstamos de la cartera seleccionada.
+        Seleccione una cartera para cargar los préstamos a cobrar.
       </p>
 
-      <article v-else-if="hojaCobrosCargada || hojaCobrosLoading" class="hoja-findeco-sheet">
-        <header class="hoja-findeco-header">
-          <h1 class="hoja-findeco-marca">FINDECO</h1>
-          <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
-          <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
-          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
-        </header>
-
-        <DataTable
-          :value="hojaCobrosFilas"
-          :loading="hojaCobrosLoading"
-          data-key="id_prestamo"
-          lazy
-          paginator
-          :first="hojaTableFirst"
-          :rows="hojaCobrosPageSize"
-          :rows-per-page-options="[10, 20, 50]"
-          :total-records="hojaCobrosTotal"
-          paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
-          current-page-report-template="{first} - {last} de {totalRecords} préstamos"
-          striped-rows
-          scrollable
-          scroll-direction="horizontal"
-          responsive-layout="scroll"
-          class="hoja-findeco-datatable no-print-table"
-          empty-message="No hay préstamos para los filtros seleccionados."
-          @page="onHojaCobrosPage"
-        >
-          <Column header="N" style="width: 3rem; text-align: center">
-            <template #body="{ index }: { index: number }">
-              {{ numeroFilaHoja(index) }}
-            </template>
-          </Column>
-          <Column field="nombre_cliente" header="NOMBRE CLIENTE" style="min-width: 11rem" />
-          <Column header="ENTREGA" style="width: 6.5rem; text-align: center">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ formatDate(data.fecha_entrega) }}
-            </template>
-          </Column>
-          <Column header="VENCE" style="width: 6.5rem; text-align: center">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ formatDate(data.fecha_vencimiento) }}
-            </template>
-          </Column>
-          <Column header="SALDO INICIAL" style="width: 6.5rem; text-align: right">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ formatNumeroHoja(data.saldo_inicial) }}
-            </template>
-          </Column>
-          <Column header="CUOTA" style="width: 6.5rem; text-align: right">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ formatNumeroHoja(data.cuota) }}
-            </template>
-          </Column>
-          <Column header="CUOTA PEND." style="width: 8.5rem; text-align: right">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              <div class="cuota-pend-cell">
-                <span class="cuota-pend-monto">
-                  {{
-                    data.cuota_siguiente_monto != null && data.cuota_siguiente_monto !== ''
-                      ? formatNumeroHoja(data.cuota_siguiente_monto)
-                      : '—'
-                  }}
-                </span>
-                <span
-                  v-if="(data.cuotas_atrasadas ?? 0) > 0"
-                  class="cuotas-atrasadas-tag"
-                  :title="textoCuotasAtrasadas(data)"
-                >
-                  {{ textoCuotasAtrasadas(data) }}
-                </span>
-                <span v-else-if="data.cuota_siguiente_fecha" class="cuota-pend-fecha">
-                  Vence {{ formatDate(data.cuota_siguiente_fecha) }}
-                </span>
-              </div>
-            </template>
-          </Column>
-          <Column header="SALDO ACTUAL" style="width: 6.5rem; text-align: right">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ formatNumeroHoja(data.saldo_actual) }}
-            </template>
-          </Column>
-          <Column header="Nº PRESTAMO" style="width: 6.5rem; text-align: center">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ data.numero_prestamo }}
-            </template>
-          </Column>
-          <Column header="CELULAR" style="width: 6.5rem; text-align: center">
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              {{ data.telefono?.trim() || '' }}
-            </template>
-          </Column>
-          <Column
-            v-if="canWritePagos"
-            header="COBRAR"
-            style="width: 7.5rem; text-align: center"
-            class="col-cobrar"
-          >
-            <template #body="{ data }: { data: ReporteIntegracionFila }">
-              <Button
-                v-if="data.cuota_siguiente_numero != null"
-                label="Cobrar"
-                icon="pi pi-wallet"
-                size="small"
-                severity="success"
-                @click="abrirCobroDesdeHoja(data)"
-              />
-              <span v-else class="cuota-pagada-tag">—</span>
-            </template>
-          </Column>
-        </DataTable>
-
-        <div v-if="hojaCobrosTotal" class="hoja-findeco-totales-bar no-print">
-          <span class="totales-label">TOTALES:</span>
-          <span class="totales-monto">{{ formatNumeroHoja(hojaCobrosTotales.saldoInicial) }}</span>
-          <span class="totales-monto">{{ formatNumeroHoja(hojaCobrosTotales.cuota) }}</span>
-          <span class="totales-monto">{{ formatNumeroHoja(hojaCobrosTotales.saldoActual) }}</span>
-        </div>
-      </article>
-    </section>
-
-    <Dialog
-      v-model:visible="hojaPreviewVisible"
-      modal
-      :show-header="false"
-      class="hoja-preview-dialog no-print"
-      :style="{ width: 'min(96vw, 78rem)' }"
-      :draggable="false"
-      @hide="cerrarVistaPreviaHoja"
-    >
-      <div class="hoja-preview-print-area">
-        <header class="hoja-findeco-header hoja-preview-header">
-          <img
-            src="/findeco-logo.png"
-            alt="FINDECO"
-            class="hoja-findeco-logo"
-            width="200"
-            height="52"
-          />
-          <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
-          <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
-          <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
-        </header>
-
-        <div class="hoja-preview-scroll">
-          <table class="hoja-findeco-table hoja-preview-table">
-            <thead>
-              <tr>
-                <th class="col-n">N</th>
-                <th class="col-nombre">NOMBRE CLIENTE</th>
-                <th class="col-fecha">ENTREGA</th>
-                <th class="col-fecha">VENCE</th>
-                <th class="col-monto">SALDO INICIAL</th>
-                <th class="col-monto">CUOTA</th>
-                <th class="col-monto">CUOTA PEND.</th>
-                <th class="col-monto">SALDO ACTUAL</th>
-                <th class="col-prestamo">Nº PRESTAMO</th>
-                <th class="col-cel">CELULAR</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(fila, index) in hojaCobrosFilasPrint" :key="`preview-${fila.id_prestamo}`">
-                <td class="col-n">{{ index + 1 }}</td>
-                <td class="col-nombre">{{ fila.nombre_cliente }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_entrega) }}</td>
-                <td class="col-fecha">{{ formatDate(fila.fecha_vencimiento) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_inicial) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.cuota) }}</td>
-                <td class="col-monto col-cuota-pend">
-                  <span>{{ formatNumeroHoja(fila.cuota_siguiente_monto) || '—' }}</span>
-                  <span v-if="(fila.cuotas_atrasadas ?? 0) > 0" class="cuotas-atrasadas-tag-print">
-                    {{ textoCuotasAtrasadas(fila) }}
-                  </span>
-                </td>
-                <td class="col-monto">{{ formatNumeroHoja(fila.saldo_actual) }}</td>
-                <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
-                <td class="col-cel">{{ fila.telefono?.trim() || '' }}</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr class="hoja-findeco-totales">
-                <td colspan="4" class="totales-label">TOTALES:</td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoInicial) }}</td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.cuota) }}</td>
-                <td class="col-monto"></td>
-                <td class="col-monto">{{ formatNumeroHoja(hojaPreviewTotales.saldoActual) }}</td>
-                <td colspan="2"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-
-      <template #footer>
-        <div class="hoja-preview-dialog-actions">
-          <Button label="Cerrar" severity="secondary" text @click="cerrarVistaPreviaHoja" />
-          <Button
-            label="Imprimir"
-            icon="pi pi-print"
-            :loading="hojaImprimiendo"
-            @click="ejecutarImpresionDesdePreview"
-          />
-        </div>
-      </template>
-    </Dialog>
-
-    <section v-if="canWritePagos" class="gestion-cobros-section no-print">
-      <h2 class="section-title">Gestión de cobro de cuotas</h2>
-      <p class="hint-text">
-        Busca por DNI, nombre o número de préstamo, o pulsa <strong>Cobrar</strong> en la hoja de arriba para
-        registrar el pago y generar la factura.
-      </p>
-
-      <div class="transacciones-panel">
-        <div class="cobros-busqueda-stack">
-          <div class="dni-search-wrap dni-busqueda-linea">
-            <InputText
-              v-model="clienteSearch"
-              placeholder="DNI, nombre o número de préstamo"
-              class="campo-buscar-cliente"
-              @keyup.enter="buscarCliente"
-            />
-            <Button
-              label="Buscar cliente"
-              icon="pi pi-search"
-              type="button"
-              :loading="buscarClienteLoading"
-              @click="buscarCliente"
-            />
-          </div>
+      <div v-else class="hoja-cobros-list-wrap">
+        <div v-if="hojaCobrosLoading && hojaCobrosFilas.length === 0" class="hoja-cobros-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true" />
+          <span>Cargando préstamos…</span>
         </div>
 
-        <p v-if="hasClientSearchExecuted && !searchResult && !buscarClienteLoading" class="gestion-sin-resultado">
-          No se encontró cliente ni préstamo con ese criterio.
-        </p>
-
-        <div v-if="searchResult" class="result-box">
-          <h3 class="result-title">{{ searchResult.nombre }}</h3>
-          <div class="result-form-grid">
-            <div class="result-field">
-              <span class="result-label">DNI</span>
-              <InputText :model-value="searchResult.dni || '—'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Teléfono</span>
-              <InputText :model-value="searchResult.telefono || '—'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Préstamo</span>
-              <InputText :model-value="searchResult.prestamoLabel || 'Sin préstamo activo'" readonly />
-            </div>
-            <div class="result-field">
-              <span class="result-label">Dirección</span>
-              <InputText :model-value="searchResult.direccion_residencia || '—'" readonly />
-            </div>
-          </div>
-
-          <p v-if="proximaCuotaSemanalLoading" class="cuota-semanal-muted">Cargando cuota pendiente…</p>
-
-          <div v-else-if="proximaCuotaSemanalInfo" class="cuota-semanal-card">
-            <div class="cuota-semanal-head">
-              <span class="cuota-semanal-titulo">Cuota #{{ proximaCuotaSemanalInfo.numero_cuota }} pendiente</span>
-              <span class="cuota-semanal-monto">{{ formatMoney(proximaCuotaSemanalInfo.monto_pendiente) }}</span>
-            </div>
-            <p class="cuota-semanal-meta">
-              Fecha programada: {{ formatDate(proximaCuotaSemanalInfo.fecha_programada) }} · Capital:
-              {{ formatMoney(proximaCuotaSemanalInfo.capital_programado) }} · Interés:
-              {{ formatMoney(proximaCuotaSemanalInfo.interes_programado) }} · Saldo actual:
-              {{ formatMoney(proximaCuotaSemanalInfo.saldo_actual ?? proximaCuotaSemanalInfo.saldo_inicial ?? 0) }}
-            </p>
-            <p v-if="proximaCuotaAtrasadas.count > 0" class="cuotas-atrasadas-alerta">
-              {{ proximaCuotaAtrasadas.count }} cuota{{ proximaCuotaAtrasadas.count === 1 ? '' : 's' }} vencida{{
-                proximaCuotaAtrasadas.count === 1 ? '' : 's'
-              }}
-              sin cobro (#{{ proximaCuotaAtrasadas.numeros.replace(/,\s*/g, ', #') }})
-            </p>
-          </div>
-          <p v-else-if="proximaCuotaSemanalMensaje" class="cuota-semanal-muted">{{ proximaCuotaSemanalMensaje }}</p>
-
-          <div class="result-actions">
-            <Button
-              label="Cobrar cuota"
-              icon="pi pi-wallet"
-              type="button"
-              severity="success"
-              :disabled="!searchResult.prestamoId || proximaCuotaSemanalLoading"
-              @click="abrirCobroDesdeBusqueda"
-            />
-            <Button
-              label="Estado de cuenta"
-              icon="pi pi-list"
-              type="button"
-              severity="secondary"
-              outlined
-              :disabled="!searchResult.prestamoId"
-              @click="() => abrirEstadoCuenta()"
-            />
-            <Button
-              label="Calendario de cuotas"
-              icon="pi pi-calendar"
-              type="button"
-              severity="secondary"
-              outlined
-              :disabled="!searchResult.prestamoId"
-              @click="() => abrirCuotas()"
-            />
-          </div>
+        <div v-else-if="hojaCobrosFilas.length === 0" class="hoja-cobros-empty">
+          <i class="pi pi-file" aria-hidden="true" />
+          <p>No hay préstamos en esta cartera.</p>
         </div>
+
+        <ul v-else class="hoja-cobros-list">
+          <li v-for="(fila, index) in hojaCobrosFilas" :key="fila.id_prestamo">
+            <HojaCobroCard
+              :fila="fila"
+              :index="index"
+              :class="{ 'hoja-cobro-card--readonly': !canWritePagos || fila.cuota_siguiente_numero == null }"
+              @click="onFilaCobroClick(fila)"
+            />
+          </li>
+        </ul>
       </div>
     </section>
 
-    <Dialog
-      v-model:visible="estadoCuentaVisible"
-      header="Estado de cuenta"
-      modal
-      :style="{ width: 'min(72rem, 98vw)' }"
-    >
-      <div class="estado-cuenta-wrap">
-        <p v-if="estadoCuentaError" class="estado-error">{{ estadoCuentaError }}</p>
-        <div v-else class="estado-resumen-grid">
-          <div class="estado-card"><strong>Cobros registrados:</strong> {{ estadoCuentaResumen.totalPagos }}</div>
-          <div class="estado-card"><strong>Capital pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalCapital) }}</div>
-          <div class="estado-card"><strong>Interés pagado:</strong> {{ formatMoney(estadoCuentaResumen.totalInteres) }}</div>
-          <div class="estado-card"><strong>Estado préstamo:</strong> {{ estadoCuentaResumen.estadoPrestamo || 'N/A' }}</div>
-        </div>
-        <DataTable
-          :value="estadoCuentaPlanRows"
-          :loading="estadoCuentaLoading"
-          paginator
-          :rows="10"
-          data-key="numero_cuota"
-          responsive-layout="scroll"
-          class="estado-table"
-        >
-          <Column field="numero_cuota" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_programada) }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{ data.fecha_cancelo ? formatDate(data.fecha_cancelo) : '—' }}
-            </template>
-          </Column>
-          <Column header="Hora">
-            <template #body="{ data }">
-              {{ data.cobrado_en ? formatTime(data.cobrado_en) : '—' }}
-            </template>
-          </Column>
-          <Column header="Cuota $">
-            <template #body="{ data }">{{ formatMoney(data.total_programado) }}</template>
-          </Column>
-          <Column field="estado" header="Estado" />
-          <Column header="Documento">
-            <template #body="{ data }">{{ data.documento || `Cuota ${data.numero_cuota}` }}</template>
-          </Column>
-          <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }">
-              <Button
-                v-if="data.id_pago && !esPagoFacturaSecundario(data)"
-                icon="pi pi-file-pdf"
-                label="Ver"
-                size="small"
-                severity="secondary"
-                outlined
-                :loading="facturaAbriendoId === data.id_pago"
-                :disabled="facturaAbriendoId != null && facturaAbriendoId !== data.id_pago"
-                @click="verFacturaPago(data.id_pago)"
-              />
-              <span v-else class="text-muted">—</span>
-            </template>
-          </Column>
-        </DataTable>
-      </div>
-      <template #footer>
-        <Button
-          label="Enviar por WhatsApp"
-          icon="pi pi-whatsapp"
-          severity="success"
-          outlined
-          :disabled="!searchResult?.telefono?.trim() || estadoCuentaLoading || !!estadoCuentaError"
-          @click="enviarWhatsAppEstadoCuentaModal"
-        />
-        <Button label="Cerrar" severity="secondary" text @click="estadoCuentaVisible = false" />
-      </template>
-    </Dialog>
-    <Dialog
-      v-model:visible="cuotasVisible"
-      header="Calendario de cuotas"
-      modal
-      :style="{ width: 'min(72rem, 98vw)' }"
-    >
-      <div class="estado-cuenta-wrap">
-        <p v-if="cuotasError" class="estado-error">{{ cuotasError }}</p>
-        <div v-else class="estado-card">
-          <strong>Total de cuotas:</strong> {{ cuotasTotal }}
-        </div>
-        <DataTable
-          :value="cuotasCalendarioFilas"
-          :loading="cuotasLoading"
-          responsive-layout="scroll"
-          class="estado-table"
-        >
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Estado" style="width: 7rem">
-            <template #body="{ data }">{{ data.estado }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{
-                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
-                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
-                  : '—'
-              }}
-            </template>
-          </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-          </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-        </DataTable>
-        <h4 class="subsection-title">Cuotas pagadas</h4>
-        <DataTable :value="cuotasPagadasRows" responsive-layout="scroll" class="estado-table">
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha programada">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Fecha canceló">
-            <template #body="{ data }">
-              {{
-                cuotasPagoPorPeriodo.get(data.periodo)?.fecha_pago
-                  ? formatDate(cuotasPagoPorPeriodo.get(data.periodo)!.fecha_pago)
-                  : '—'
-              }}
-            </template>
-          </Column>
-          <Column header="Capital">
-            <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
-          </Column>
-          <Column header="Interés">
-            <template #body="{ data }">{{ formatMoney(data.interes) }}</template>
-          </Column>
-          <Column header="Saldo">
-            <template #body="{ data }">{{ formatMoney(data.saldo) }}</template>
-          </Column>
-          <Column header="Factura" style="width: 8rem">
-            <template #body="{ data }">
-              <template v-if="cuotasPagoPorPeriodo.get(data.periodo)">
-                <Button
-                  v-if="!esPagoFacturaSecundario(cuotasPagoPorPeriodo.get(data.periodo)!)"
-                  icon="pi pi-file-pdf"
-                  label="Ver"
-                  size="small"
-                  severity="secondary"
-                  outlined
-                  :loading="facturaAbriendoId === cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                  :disabled="facturaAbriendoId != null && facturaAbriendoId !== cuotasPagoPorPeriodo.get(data.periodo)!.id_pago"
-                  @click="verFacturaPago(cuotasPagoPorPeriodo.get(data.periodo)!.id_pago)"
-                />
-                <span v-else class="texto-muted">—</span>
-              </template>
-              <span v-else class="texto-muted">—</span>
-            </template>
-          </Column>
-        </DataTable>
-        <DataTable :value="cuotasAlertasRows" responsive-layout="scroll" class="estado-table">
-          <Column field="periodo" header="Cuota" style="width: 5rem" />
-          <Column header="Fecha vencida">
-            <template #body="{ data }">{{ formatDate(data.fecha_limite) }}</template>
-          </Column>
-          <Column header="Días atraso">
-            <template #body="{ data }">{{ data.dias_atraso }}</template>
-          </Column>
-          <Column header="Acción" style="width: 9rem">
-            <template #body="{ data }">
-              <Button
-                label="Cobrar"
-                icon="pi pi-wallet"
-                size="small"
-                severity="success"
-                outlined
-                @click="cobrarDesdeAlerta(data)"
-              />
-            </template>
-          </Column>
-        </DataTable>
-      </div>
-      <template #footer>
-        <Button label="Cerrar" severity="secondary" text @click="cuotasVisible = false" />
-      </template>
-    </Dialog>
-    <Dialog
+    <CobroCajaDialog
       v-model:visible="cajaVisible"
-      header="Caja - Pago de cuota"
-      modal
-      :style="{ width: 'min(42rem, 95vw)' }"
-    >
-      <div class="caja-wrap">
-        <p v-if="cajaError" class="estado-error">{{ cajaError }}</p>
-        <p v-if="cajaFormError" class="estado-error">{{ cajaFormError }}</p>
-        <div class="caja-total-banner">
-          <span class="caja-total-label">Total a cobrar (pendiente de cuota)</span>
-          <strong class="caja-total-valor">{{ formatMoney(cajaTotalCobrar) }}</strong>
-        </div>
-        <p v-if="cajaHayPagoParcial" class="caja-excedente-hint">
-          Pago parcial: se registrará {{ formatMoney(cajaForm.monto_recibido) }}. Quedará pendiente
-          {{ formatMoney(cajaPendienteCuotaTrasCobro) }} en la cuota #{{ cajaForm.cuota_numero }} (sin interés adicional).
-        </p>
-        <p v-else-if="cajaHayExcedente" class="caja-excedente-hint">
-          El monto recibido excede esta cuota; el sobrante se registrará como abono a capital.
-        </p>
-        <p class="caja-factura-hint">Al confirmar se registra el pago y se abre el PDF de factura para imprimir o guardar.</p>
-        <div class="caja-form-grid">
-          <div class="result-field">
-            <label class="result-label" for="cj-cliente">Cliente</label>
-            <InputText id="cj-cliente" :model-value="cajaForm.cliente" readonly />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-dni">DNI</label>
-            <InputText id="cj-dni" :model-value="cajaForm.dni" readonly />
-          </div>
-          <div class="result-field caja-field-full">
-            <label class="result-label" for="cj-cartera">Cartera de cobro</label>
-            <InputText id="cj-cartera" :model-value="cajaCarteraEtiqueta" readonly />
-          </div>
-          <p v-if="cajaCarteraBloqueada" class="estado-error">
-            No puede cobrar: el préstamo no pertenece a una cartera asignada a su usuario.
-          </p>
-          <div class="result-field">
-            <label class="result-label" for="cj-prestamo">Préstamo</label>
-            <InputText id="cj-prestamo" :model-value="cajaForm.numero_prestamo" readonly />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-cuota">Número de cuota</label>
-            <InputText id="cj-cuota" :model-value="String(cajaForm.cuota_numero)" readonly />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-fecha">Fecha de cobro</label>
-            <InputText
-              id="cj-fecha"
-              :model-value="cajaForm.fecha_pago ? formatDate(cajaForm.fecha_pago) : '—'"
-              readonly
-            />
-          </div>
-          <div class="result-field caja-field-full">
-            <label class="result-label" for="cj-recibido">Monto recibido del cliente</label>
-            <InputNumber
-              id="cj-recibido"
-              v-model="cajaForm.monto_recibido"
-              mode="decimal"
-              :min="0"
-              :min-fraction-digits="2"
-              fluid
-            />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-sal-ini">Saldo inicial (capital + interés)</label>
-            <InputText
-              id="cj-sal-ini"
-              :model-value="formatMoney(cajaForm.saldo_inicial)"
-              readonly
-            />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-sal-act">Saldo actual</label>
-            <InputText
-              id="cj-sal-act"
-              :model-value="formatMoney(cajaForm.saldo_actual)"
-              readonly
-            />
-          </div>
-          <div class="result-field">
-            <label class="result-label" for="cj-sal">Saldo posterior al cobro</label>
-            <InputText
-              id="cj-sal"
-              :model-value="formatMoney(cajaSaldoPosterior)"
-              readonly
-            />
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="cajaVisible = false" />
-        <Button
-          label="Cobrar y generar factura"
-          icon="pi pi-check"
-          :loading="cajaSaving || cajaLoading"
-          :disabled="
-            cajaLoading ||
-            cajaSaving ||
-            cajaCarteraBloqueada ||
-            cajaForm.id_prestamo == null ||
-            !cajaForm.fecha_pago ||
-            cajaForm.cuota_numero <= 0
-          "
-          @click="confirmarPagoCuota"
-        />
-      </template>
-    </Dialog>
+      v-model:monto-recibido="cajaMontoRecibido"
+      :form="cajaFormView"
+      :saving="cajaSaving"
+      :error="cajaError"
+      :form-error="cajaFormError"
+      :cartera-bloqueada="cajaCarteraBloqueada"
+      :can-submit="cajaPuedeConfirmar"
+      @confirm="confirmarPagoCuota"
+      @cancel="cajaVisible = false"
+    />
   </div>
 </template>
 
@@ -2371,330 +816,49 @@ onMounted(async () => {
   max-width: 100%;
 }
 
-.section-title {
+.hoja-cobros-list-wrap {
+  margin-top: 0.5rem;
+}
+
+.hoja-cobros-list {
+  list-style: none;
   margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-
-.transacciones-panel {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #ffffff;
-  padding: 0.9rem;
-  margin-bottom: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-}
-
-.transacciones-filtros {
-  display: grid;
-  gap: 0.7rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.transacciones-buscar {
-  min-width: 0;
-}
-
-.transacciones-actions {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.datagrid-controls {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.6rem;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.datagrid-left,
-.datagrid-right {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-
-.small-label {
-  font-size: 0.8rem;
-  color: #334155;
-}
-
-.small-select {
-  min-height: 1.85rem;
-  border: 1px solid #b5c0cc;
-  border-radius: 4px;
-  padding: 0.1rem 0.25rem;
-  background: #fff;
-}
-
-.small-search {
-  max-width: 12rem;
-}
-
-.column-filter-grid {
-  display: grid;
-  gap: 0.4rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.tx-summary {
-  display: flex;
-  gap: 0.45rem;
-  align-items: center;
-  font-size: 0.84rem;
-  color: #334155;
-}
-
-.tx-summary-filtered {
-  color: #0f766e;
-  font-weight: 600;
-}
-
-.th-filter {
-  width: 100%;
-  min-height: 2rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  padding: 0.1rem 0.3rem;
-  font-size: 0.74rem;
-}
-
-.badge-tipo {
-  background: #22c55e;
-  color: #fff;
-  border-radius: 12px;
-  font-size: 0.66rem;
-  padding: 0.06rem 0.45rem;
-  display: inline-block;
-}
-
-.tx-prime-table {
-  border: 1px solid #d2d8de;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.tx-prime-table :deep(.p-datatable-thead > tr > th) {
-  font-size: 0.78rem;
-  background: #f4f7f9;
-}
-
-.tx-prime-table :deep(.p-datatable-tbody > tr > td) {
-  font-size: 0.78rem;
-}
-
-.toolbar {
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.registro-accordion {
-  margin-bottom: 1rem;
-}
-
-.form-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 1.35rem;
-  padding-top: 0.35rem;
-}
-
-.lbl {
-  display: block;
-  font-size: 0.78rem;
-  margin-bottom: 0.5rem;
-  opacity: 0.85;
-}
-
-.mr-1 {
-  margin-right: 0.25rem;
-}
-
-.form-stack :deep(input[type='date']) {
-  min-height: 2.65rem;
-  font-size: 0.95rem;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: #0f172a;
-}
-
-.row-two {
-  max-width: 18rem;
-}
-
-.cobros-busqueda-stack {
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  width: 100%;
 }
 
-.dni-search-wrap {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.dni-busqueda-linea {
-  flex-wrap: wrap;
-}
-
-.campo-buscar-cliente {
-  flex: 1 1 12rem;
-  min-width: 0;
-}
-
-.hoja-print-cobros-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
-}
-
-.hoja-impresion-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-  align-items: center;
-}
-
-.filtro-print-select {
-  flex: 1 1 12rem;
-  min-width: 11rem;
-}
-
-.hoja-cartera-select {
-  min-width: 13rem;
-}
-
-.hint-text {
-  display: block;
-  color: #475569;
-  font-size: 0.85rem;
-}
-
-.result-box {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #f8fafc;
-  padding: 0.9rem;
-}
-
-.result-title {
-  margin: 0 0 0.8rem;
-  font-size: 0.95rem;
-  color: #0f172a;
-}
-
-.result-form-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.result-field {
+.hoja-cobros-loading,
+.hoja-cobros-empty {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-}
-
-.result-label {
-  font-size: 0.8rem;
-  color: #334155;
-}
-
-.result-field :deep(input[readonly]) {
-  background: #ffffff;
-  color: #0f172a;
-}
-
-.native-select {
-  min-height: 2.65rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 0.45rem 0.65rem;
-  background: #fff;
-  color: #0f172a;
-}
-
-.result-actions {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  margin-top: 0.6rem;
-}
-
-.cuota-semanal-cta {
-  margin-top: 1rem;
-}
-
-.cuota-semanal-source-hint {
-  margin: 0;
-  padding: 0.55rem 0.65rem;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  font-size: 0.8rem;
-  line-height: 1.45;
-  color: #475569;
-}
-
-.cuota-semanal-source-hint code {
-  font-size: 0.74rem;
-  padding: 0.05rem 0.28rem;
-  border-radius: 4px;
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-.cuota-semanal-card {
-  margin-top: 0.75rem;
-  border: 1px solid #93c5fd;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
-  padding: 0.95rem 1rem;
-}
-
-.cuota-semanal-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.cuota-semanal-titulo {
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: #1e3a8a;
-}
-
-.cuota-semanal-monto {
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-
-.cuota-semanal-meta {
-  margin: 0.5rem 0 0.75rem;
-  font-size: 0.86rem;
-  color: #334155;
-  line-height: 1.45;
-}
-
-.cuota-semanal-muted {
-  margin: 0.35rem 0 0;
-  font-size: 0.82rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  padding: 2.5rem 1rem;
   color: #64748b;
+  text-align: center;
+}
+
+.hoja-cobros-loading i,
+.hoja-cobros-empty i {
+  font-size: 2rem;
+  color: #94a3b8;
+}
+
+.hoja-cobros-empty p {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+:deep(.hoja-cobro-card--readonly) {
+  cursor: default;
+}
+
+:deep(.hoja-cobro-card--readonly:hover) {
+  border-color: #e2e8f0;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 8%);
 }
 
 .caja-total-banner {
@@ -2728,16 +892,6 @@ onMounted(async () => {
   font-size: 0.82rem;
 }
 
-.caja-cartera-hint {
-  margin: 0;
-  padding: 0.5rem 0.65rem;
-  border-radius: 6px;
-  background: #fffbeb;
-  color: #b45309;
-  font-size: 0.82rem;
-  grid-column: 1 / -1;
-}
-
 .caja-field-full {
   grid-column: 1 / -1;
 }
@@ -2748,47 +902,10 @@ onMounted(async () => {
   color: #64748b;
 }
 
-.estado-cuenta-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.texto-muted {
-  color: #94a3b8;
-  font-size: 0.85rem;
-}
-
-.estado-resumen-grid {
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.estado-card {
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #f8fafc;
-  padding: 0.65rem 0.75rem;
-  font-size: 0.9rem;
-  color: #1f2937;
-}
-
 .estado-error {
   margin: 0;
   color: #b91c1c;
   font-size: 0.9rem;
-}
-
-.field-error {
-  color: #b91c1c;
-  font-size: 0.78rem;
-}
-
-.subsection-title {
-  margin: 0.35rem 0 0.2rem;
-  font-size: 0.95rem;
-  color: #0f172a;
 }
 
 .caja-wrap {
@@ -2803,75 +920,14 @@ onMounted(async () => {
   grid-template-columns: repeat(1, minmax(0, 1fr));
 }
 
-.accordion-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
-}
-
 @media (min-width: 760px) {
-  .transacciones-filtros {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .column-filter-grid {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
-  }
-
-  .form-stack {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    column-gap: 1rem;
-    row-gap: 1.35rem;
-    align-items: start;
-  }
-
-  .row-two {
-    max-width: 100%;
-  }
-
-  .form-stack > :not(.row-two) {
-    grid-column: 1 / -1;
-  }
-
-  .compact-field {
-    max-width: 20rem;
-  }
-
-  .result-form-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .caja-form-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-
-  .estado-resumen-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
 }
 
 .hoja-findeco-section {
   margin-bottom: 1.25rem;
-}
-
-.hoja-findeco-section {
-  margin-bottom: 1.25rem;
-}
-
-.gestion-cobros-section {
-  margin-bottom: 1.5rem;
-}
-
-.gestion-sin-resultado {
-  margin: 0;
-  padding: 0.65rem 0.75rem;
-  border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #64748b;
-  font-size: 0.88rem;
 }
 
 .cuota-pagada-tag {
@@ -2908,17 +964,6 @@ onMounted(async () => {
   line-height: 1.2;
 }
 
-.cuotas-atrasadas-alerta {
-  margin: 0.5rem 0 0;
-  padding: 0.45rem 0.55rem;
-  border-radius: 6px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
 .col-cuota-pend {
   vertical-align: top;
 }
@@ -2949,7 +994,7 @@ onMounted(async () => {
   min-width: 11rem;
 }
 
-.hoja-cartera-select {
+.hoja-cartera-dropdown {
   min-width: 13rem;
 }
 
@@ -2996,19 +1041,6 @@ onMounted(async () => {
   object-fit: contain;
 }
 
-.hoja-findeco-cartera,
-.hoja-findeco-fecha {
-  margin: 0.15rem 0;
-  font-size: 0.95rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #111827;
-}
-
-.hoja-findeco-print-table {
-  display: none;
-}
-
 .hoja-preview-scroll {
   max-height: min(70vh, 42rem);
   overflow: auto;
@@ -3025,11 +1057,44 @@ onMounted(async () => {
   width: 100%;
 }
 
+.hoja-preview-table-simple .col-prestamo {
+  width: 12%;
+  text-align: center;
+}
+
+.hoja-preview-table-simple .col-nombre {
+  width: 38%;
+  text-align: left;
+}
+
+.hoja-preview-table-simple .col-estado {
+  width: 14%;
+  text-align: center;
+}
+
+.hoja-preview-table-simple .col-monto {
+  width: 16%;
+}
+
+.hoja-preview-table-simple .col-espacio {
+  width: 16%;
+  min-height: 1.4rem;
+}
+
 .hoja-preview-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
   width: 100%;
+}
+
+.hoja-findeco-cartera,
+.hoja-findeco-fecha {
+  margin: 0.15rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #111827;
 }
 
 .hoja-findeco-datatable {
@@ -3161,6 +1226,16 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+.col-abono {
+  width: 7rem;
+  min-height: 1.6rem;
+}
+
+.col-espacio {
+  width: 8rem;
+  min-height: 1.6rem;
+}
+
 .hoja-findeco-totales td {
   font-weight: 700;
   background: #fafafa;
@@ -3177,8 +1252,7 @@ onMounted(async () => {
   }
 
   .hoja-findeco-datatable,
-  .hoja-findeco-totales-bar,
-  .gestion-cobros-section {
+  .hoja-findeco-totales-bar {
     display: none !important;
   }
 

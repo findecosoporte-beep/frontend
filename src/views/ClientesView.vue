@@ -12,15 +12,33 @@ import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import DniHondurasInput from '@/components/DniHondurasInput.vue'
+import RtnHondurasInput from '@/components/RtnHondurasInput.vue'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
+import {
+  esDniHnValido,
+  esRtnHnValidoOpcional,
+  mensajeDniHnInvalido,
+  mensajeRtnHnInvalido,
+  normalizarDniHn,
+  normalizarRtnHn,
+} from '@/utils/documentoHonduras'
+import {
+  esTelefonoHnValidoOpcional,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import type { Cartera, Cliente, DiaCobroCartera, Paginated } from '@/types/api'
 
 const toast = useToast()
+const confirm = useConfirm()
 const { canWriteClientes } = usePermissions()
 
 const diasCobroOptions: { label: string; value: DiaCobroCartera }[] = [...DIAS_COBRO_CARTERA_OPTIONS]
@@ -33,7 +51,20 @@ const carteraForm = ref<{
   diaCobro: null,
 })
 
+const editCarteraDialogVisible = ref(false)
+const editCarteraForm = ref<{
+  id_cartera: number
+  nombreCartera: string
+  diaCobro: DiaCobroCartera | null
+}>({
+  id_cartera: 0,
+  nombreCartera: '',
+  diaCobro: null,
+})
+
 const savingCartera = ref(false)
+const savingEditCartera = ref(false)
+const deletingCarteraId = ref<number | null>(null)
 
 const carteras = ref<Cartera[]>([])
 const loadingCarteras = ref(false)
@@ -217,7 +248,32 @@ function emptyToNull(s: string): string | null {
   return t === '' ? null : t
 }
 
+function resetCarteraForm() {
+  carteraForm.value = { nombreCartera: '', diaCobro: null }
+}
+
+function abrirEditarCartera(row: Cartera) {
+  if (!canWriteClientes.value) return
+  editCarteraForm.value = {
+    id_cartera: row.id_cartera,
+    nombreCartera: row.nombre,
+    diaCobro: row.dia_cobro,
+  }
+  editCarteraDialogVisible.value = true
+}
+
+function cerrarEditarCartera() {
+  editCarteraDialogVisible.value = false
+  editCarteraForm.value = {
+    id_cartera: 0,
+    nombreCartera: '',
+    diaCobro: null,
+  }
+  savingEditCartera.value = false
+}
+
 async function guardarCartera() {
+  if (!canWriteClientes.value) return
   const nombre = carteraForm.value.nombreCartera.trim()
   const diaCobro = carteraForm.value.diaCobro
   if (!nombre || !diaCobro) {
@@ -241,7 +297,7 @@ async function guardarCartera() {
       detail: 'Se registró la cartera correctamente.',
       life: 3500,
     })
-    carteraForm.value = { nombreCartera: '', diaCobro: null }
+    resetCarteraForm()
     await cargarCarteras()
   } catch (e) {
     toast.add({
@@ -255,14 +311,110 @@ async function guardarCartera() {
   }
 }
 
+async function guardarEdicionCartera() {
+  if (!canWriteClientes.value) return
+  const id = editCarteraForm.value.id_cartera
+  const nombre = editCarteraForm.value.nombreCartera.trim()
+  const diaCobro = editCarteraForm.value.diaCobro
+  if (!id || !nombre || !diaCobro) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Datos incompletos',
+      detail: 'Completa el nombre de la cartera y el día de cobro.',
+      life: 4000,
+    })
+    return
+  }
+  savingEditCartera.value = true
+  try {
+    await api.patch<Cartera>(`/carteras/${id}/`, {
+      nombre,
+      dia_cobro: diaCobro,
+    })
+    toast.add({
+      severity: 'success',
+      summary: 'Cartera actualizada',
+      detail: 'Los cambios se guardaron correctamente.',
+      life: 3500,
+    })
+    cerrarEditarCartera()
+    await cargarCarteras()
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo actualizar',
+      detail: getApiErrorMessage(e),
+      life: 6000,
+    })
+  } finally {
+    savingEditCartera.value = false
+  }
+}
+
+function confirmarEliminarCartera(row: Cartera) {
+  if (!canWriteClientes.value) return
+  confirm.require({
+    message: `¿Eliminar la cartera «${row.nombre}»? Si tiene cobrador asignado, también se quitará esa asignación. Los préstamos quedarán sin cartera.`,
+    header: 'Eliminar cartera',
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Eliminar',
+    rejectLabel: 'Cancelar',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      deletingCarteraId.value = row.id_cartera
+      try {
+        await api.delete(`/carteras/${row.id_cartera}/`)
+        toast.add({
+          severity: 'success',
+          summary: 'Cartera eliminada',
+          detail: 'Se eliminó la cartera correctamente.',
+          life: 3500,
+        })
+        if (editCarteraForm.value.id_cartera === row.id_cartera) {
+          cerrarEditarCartera()
+        }
+        await cargarCarteras()
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'No se pudo eliminar',
+          detail: getApiErrorMessage(e),
+          life: 6000,
+        })
+      } finally {
+        deletingCarteraId.value = null
+      }
+    },
+  })
+}
+
 async function guardarCliente() {
   const nombre = clienteForm.value.nombre.trim()
-  const dni = clienteForm.value.dni.trim()
+  const dni = normalizarDniHn(clienteForm.value.dni)
   if (!nombre || !dni) {
     toast.add({
       severity: 'warn',
       summary: 'Datos incompletos',
       detail: 'El nombre y el DNI son obligatorios.',
+      life: 4500,
+    })
+    return
+  }
+  if (!esDniHnValido(dni)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'DNI inválido',
+      detail: mensajeDniHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
+  const rtn = normalizarRtnHn(clienteForm.value.rtn)
+  if (!esRtnHnValidoOpcional(rtn)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'RTN inválido',
+      detail: mensajeRtnHnInvalido(),
       life: 4500,
     })
     return
@@ -276,17 +428,28 @@ async function guardarCliente() {
     })
     return
   }
+  const telefono = normalizarTelefonoHn(clienteForm.value.telefono)
+  const referenciaTelefono = normalizarTelefonoHn(clienteForm.value.referencia_telefono)
+  if (!esTelefonoHnValidoOpcional(telefono) || !esTelefonoHnValidoOpcional(referenciaTelefono)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Teléfono inválido',
+      detail: mensajeTelefonoHnInvalido(),
+      life: 4500,
+    })
+    return
+  }
   savingCliente.value = true
   try {
     const payload = {
       nombre,
       dni,
-      rtn: emptyToNull(clienteForm.value.rtn),
-      telefono: emptyToNull(clienteForm.value.telefono),
+      rtn: rtn || null,
+      telefono: telefono || null,
       direccion_residencia: emptyToNull(clienteForm.value.direccion_residencia),
       direccion_negocio: emptyToNull(clienteForm.value.direccion_negocio),
       referencia_parentesco: emptyToNull(clienteForm.value.referencia_parentesco),
-      referencia_telefono: emptyToNull(clienteForm.value.referencia_telefono),
+      referencia_telefono: referenciaTelefono || null,
       referencia: emptyToNull(clienteForm.value.referencia),
       actividad_economica: emptyToNull(clienteForm.value.actividad_economica),
       dia_cobro_semanal: clienteForm.value.dia_cobro_semanal,
@@ -332,7 +495,12 @@ onMounted(() => void cargarCarteras())
       <div class="carteras-layout">
         <div class="carteras-form-row">
           <FloatLabel class="carteras-form-field">
-            <InputText id="cartera-nombre" v-model="carteraForm.nombreCartera" fluid />
+            <InputText
+              id="cartera-nombre"
+              v-model="carteraForm.nombreCartera"
+              fluid
+              :disabled="!canWriteClientes || savingCartera"
+            />
             <label for="cartera-nombre">Nombre de cartera</label>
           </FloatLabel>
           <div class="carteras-form-field findeco-select-wrap">
@@ -346,10 +514,12 @@ onMounted(() => void cargarCarteras())
               placeholder="Selecciona un día"
               fluid
               show-clear
+              :disabled="!canWriteClientes || savingCartera"
             />
           </div>
           <div class="carteras-form-actions">
             <Button
+              v-if="canWriteClientes"
               label="Guardar cartera"
               icon="pi pi-save"
               :loading="savingCartera"
@@ -358,6 +528,10 @@ onMounted(() => void cargarCarteras())
             />
           </div>
         </div>
+
+        <Message v-if="!canWriteClientes" severity="info" class="carteras-error" :closable="false">
+          Solo administradores y supervisores pueden crear, editar o eliminar carteras.
+        </Message>
 
         <Message v-if="errorCarteras" severity="error" class="carteras-error" :closable="false">
           {{ errorCarteras }}
@@ -378,9 +552,85 @@ onMounted(() => void cargarCarteras())
               {{ etiquetaDiaCobro(data.dia_cobro) }}
             </template>
           </Column>
+          <Column v-if="canWriteClientes" header="Acciones" style="width: 8rem">
+            <template #body="{ data }">
+              <div class="carteras-acciones">
+                <Button
+                  icon="pi pi-pencil"
+                  severity="secondary"
+                  text
+                  rounded
+                  aria-label="Editar cartera"
+                  :disabled="savingCartera || deletingCarteraId === data.id_cartera"
+                  @click="abrirEditarCartera(data)"
+                />
+                <Button
+                  icon="pi pi-trash"
+                  severity="danger"
+                  text
+                  rounded
+                  aria-label="Eliminar cartera"
+                  :loading="deletingCarteraId === data.id_cartera"
+                  :disabled="savingCartera || deletingCarteraId != null"
+                  @click="confirmarEliminarCartera(data)"
+                />
+              </div>
+            </template>
+          </Column>
         </DataTable>
       </div>
     </Fieldset>
+
+    <Dialog
+      v-model:visible="editCarteraDialogVisible"
+      header="Editar cartera"
+      modal
+      :style="{ width: 'min(28rem, 95vw)' }"
+      :closable="!savingEditCartera"
+      :dismissable-mask="!savingEditCartera"
+      @hide="cerrarEditarCartera"
+    >
+      <div class="edit-cartera-form">
+        <div class="field">
+          <label for="edit-cartera-nombre">Nombre de cartera</label>
+          <InputText
+            id="edit-cartera-nombre"
+            v-model="editCarteraForm.nombreCartera"
+            fluid
+            :disabled="savingEditCartera"
+          />
+        </div>
+        <div class="field findeco-select-wrap">
+          <label class="findeco-select-label" for="edit-cartera-dia">Día de cobro</label>
+          <Select
+            id="edit-cartera-dia"
+            v-model="editCarteraForm.diaCobro"
+            :options="diasCobroOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="Selecciona un día"
+            fluid
+            :disabled="savingEditCartera"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <Button
+          label="Cancelar"
+          severity="secondary"
+          outlined
+          :disabled="savingEditCartera"
+          @click="cerrarEditarCartera"
+        />
+        <Button
+          label="Guardar cambios"
+          icon="pi pi-check"
+          :loading="savingEditCartera"
+          :disabled="savingEditCartera"
+          @click="guardarEdicionCartera"
+        />
+      </template>
+    </Dialog>
 
     <Fieldset
       legend="CARGA DE CLIENTES DESDE EXCEL:"
@@ -437,15 +687,15 @@ onMounted(() => void cargarCarteras())
             <label for="cli-nombre" class="lbl-mayus">Nombre</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-dni" v-model="clienteForm.dni" fluid autocomplete="off" />
+            <DniHondurasInput id="cli-dni" v-model="clienteForm.dni" />
             <label for="cli-dni" class="lbl-mayus">DNI</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-rtn" v-model="clienteForm.rtn" fluid autocomplete="off" />
+            <RtnHondurasInput id="cli-rtn" v-model="clienteForm.rtn" />
             <label for="cli-rtn" class="lbl-mayus">RTN</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
-            <InputText id="cli-tel" v-model="clienteForm.telefono" fluid type="tel" autocomplete="tel" />
+            <TelefonoHondurasInput id="cli-tel" v-model="clienteForm.telefono" />
             <label for="cli-tel" class="lbl-mayus">Teléfono</label>
           </FloatLabel>
           <FloatLabel class="cliente-cell">
@@ -476,12 +726,9 @@ onMounted(() => void cargarCarteras())
                   <label for="cli-ref-parentesco" class="lbl-mayus">Parentesco</label>
                 </FloatLabel>
                 <FloatLabel class="ref-mini-cell">
-                  <InputText
+                  <TelefonoHondurasInput
                     id="cli-ref-tel"
                     v-model="clienteForm.referencia_telefono"
-                    fluid
-                    type="tel"
-                    autocomplete="tel"
                   />
                   <label for="cli-ref-tel" class="lbl-mayus">Teléfono referencia</label>
                 </FloatLabel>
@@ -621,12 +868,39 @@ onMounted(() => void cargarCarteras())
 .carteras-form-actions {
   display: flex;
   justify-content: flex-start;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 @media (min-width: 768px) {
   .carteras-form-actions {
     justify-content: flex-end;
   }
+}
+
+.carteras-acciones {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.edit-cartera-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.edit-cartera-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.edit-cartera-form .field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #334155;
 }
 
 .carteras-error {

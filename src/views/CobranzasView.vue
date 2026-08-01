@@ -92,14 +92,20 @@ const tipoAccionOptions: Array<{ label: string; value: GestionCobranza['tipo_ges
 ]
 
 async function fetchAllPagesPrestamos(): Promise<Prestamo[]> {
-  const items: Prestamo[] = []
-  let nextUrl: string | null = '/prestamos/?page_size=100'
-  while (nextUrl) {
-    const pageData = (await api.get(nextUrl)).data as Paginated<Prestamo>
-    items.push(...pageData.results)
-    nextUrl = pageData.next
-  }
-  return items.filter((p) => ['mora', 'pendiente_aprobacion', 'activo'].includes(String(p.estado)))
+  const estados = ['activo', 'mora', 'pendiente_aprobacion'] as const
+  const lotes = await Promise.all(
+    estados.map(async (estado) => {
+      const items: Prestamo[] = []
+      let nextUrl: string | null = `/prestamos/?estado=${estado}&page_size=100&ordering=-id_prestamo`
+      while (nextUrl) {
+        const pageData = (await api.get(nextUrl)).data as Paginated<Prestamo>
+        items.push(...pageData.results)
+        nextUrl = pageData.next
+      }
+      return items
+    }),
+  )
+  return lotes.flat()
 }
 
 function zonaMetaPorId(idZona: number): Zona | undefined {
