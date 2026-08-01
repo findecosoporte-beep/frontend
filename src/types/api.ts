@@ -171,6 +171,7 @@ export interface ReporteIntegracionFila {
   fecha_vencimiento: string
   dias_mora: number
   saldo_inicial: string
+  monto?: string
   cuota: string
   saldo_actual: string
   ciclos: number
@@ -179,16 +180,25 @@ export interface ReporteIntegracionFila {
   forma_pago?: string
   sucursal: string
   plazo: number
+  plazo_total?: number | null
+  total_cuotas_plan?: number | null
   /** Primera cuota del plan sin pago registrado con documento «Cuota N». */
   cuota_siguiente_numero?: number | null
   cuota_siguiente_fecha?: string | null
   cuota_siguiente_monto?: string | null
+  cuota_siguiente_monto_programado?: string | null
+  cuota_siguiente_abonado?: string | null
+  cuota_anterior_numero?: number | null
+  cuota_anterior_abonado?: string | null
+  total_abono_anterior_mas_cuota?: string | null
   cuota_siguiente_capital?: string | null
   cuota_siguiente_interes?: string | null
   cuota_siguiente_saldo_capital?: string | null
   /** Cuotas vencidas sin pago completo (según plan y fecha de hoy). */
   cuotas_atrasadas?: number
   cuotas_atrasadas_numeros?: string
+  fecha_ultimo_pago?: string
+  monto_ultimo_pago?: string
   id_cartera?: number | null
   cartera_nombre?: string
   cartera_dia_cobro?: string
@@ -307,7 +317,9 @@ export interface HistorialPagosCobrosFila {
   numero_prestamo: string
   nombre_cliente: string
   dni_cliente: string
+  id_cartera?: number | null
   cartera_nombre: string
+  cartera_dia_cobro?: string
 }
 
 export interface HistorialPagosCobrosResponse {
