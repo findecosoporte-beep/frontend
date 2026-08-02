@@ -17,7 +17,14 @@ import { useToast } from 'primevue/usetoast'
 
 import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
+import TelefonoHondurasInput from '@/components/TelefonoHondurasInput.vue'
 import { usePermissions } from '@/composables/usePermissions'
+import {
+  esTelefonoHnValido,
+  etiquetaTelefonoHn,
+  mensajeTelefonoHnInvalido,
+  normalizarTelefonoHn,
+} from '@/utils/telefonoHonduras'
 import type { Cartera, Paginated, UsuarioRow } from '@/types/api'
 
 async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
@@ -55,6 +62,7 @@ const editingId = ref<number | null>(null)
 const cobradorForm = ref({
   nombre: '',
   correo: '',
+  telefono: '',
   password: '',
   carteras: [] as number[],
 })
@@ -144,7 +152,7 @@ function onSearch() {
 }
 
 function resetCobradorForm() {
-  cobradorForm.value = { nombre: '', correo: '', password: '', carteras: [] }
+  cobradorForm.value = { nombre: '', correo: '', telefono: '', password: '', carteras: [] }
   editingId.value = null
 }
 
@@ -160,6 +168,7 @@ function abrirEditarCobrador(row: UsuarioRow) {
   cobradorForm.value = {
     nombre: row.nombre,
     correo: row.correo ?? '',
+    telefono: normalizarTelefonoHn(row.telefono),
     password: '',
     carteras: row.carteras ?? row.carteras_detalle?.map((c) => c.id_cartera) ?? [],
   }
@@ -170,11 +179,16 @@ function abrirEditarCobrador(row: UsuarioRow) {
 async function guardarCobrador() {
   const nombre = cobradorForm.value.nombre.trim()
   const correo = cobradorForm.value.correo.trim().toLowerCase()
+  const telefono = normalizarTelefonoHn(cobradorForm.value.telefono)
   const password = cobradorForm.value.password
   const carteras = cobradorForm.value.carteras
 
   if (!nombre || !correo) {
     toast.add({ severity: 'warn', summary: 'Cobrador', detail: 'Nombre y correo son obligatorios.', life: 4000 })
+    return
+  }
+  if (!esTelefonoHnValido(telefono)) {
+    toast.add({ severity: 'warn', summary: 'Cobrador', detail: mensajeTelefonoHnInvalido(), life: 4000 })
     return
   }
   if (!carteras.length) {
@@ -193,12 +207,13 @@ async function guardarCobrador() {
         rol: 'cobrador',
         nombre,
         correo,
+        telefono,
         password,
         carteras,
       })
       toast.add({ severity: 'success', summary: 'Cobrador', detail: 'Cobrador registrado con acceso al sistema.', life: 4000 })
     } else if (editingId.value != null) {
-      const payload: Record<string, unknown> = { nombre, correo, carteras }
+      const payload: Record<string, unknown> = { nombre, correo, telefono, carteras }
       if (password.trim()) payload.password = password
       await api.patch(`/usuarios/${editingId.value}/`, payload)
       toast.add({ severity: 'success', summary: 'Cobrador', detail: 'Datos actualizados.', life: 4000 })
@@ -295,6 +310,11 @@ onMounted(async () => {
       <Column field="id_usuario" header="ID" style="width: 4rem" />
       <Column field="nombre" header="Nombre" />
       <Column field="correo" header="Correo" />
+      <Column header="Teléfono" style="width: 9rem">
+        <template #body="{ data }">
+          {{ data.rol === 'cobrador' ? etiquetaTelefonoHn(data.telefono) : '—' }}
+        </template>
+      </Column>
       <Column header="Rol" style="width: 9rem">
         <template #body="{ data }">
           <Tag :value="etiquetaRol(data.rol)" :severity="severityForRol(data.rol)" />
@@ -330,6 +350,11 @@ onMounted(async () => {
         <div class="field">
           <label for="cob-correo">Correo (usuario de acceso)</label>
           <InputText id="cob-correo" v-model="cobradorForm.correo" fluid type="email" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="cob-telefono">Teléfono celular</label>
+          <TelefonoHondurasInput input-id="cob-telefono" v-model="cobradorForm.telefono" />
+          <p class="field-hint">8 dígitos del celular en Honduras (+504).</p>
         </div>
         <div class="field">
           <label for="cob-pass">{{ dialogMode === 'create' ? 'Contraseña inicial' : 'Nueva contraseña (opcional)' }}</label>
