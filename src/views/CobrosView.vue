@@ -12,6 +12,7 @@ import { api } from '@/api/client'
 import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
+import { buscarClientes } from '@/utils/buscarClientes'
 import { formatMoney } from '@/utils/format'
 import { abrirFacturaPago } from '@/utils/facturaPago'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
@@ -94,6 +95,28 @@ function getTodayISO(): string {
 const hojaCarteras = ref<Cartera[]>([])
 let carterasHojaCache: Cartera[] | null = null
 
+const busquedaQuery = ref('')
+const busquedaLoading = ref(false)
+const busquedaError = ref('')
+const busquedaResultados = ref<Cliente[]>([])
+const busquedaCliente = ref<Cliente | null>(null)
+const busquedaPrestamos = ref<ReporteIntegracionFila[]>([])
+
+const mostrandoPrestamosBusqueda = computed(
+  () => busquedaCliente.value != null && busquedaPrestamos.value.length > 0,
+)
+const mostrandoResultadosBusqueda = computed(
+  () =>
+    !mostrandoPrestamosBusqueda.value &&
+    (busquedaResultados.value.length > 0 || (busquedaLoading.value && busquedaQuery.value.trim().length >= 2)),
+)
+const busquedaActiva = computed(
+  () =>
+    mostrandoPrestamosBusqueda.value ||
+    mostrandoResultadosBusqueda.value ||
+    busquedaError.value !== '',
+)
+
 function carteraHojaRequerida(): boolean {
   return hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null
 }
@@ -166,6 +189,106 @@ function onFilaCobroClick(fila: ReporteIntegracionFila) {
   if (!canWritePagos.value) return
   if (fila.cuota_siguiente_numero == null) return
   void abrirCobroDesdeHoja(fila)
+}
+
+function limpiarPrestamosBusqueda() {
+  busquedaCliente.value = null
+  busquedaPrestamos.value = []
+}
+
+function limpiarBusquedaCliente() {
+  busquedaQuery.value = ''
+  busquedaError.value = ''
+  busquedaResultados.value = []
+  limpiarPrestamosBusqueda()
+}
+
+function filtrarFilasBusqueda(filas: ReporteIntegracionFila[]): ReporteIntegracionFila[] {
+  let resultado = filas
+  if (carteraHojaRequerida()) {
+    resultado = resultado.filter((f) => f.id_cartera === hojaCobrosCarteraFiltro.value)
+  }
+  if (esCobrador.value) {
+    resultado = resultado.filter(
+      (f) => f.id_cartera != null && cobradorCarteraIds.value.has(f.id_cartera),
+    )
+  }
+  return resultado
+}
+
+async function buscarClienteEnCobros() {
+  const q = busquedaQuery.value.trim()
+  if (q.length < 2) {
+    busquedaError.value = 'Ingresa al menos 2 caracteres del DNI o nombre del cliente.'
+    return
+  }
+  busquedaLoading.value = true
+  busquedaError.value = ''
+  limpiarPrestamosBusqueda()
+  busquedaResultados.value = []
+  try {
+    const lista = await buscarClientes(q)
+    busquedaResultados.value = lista
+    if (!lista.length) {
+      busquedaError.value = 'No se encontraron clientes.'
+    }
+  } catch (e) {
+    busquedaError.value = getApiErrorMessage(e, 'Error al buscar cliente.')
+    busquedaResultados.value = []
+  } finally {
+    busquedaLoading.value = false
+  }
+}
+
+async function seleccionarClienteBusqueda(cliente: Cliente) {
+  busquedaLoading.value = true
+  busquedaError.value = ''
+  limpiarPrestamosBusqueda()
+  try {
+    const qs = new URLSearchParams({
+      id_cliente: String(cliente.id_cliente),
+      estado: HOJA_COBROS_ESTADO,
+      all: '1',
+    })
+    const { data } = await api.get<ReporteIntegracionResponse>(
+      `/prestamos/reporte-integracion/?${qs.toString()}`,
+    )
+    const filas = filtrarFilasBusqueda(data.filas ?? [])
+    if (!filas.length) {
+      const detalleCartera = carteraHojaRequerida()
+        ? ' en la cartera seleccionada'
+        : esCobrador.value
+          ? ' en sus carteras asignadas'
+          : ''
+      busquedaError.value = `${cliente.nombre} no tiene préstamos activos para cobrar${detalleCartera}.`
+      return
+    }
+    if (filas.length === 1) {
+      await abrirCobroDesdeHoja(filas[0]!, { omitirFiltroCarteraHoja: true })
+      limpiarBusquedaCliente()
+      return
+    }
+    busquedaCliente.value = cliente
+    busquedaPrestamos.value = filas
+    busquedaResultados.value = []
+  } catch (e) {
+    busquedaError.value = getApiErrorMessage(e, 'No se pudieron cargar los préstamos del cliente.')
+  } finally {
+    busquedaLoading.value = false
+  }
+}
+
+function volverResultadosBusqueda() {
+  limpiarPrestamosBusqueda()
+  if (busquedaQuery.value.trim().length >= 2) {
+    void buscarClienteEnCobros()
+  }
+}
+
+function onFilaBusquedaClick(fila: ReporteIntegracionFila) {
+  if (!canWritePagos.value) return
+  if (fila.cuota_siguiente_numero == null) return
+  void abrirCobroDesdeHoja(fila, { omitirFiltroCarteraHoja: true })
 }
 
 watch(hojaCobrosCarteraFiltro, (idCartera) => {
@@ -763,13 +886,100 @@ onMounted(async () => {
           :auto-open="!carteraHojaRequerida() && hojaCarteras.length > 0"
           class="hoja-cartera-dropdown filtro-hoja-select"
         />
-        <span v-if="hojaCobrosTotal" class="hoja-findeco-contador no-print">
+        <span v-if="hojaCobrosTotal && !busquedaActiva" class="hoja-findeco-contador no-print">
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
         </span>
       </div>
 
-      <p v-if="!carteraHojaRequerida()" class="hoja-findeco-aviso no-print">
-        Seleccione una cartera para cargar los préstamos a cobrar.
+      <div class="hoja-buscar-cliente no-print">
+        <label class="hoja-buscar-label" for="cobros-buscar-cliente">Buscar cliente</label>
+        <div class="hoja-buscar-fila">
+          <div class="hoja-buscar-input-wrap">
+            <span class="hoja-buscar-icon" aria-hidden="true">
+              <i class="pi pi-search" />
+            </span>
+            <input
+              id="cobros-buscar-cliente"
+              v-model="busquedaQuery"
+              type="search"
+              class="hoja-buscar-input"
+              placeholder="DNI, nombre o teléfono..."
+              autocomplete="off"
+              :disabled="busquedaLoading"
+              @keyup.enter="buscarClienteEnCobros"
+              @input="busquedaError = ''"
+            />
+            <button
+              v-if="busquedaQuery"
+              type="button"
+              class="hoja-buscar-clear"
+              aria-label="Limpiar búsqueda"
+              :disabled="busquedaLoading"
+              @click="limpiarBusquedaCliente"
+            >
+              <i class="pi pi-times" aria-hidden="true" />
+            </button>
+          </div>
+          <button
+            type="button"
+            class="hoja-buscar-btn"
+            :disabled="busquedaLoading || busquedaQuery.trim().length < 2"
+            @click="buscarClienteEnCobros"
+          >
+            <i v-if="busquedaLoading" class="pi pi-spin pi-spinner" aria-hidden="true" />
+            <span v-else>Buscar</span>
+          </button>
+        </div>
+        <p v-if="busquedaError" class="hoja-buscar-error">{{ busquedaError }}</p>
+      </div>
+
+      <div v-if="mostrandoPrestamosBusqueda" class="hoja-buscar-prestamos">
+        <div class="hoja-buscar-prestamos-header">
+          <h3 class="hoja-buscar-prestamos-title">Préstamos de {{ busquedaCliente?.nombre }}</h3>
+          <button type="button" class="hoja-buscar-volver" @click="volverResultadosBusqueda">
+            Volver
+          </button>
+        </div>
+        <ul class="hoja-cobros-list">
+          <li v-for="(fila, index) in busquedaPrestamos" :key="`busq-${fila.id_prestamo}`">
+            <HojaCobroCard
+              :fila="fila"
+              :index="index"
+              :class="{ 'hoja-cobro-card--readonly': !canWritePagos || fila.cuota_siguiente_numero == null }"
+              @click="onFilaBusquedaClick(fila)"
+            />
+          </li>
+        </ul>
+      </div>
+
+      <ul v-else-if="mostrandoResultadosBusqueda" class="hoja-buscar-resultados">
+        <li v-if="busquedaLoading && !busquedaResultados.length" class="hoja-buscar-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true" />
+          <span>Buscando clientes…</span>
+        </li>
+        <li v-for="cliente in busquedaResultados" :key="cliente.id_cliente">
+          <button
+            type="button"
+            class="hoja-buscar-resultado"
+            :disabled="busquedaLoading"
+            @click="seleccionarClienteBusqueda(cliente)"
+          >
+            <div class="hoja-buscar-resultado-main">
+              <strong>{{ cliente.nombre }}</strong>
+              <span v-if="cliente.dni?.trim()" class="hoja-buscar-resultado-meta">
+                DNI: {{ cliente.dni.trim() }}
+              </span>
+              <span v-if="cliente.telefono?.trim()" class="hoja-buscar-resultado-meta">
+                Tel: {{ cliente.telefono.trim() }}
+              </span>
+            </div>
+            <i class="pi pi-chevron-right" aria-hidden="true" />
+          </button>
+        </li>
+      </ul>
+
+      <p v-else-if="!carteraHojaRequerida()" class="hoja-findeco-aviso no-print">
+        Seleccione una cartera para cargar los préstamos a cobrar, o busque un cliente arriba.
       </p>
 
       <div v-else class="hoja-cobros-list-wrap">
@@ -1002,6 +1212,187 @@ onMounted(async () => {
   font-size: 0.85rem;
   color: #64748b;
   margin-left: auto;
+}
+
+.hoja-buscar-cliente {
+  margin-bottom: 1rem;
+}
+
+.hoja-buscar-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.hoja-buscar-fila {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.hoja-buscar-input-wrap {
+  flex: 1 1 14rem;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #fff;
+  overflow: hidden;
+}
+
+.hoja-buscar-input-wrap:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 15%);
+}
+
+.hoja-buscar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.65rem;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.hoja-buscar-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  border: none;
+  font-size: 0.92rem;
+  color: #0f172a;
+  background: transparent;
+}
+
+.hoja-buscar-input:focus {
+  outline: none;
+}
+
+.hoja-buscar-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.65rem;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.hoja-buscar-btn {
+  flex: 0 0 auto;
+  padding: 0.55rem 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: #0f172a;
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hoja-buscar-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hoja-buscar-error {
+  margin: 0.45rem 0 0;
+  font-size: 0.85rem;
+  color: #b91c1c;
+}
+
+.hoja-buscar-resultados {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.hoja-buscar-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: #64748b;
+}
+
+.hoja-buscar-resultado {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.65rem;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+}
+
+.hoja-buscar-resultado:hover:not(:disabled) {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.hoja-buscar-resultado:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.hoja-buscar-resultado-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.hoja-buscar-resultado-main strong {
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.hoja-buscar-resultado-meta {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.hoja-buscar-prestamos {
+  margin-top: 0.25rem;
+}
+
+.hoja-buscar-prestamos-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.hoja-buscar-prestamos-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.hoja-buscar-volver {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.25rem 0.35rem;
 }
 
 .hoja-findeco-estado {
