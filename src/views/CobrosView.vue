@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from 'vue-router'
 
+import Button from 'primevue/button'
 import { useToast } from 'primevue/usetoast'
 
 import CarteraDropdown from '@/components/CarteraDropdown.vue'
@@ -9,11 +10,11 @@ import CobroCajaDialog from '@/components/CobroCajaDialog.vue'
 import type { CobroCajaFormView } from '@/components/CobroCajaDialog.vue'
 import HojaCobroCard from '@/components/HojaCobroCard.vue'
 import { api } from '@/api/client'
-import { getApiErrorMessage } from '@/api/errors'
+import { getApiErrorMessage, getApiErrorMessageAsync } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { buscarClientes } from '@/utils/buscarClientes'
-import { formatMoney } from '@/utils/format'
+import { formatDateTime, formatMoney } from '@/utils/format'
 import { abrirFacturaPago } from '@/utils/facturaPago'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
 import type {
@@ -43,6 +44,10 @@ const HOJA_COBROS_ESTADO = 'activo,pendiente_aprobacion,mora' as const
 const hojaCobrosLoading = ref(false)
 const hojaCobrosTotal = ref(0)
 const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
+const hojaCobrosFechaReporte = ref('')
+const hojaCobrosGeneradoEn = ref('')
+const hojaImprimiendo = ref(false)
+const hojaDescargandoPdf = ref(false)
 
 const cajaVisible = ref(false)
 const cajaSaving = ref(false)
@@ -131,6 +136,95 @@ function reiniciarHojaCobrosSinCartera() {
   limpiarResultadosHojaCobros()
 }
 
+const hojaCobrosTituloCartera = computed(() => {
+  if (hojaCobrosCarteraFiltro.value === '' || hojaCobrosCarteraFiltro.value == null) {
+    return 'TODAS LAS CARTERAS'
+  }
+  const c = hojaCarteras.value.find((x) => x.id_cartera === hojaCobrosCarteraFiltro.value)
+  return (c?.nombre ?? 'CARTERA').toUpperCase()
+})
+
+const MESES_HOJA = [
+  'ENERO',
+  'FEBRERO',
+  'MARZO',
+  'ABRIL',
+  'MAYO',
+  'JUNIO',
+  'JULIO',
+  'AGOSTO',
+  'SEPTIEMBRE',
+  'OCTUBRE',
+  'NOVIEMBRE',
+  'DICIEMBRE',
+] as const
+
+const DIAS_HOJA = [
+  'DOMINGO',
+  'LUNES',
+  'MARTES',
+  'MIÉRCOLES',
+  'JUEVES',
+  'VIERNES',
+  'SÁBADO',
+] as const
+
+function formatFechaHojaLegible(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return iso.toUpperCase()
+  const dia = String(d.getDate()).padStart(2, '0')
+  return `${DIAS_HOJA[d.getDay()]} ${dia} DE ${MESES_HOJA[d.getMonth()]} ${d.getFullYear()}`
+}
+
+const hojaCobrosFechaLegible = computed(() =>
+  hojaCobrosFechaReporte.value
+    ? formatFechaHojaLegible(hojaCobrosFechaReporte.value)
+    : formatFechaHojaLegible(getTodayISO()),
+)
+
+const hojaCobrosGeneradoLegible = computed(() =>
+  hojaCobrosGeneradoEn.value
+    ? formatDateTime(hojaCobrosGeneradoEn.value)
+    : formatDateTime(new Date().toISOString()),
+)
+
+function formatNumeroHoja(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return ''
+  const n = typeof value === 'string' ? Number.parseFloat(value) : value
+  if (Number.isNaN(n)) return String(value)
+  return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
+}
+
+const hojaListadoTotales = computed(() => {
+  let cuota = 0
+  for (const f of hojaCobrosFilas.value) {
+    const monto = f.cuota_siguiente_monto || f.cuota
+    cuota += Number.parseFloat(String(monto ?? '')) || 0
+  }
+  return { registros: hojaCobrosFilas.value.length, cuota }
+})
+
+function etiquetaEstadoHoja(estado: string | undefined | null): string {
+  const key = (estado || '').trim()
+  const map: Record<string, string> = {
+    activo: 'Activo',
+    pendiente_aprobacion: 'Pendiente',
+    pagado: 'Pagado',
+    mora: 'Mora',
+    cancelado: 'Cancelado',
+  }
+  return map[key] || key || '—'
+}
+
+function valorCuotaHoja(fila: ReporteIntegracionFila): string {
+  const monto = fila.cuota_siguiente_monto ?? fila.cuota
+  const texto = formatNumeroHoja(monto)
+  if (fila.cuota_siguiente_numero != null) {
+    return `#${fila.cuota_siguiente_numero}  ${texto || '—'}`
+  }
+  return texto || '—'
+}
+
 function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
   const qs = new URLSearchParams()
   if (hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null) {
@@ -163,6 +257,8 @@ async function cargarHojaCobrosFindeco(options?: { silentEmpty?: boolean }): Pro
     const { data } = await api.get<ReporteIntegracionResponse>(url)
     hojaCobrosFilas.value = data.filas ?? []
     hojaCobrosTotal.value = hojaCobrosFilas.value.length
+    hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
+    hojaCobrosGeneradoEn.value = data.generado_en ?? ''
     if (!hojaCobrosTotal.value && !options?.silentEmpty) {
       toast.add({
         severity: 'info',
@@ -189,6 +285,76 @@ function onFilaCobroClick(fila: ReporteIntegracionFila) {
   if (!canWritePagos.value) return
   if (fila.cuota_siguiente_numero == null) return
   void abrirCobroDesdeHoja(fila)
+}
+
+function ejecutarImpresionListado() {
+  hojaImprimiendo.value = true
+  const cleanup = () => {
+    document.body.classList.remove('printing-hoja-cobros')
+    hojaImprimiendo.value = false
+    window.removeEventListener('afterprint', cleanup)
+  }
+  window.addEventListener('afterprint', cleanup)
+  document.body.classList.add('printing-hoja-cobros')
+  window.print()
+}
+
+function descargarBlob(blob: Blob, nombre: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = nombre
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function nombreDesdeContentDisposition(header: string | undefined, fallback: string): string {
+  if (!header) return fallback
+  const match = /filename="?([^";]+)"?/.exec(header)
+  return match?.[1] ?? fallback
+}
+
+async function descargarHojaCobrosPdf() {
+  if (!carteraHojaRequerida()) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Hoja de cobros',
+      detail: 'Seleccione una cartera para descargar el listado.',
+      life: 4000,
+    })
+    return
+  }
+  hojaDescargandoPdf.value = true
+  try {
+    const qs = buildHojaCobrosQuery({ all: '1', vista: 'listado' })
+    const response = await api.get<Blob>(`/prestamos/hoja-cobros-pdf/?${qs.toString()}`, {
+      responseType: 'blob',
+    })
+    const cartera = String(hojaCobrosTituloCartera.value || 'cartera')
+      .replace(/\s+/g, '_')
+      .toLowerCase()
+    const fecha = (hojaCobrosFechaReporte.value || getTodayISO()).replace(/-/g, '')
+    const nombre = nombreDesdeContentDisposition(
+      response.headers['content-disposition'],
+      `hoja_cobros_${cartera}_${fecha}.pdf`,
+    )
+    descargarBlob(response.data, nombre)
+    toast.add({
+      severity: 'success',
+      summary: 'PDF descargado',
+      detail: 'Se descargó el listado completo de la cartera.',
+      life: 3000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Hoja de cobros',
+      detail: await getApiErrorMessageAsync(e, 'No se pudo descargar el PDF.'),
+      life: 6000,
+    })
+  } finally {
+    hojaDescargandoPdf.value = false
+  }
 }
 
 function limpiarPrestamosBusqueda() {
@@ -886,6 +1052,30 @@ onMounted(async () => {
           :auto-open="!carteraHojaRequerida() && hojaCarteras.length > 0"
           class="hoja-cartera-dropdown filtro-hoja-select"
         />
+        <Button
+          label="Imprimir"
+          icon="pi pi-print"
+          type="button"
+          severity="secondary"
+          outlined
+          class="no-print"
+          :loading="hojaImprimiendo"
+          :disabled="!carteraHojaRequerida() || hojaImprimiendo || !hojaCobrosFilas.length"
+          title="Imprime el listado de la cartera seleccionada"
+          @click="ejecutarImpresionListado"
+        />
+        <Button
+          label="Descargar PDF"
+          icon="pi pi-file-pdf"
+          type="button"
+          severity="success"
+          outlined
+          class="no-print"
+          :loading="hojaDescargandoPdf"
+          :disabled="!carteraHojaRequerida() || hojaDescargandoPdf || !hojaCobrosFilas.length"
+          title="Descarga el PDF del listado de la cartera seleccionada"
+          @click="() => void descargarHojaCobrosPdf()"
+        />
         <span v-if="hojaCobrosTotal && !busquedaActiva" class="hoja-findeco-contador no-print">
           {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
         </span>
@@ -993,16 +1183,69 @@ onMounted(async () => {
           <p>No hay préstamos en esta cartera.</p>
         </div>
 
-        <ul v-else class="hoja-cobros-list">
-          <li v-for="(fila, index) in hojaCobrosFilas" :key="fila.id_prestamo">
-            <HojaCobroCard
-              :fila="fila"
-              :index="index"
-              :class="{ 'hoja-cobro-card--readonly': !canWritePagos || fila.cuota_siguiente_numero == null }"
-              @click="onFilaCobroClick(fila)"
-            />
-          </li>
-        </ul>
+        <div v-else class="hoja-listado-sheet">
+          <div class="hoja-preview-print-area">
+            <header class="hoja-findeco-header hoja-preview-header">
+              <img
+                src="/findeco-logo.png"
+                alt="FINDECO"
+                class="hoja-findeco-logo"
+                width="200"
+                height="52"
+              />
+              <p class="hoja-findeco-cartera">CARTERA: {{ hojaCobrosTituloCartera }}</p>
+              <p class="hoja-findeco-fecha">FECHA: {{ hojaCobrosFechaLegible }}</p>
+              <p class="hoja-findeco-fecha">GENERADO: {{ hojaCobrosGeneradoLegible }}</p>
+            </header>
+
+            <div class="hoja-preview-scroll">
+              <table class="hoja-findeco-table hoja-preview-table hoja-preview-table-simple">
+                <thead>
+                  <tr>
+                    <th class="col-n">N</th>
+                    <th class="col-prestamo">Nº PRÉSTAMO</th>
+                    <th class="col-nombre">NOMBRE CLIENTE</th>
+                    <th class="col-estado">ESTADO</th>
+                    <th class="col-monto">CUOTA</th>
+                    <th class="col-espacio">ESPACIO</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(fila, index) in hojaCobrosFilas"
+                    :key="fila.id_prestamo"
+                    class="hoja-listado-row"
+                    :class="{
+                      'hoja-listado-row--clickable':
+                        canWritePagos && fila.cuota_siguiente_numero != null,
+                    }"
+                    @click="onFilaCobroClick(fila)"
+                  >
+                    <td class="col-n">{{ index + 1 }}</td>
+                    <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
+                    <td class="col-nombre">{{ fila.nombre_cliente }}</td>
+                    <td class="col-estado">{{ etiquetaEstadoHoja(fila.estado) }}</td>
+                    <td class="col-monto">{{ valorCuotaHoja(fila) }}</td>
+                    <td class="col-espacio"></td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr class="hoja-findeco-totales">
+                    <td colspan="3" class="totales-label">
+                      TOTALES ({{ hojaListadoTotales.registros }}):
+                    </td>
+                    <td></td>
+                    <td class="col-monto">{{ formatNumeroHoja(hojaListadoTotales.cuota) }}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+          <p v-if="canWritePagos" class="hoja-listado-hint no-print">
+            Pulse una fila para registrar el cobro de esa cuota.
+          </p>
+        </div>
       </div>
     </section>
 
@@ -1028,6 +1271,35 @@ onMounted(async () => {
 
 .hoja-cobros-list-wrap {
   margin-top: 0.5rem;
+}
+
+.hoja-listado-sheet {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 8%);
+}
+
+.hoja-listado-sheet .hoja-preview-scroll {
+  max-height: none;
+  overflow-x: auto;
+  border: none;
+}
+
+.hoja-listado-row--clickable {
+  cursor: pointer;
+}
+
+.hoja-listado-row--clickable:hover td {
+  background: #f0f9ff;
+}
+
+.hoja-listado-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+  text-align: center;
 }
 
 .hoja-cobros-list {
@@ -1647,42 +1919,27 @@ onMounted(async () => {
     display: none !important;
   }
 
-  body.printing-hoja-cobros .p-dialog-mask,
-  body.printing-hoja-cobros .hoja-preview-dialog-actions,
+  body.printing-hoja-cobros .hoja-buscar-cliente,
   body.printing-hoja-cobros .hoja-findeco-toolbar,
-  body.printing-hoja-cobros .p-dialog-header,
-  body.printing-hoja-cobros .p-dialog-footer {
+  body.printing-hoja-cobros .hoja-listado-hint,
+  body.printing-hoja-cobros .hoja-buscar-prestamos,
+  body.printing-hoja-cobros .hoja-buscar-resultados {
     display: none !important;
   }
 
-  body.printing-hoja-cobros .p-dialog {
-    position: static !important;
-    width: 100% !important;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    box-shadow: none !important;
-    transform: none !important;
-  }
-
-  body.printing-hoja-cobros .p-dialog-content {
-    padding: 0 !important;
-    overflow: visible !important;
-  }
-
-  body.printing-hoja-cobros .hoja-preview-scroll {
-    max-height: none !important;
-    overflow: visible !important;
-    border: none !important;
+  body.printing-hoja-cobros .hoja-listado-sheet {
+    border: none;
+    box-shadow: none;
+    padding: 0;
   }
 
   body.printing-hoja-cobros .hoja-preview-print-area {
     display: block !important;
   }
 
-  body.printing-hoja-cobros .hoja-findeco-section {
-    display: none !important;
+  body.printing-hoja-cobros .hoja-preview-scroll {
+    max-height: none !important;
+    overflow: visible !important;
   }
 
   .hoja-findeco-sheet {
