@@ -21,6 +21,7 @@ export interface MeProfile {
   rol: RolOperativo | null
   nombre_operativo: string | null
   id_usuario?: number | null
+  telefono?: string | null
   carteras?: CarteraAsignada[]
 }
 
@@ -56,6 +57,7 @@ export interface UsuarioRow {
   nombre: string
   rol: RolOperativo
   correo: string | null
+  telefono?: string | null
   carteras?: number[]
   carteras_detalle?: CarteraAsignada[]
 }
