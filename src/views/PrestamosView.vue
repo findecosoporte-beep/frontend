@@ -1257,15 +1257,14 @@ async function ensureCatalogosFormulario() {
  */
 async function generarNumeroPrestamo(): Promise<{ codigo_prestamo: string; numero_prestamo: string } | null> {
   try {
-    const { data } = await api.get<{ codigo_prestamo: string; numero_prestamo: string }>(
+    const { data } = await api.get<{ codigo_prestamo?: string; numero_prestamo?: string }>(
       '/prestamos/siguiente-numero/',
     )
-    const codigo = data.codigo_prestamo?.trim()
-    const numero = data.numero_prestamo?.trim()
-    if (codigo && numero) {
-      return { codigo_prestamo: codigo, numero_prestamo: numero }
-    }
-    return null
+    const numero = (data.numero_prestamo ?? '').trim()
+    const codigo = (data.codigo_prestamo ?? numero).trim()
+    const valor = numero || codigo
+    if (!valor) return null
+    return { codigo_prestamo: codigo || valor, numero_prestamo: valor }
   } catch {
     return null
   }
