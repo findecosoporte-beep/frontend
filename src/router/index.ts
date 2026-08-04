@@ -68,6 +68,10 @@ const router = createRouter({
           component: () => import('@/views/HistorialFacturasCobrosView.vue'),
         },
         {
+          path: 'cobros/pagare-semanal',
+          redirect: { name: 'cobros' },
+        },
+        {
           path: 'pagos',
           redirect: { name: 'cobros' },
         },

@@ -99,6 +99,7 @@ const editAuditoria = ref<{
   modificado_por_nombre: string | null
 } | null>(null)
 const editForm = ref({
+  codigo_prestamo: '',
   numero_prestamo: '',
   id_cliente: null as number | null,
   id_asesor: null as number | null,
@@ -185,6 +186,7 @@ const formaDesOpts = [
 ]
 
 const form = ref({
+  codigo_prestamo: '',
   numero_prestamo: '',
   id_cliente: null as number | null,
   id_usuario: null as number | null,
@@ -557,7 +559,14 @@ async function loadPrestamosList() {
       ordering: '-id_prestamo',
     })
     const term = listSearch.value.trim()
-    if (term) params.set('search', term)
+    if (term) {
+      if (/^\d+$/.test(term) && term.length <= 4) {
+        const codigo = term.length < 3 ? term.padStart(3, '0') : term
+        params.set('codigo_prestamo', codigo)
+      } else {
+        params.set('search', term)
+      }
+    }
     const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
     listTotal.value = data.count
     if (typeof data.page === 'number') listPage.value = data.page
@@ -613,6 +622,7 @@ async function openEditPrestamo(row: Prestamo) {
     modificado_por_nombre: row.modificado_por_nombre ?? null,
   }
   editForm.value = {
+    codigo_prestamo: row.codigo_prestamo?.trim() ?? row.numero_prestamo?.trim() ?? '',
     numero_prestamo: row.numero_prestamo?.trim() ?? '',
     id_cliente: row.id_cliente,
     id_asesor: row.id_usuario,
@@ -653,6 +663,7 @@ function buildEditPayload() {
     cartera?.dia_cobro ?? null,
   )
   return {
+    codigo_prestamo: editForm.value.codigo_prestamo.trim(),
     numero_prestamo: editForm.value.numero_prestamo.trim(),
     id_cliente: editForm.value.id_cliente,
     id_usuario: editForm.value.id_asesor,
@@ -1242,23 +1253,39 @@ async function ensureCatalogosFormulario() {
 }
 
 /**
- * Genera el siguiente número de préstamo vía API (sin descargar el catálogo completo).
+ * Genera el siguiente código y número compacto vía API (001, 002…).
  */
-async function generarNumeroPrestamo(): Promise<string> {
+async function generarNumeroPrestamo(): Promise<{ codigo_prestamo: string; numero_prestamo: string } | null> {
   try {
-    const { data } = await api.get<{ numero_prestamo: string }>('/prestamos/siguiente-numero/')
+    const { data } = await api.get<{ codigo_prestamo: string; numero_prestamo: string }>(
+      '/prestamos/siguiente-numero/',
+    )
+    const codigo = data.codigo_prestamo?.trim()
     const numero = data.numero_prestamo?.trim()
-    if (numero) return numero
-    return `PR-${Date.now()}`
+    if (codigo && numero) {
+      return { codigo_prestamo: codigo, numero_prestamo: numero }
+    }
+    return null
   } catch {
-    return `PR-${Date.now()}`
+    return null
   }
 }
 
 async function asignarNumeroPrestamoGenerado() {
   generandoNumero.value = true
   try {
-    form.value.numero_prestamo = await generarNumeroPrestamo()
+    const numeracion = await generarNumeroPrestamo()
+    if (!numeracion) {
+      toast.add({
+        severity: 'error',
+        summary: 'Numeración',
+        detail: 'No se pudo obtener el siguiente código. Revisa la conexión e intenta de nuevo.',
+        life: 5000,
+      })
+      return
+    }
+    form.value.codigo_prestamo = numeracion.codigo_prestamo
+    form.value.numero_prestamo = numeracion.numero_prestamo
   } finally {
     generandoNumero.value = false
   }
@@ -1267,7 +1294,18 @@ async function asignarNumeroPrestamoGenerado() {
 async function asignarNumeroPrestamoEditado() {
   generandoNumeroEdit.value = true
   try {
-    editForm.value.numero_prestamo = await generarNumeroPrestamo()
+    const numeracion = await generarNumeroPrestamo()
+    if (!numeracion) {
+      toast.add({
+        severity: 'error',
+        summary: 'Numeración',
+        detail: 'No se pudo obtener el siguiente código. Revisa la conexión e intenta de nuevo.',
+        life: 5000,
+      })
+      return
+    }
+    editForm.value.codigo_prestamo = numeracion.codigo_prestamo
+    editForm.value.numero_prestamo = numeracion.numero_prestamo
   } finally {
     generandoNumeroEdit.value = false
   }
@@ -1294,6 +1332,7 @@ async function prepararDialogoPrestamo(
     await cargarPrestamosParaRenovacion()
   }
   form.value = {
+    codigo_prestamo: '',
     numero_prestamo: '',
     id_cliente: idCliente,
     id_usuario: asesorOptions.value[0]?.id_usuario ?? null,
@@ -1654,6 +1693,7 @@ function buildPayload() {
   const tasaInteres = form.value.tasa_interes == null ? null : Number(form.value.tasa_interes.toFixed(2))
   const comision = form.value.comision == null ? 0 : Number(form.value.comision.toFixed(2))
   return {
+    codigo_prestamo: form.value.codigo_prestamo.trim(),
     numero_prestamo: form.value.numero_prestamo.trim(),
     id_cliente: form.value.id_cliente,
     id_usuario: form.value.id_asesor,
@@ -1696,7 +1736,10 @@ async function save() {
   try {
     let intentos = 0
     while ((await hasDuplicateNumeroPrestamoByCliente()) && intentos < 5) {
-      form.value.numero_prestamo = await generarNumeroPrestamo()
+      const numeracion = await generarNumeroPrestamo()
+      if (!numeracion) break
+      form.value.codigo_prestamo = numeracion.codigo_prestamo
+      form.value.numero_prestamo = numeracion.numero_prestamo
       intentos += 1
     }
     if (await hasDuplicateNumeroPrestamoByCliente()) {
@@ -1837,7 +1880,7 @@ watch(
       <div class="listado-toolbar">
         <InputText
           v-model="listSearch"
-          placeholder="Buscar por número, cliente o producto…"
+          placeholder="Buscar por código (001), cliente o producto…"
           class="listado-search"
           @keyup.enter="onListSearch"
         />
@@ -1886,6 +1929,15 @@ watch(
         current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
         @page="onListadoPage"
       >
+        <Column
+          field="codigo_prestamo"
+          header="Código"
+          :style="{ minWidth: '7rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            {{ data.codigo_prestamo || data.numero_prestamo || data.id_prestamo }}
+          </template>
+        </Column>
         <Column
           field="numero_prestamo"
           header="Nº préstamo"
@@ -2043,6 +2095,18 @@ watch(
       <div class="form-grid">
         <template v-if="wizardStep === 1">
           <div class="full numero-prestamo-wrap">
+            <label class="lbl" for="p-cod">Código préstamo</label>
+            <div class="cliente-select-row">
+              <InputText
+                id="p-cod"
+                :model-value="generandoNumero ? 'Generando…' : form.codigo_prestamo"
+                readonly
+                fluid
+                class="cliente-select"
+              />
+            </div>
+          </div>
+          <div class="full numero-prestamo-wrap">
             <label class="lbl" for="p-num">Número préstamo</label>
             <div class="cliente-select-row">
               <InputText
@@ -2060,11 +2124,11 @@ watch(
                 outlined
                 class="cliente-add-btn"
                 :loading="generandoNumero"
-                aria-label="Regenerar número de préstamo"
+                aria-label="Regenerar código y número de préstamo"
                 @click="regenerarNumeroPrestamo"
               />
             </div>
-            <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+            <small class="hint-text">Formato corto: 001, 002, 003… (misma secuencia en código y número).</small>
           </div>
           <div class="full cliente-select-wrap">
             <label class="lbl" for="p-cliente">Cliente</label>
@@ -2426,6 +2490,15 @@ watch(
     >
       <div class="form-grid">
         <div class="full numero-prestamo-wrap">
+          <label class="lbl" for="ep-cod">Código préstamo</label>
+          <InputText
+            id="ep-cod"
+            :model-value="generandoNumeroEdit ? 'Generando…' : editForm.codigo_prestamo"
+            readonly
+            fluid
+          />
+        </div>
+        <div class="full numero-prestamo-wrap">
           <label class="lbl" for="ep-num">Número préstamo</label>
           <div class="cliente-select-row">
             <InputText
@@ -2443,11 +2516,11 @@ watch(
               outlined
               class="cliente-add-btn"
               :loading="generandoNumeroEdit"
-              aria-label="Regenerar número de préstamo"
+              aria-label="Regenerar código y número de préstamo"
               @click="regenerarNumeroPrestamoEdit"
             />
           </div>
-          <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+          <small class="hint-text">Código y número comparten la misma secuencia automática.</small>
         </div>
         <div class="full prestamo-auditoria-panel">
           <p class="auditoria-titulo">Trazabilidad</p>

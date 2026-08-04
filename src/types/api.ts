@@ -127,6 +127,7 @@ export interface Cartera {
 
 export interface Prestamo {
   id_prestamo: number
+  codigo_prestamo: string
   numero_prestamo: string
   sucursal: string | null
   id_zona?: number | null
