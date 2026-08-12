@@ -560,9 +560,10 @@ async function loadPrestamosList() {
     })
     const term = listSearch.value.trim()
     if (term) {
-      if (/^\d+$/.test(term) && term.length <= 4) {
-        const codigo = term.length < 3 ? term.padStart(3, '0') : term
-        params.set('codigo_prestamo', codigo)
+      if (/^PR-\d+$/i.test(term)) {
+        params.set('codigo_prestamo', term.toUpperCase())
+      } else if (/^\d+$/.test(term) && term.length <= 4) {
+        params.set('codigo_prestamo', `PR-${term.padStart(4, '0')}`)
       } else {
         params.set('search', term)
       }
@@ -1253,7 +1254,7 @@ async function ensureCatalogosFormulario() {
 }
 
 /**
- * Genera el siguiente código y número compacto vía API (001, 002…).
+ * Genera el siguiente código y número vía API (PR-0001, PR-0002…).
  */
 async function generarNumeroPrestamo(): Promise<{ codigo_prestamo: string; numero_prestamo: string } | null> {
   try {
@@ -1879,7 +1880,7 @@ watch(
       <div class="listado-toolbar">
         <InputText
           v-model="listSearch"
-          placeholder="Buscar por código (001), cliente o producto…"
+          placeholder="Buscar por número (PR-0001), cliente o producto…"
           class="listado-search"
           @keyup.enter="onListSearch"
         />
@@ -2127,7 +2128,7 @@ watch(
                 @click="regenerarNumeroPrestamo"
               />
             </div>
-            <small class="hint-text">Formato corto: 001, 002, 003… (misma secuencia en código y número).</small>
+            <small class="hint-text">Formato PR-0001, PR-0002… (misma secuencia en código y número).</small>
           </div>
           <div class="full cliente-select-wrap">
             <label class="lbl" for="p-cliente">Cliente</label>
