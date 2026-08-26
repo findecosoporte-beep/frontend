@@ -331,6 +331,7 @@ export interface HistorialPagosCobrosResponse {
   fecha_fin: string
   generado_en?: string
   cartera_etiqueta: string
+  cobrador_etiqueta?: string
   filas: HistorialPagosCobrosFila[]
   resumen: {
     registros: number

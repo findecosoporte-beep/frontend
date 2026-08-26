@@ -18,10 +18,10 @@ import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import type {
   AnularPagoResponse,
-  Cartera,
   HistorialPagosCobrosFila,
   HistorialPagosCobrosResponse,
   Paginated,
+  UsuarioRow,
 } from '@/types/api'
 
 const toast = useToast()
@@ -84,8 +84,8 @@ const fechaInicioSemana = ref(semanaRangoInicial.inicio)
 const fechaFinSemana = ref(semanaRangoInicial.fin)
 const mes = ref(new Date().getMonth() + 1)
 const anio = ref(new Date().getFullYear())
-const carteraFiltro = ref<number | null>(null)
-const carteras = ref<Cartera[]>([])
+const cobradorFiltro = ref<number | null>(null)
+const cobradores = ref<UsuarioRow[]>([])
 
 const loading = ref(false)
 const exportandoExcel = ref(false)
@@ -149,15 +149,18 @@ function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
 
 const filasHistorial = computed(() => reporte.value?.filas ?? [])
 
-const carteraOpciones = computed(() => [
-  { label: 'Todas', value: null as number | null },
-  ...carteras.value.map((c) => ({ label: c.nombre, value: c.id_cartera as number | null })),
+const cobradorOpciones = computed(() => [
+  { label: 'Todos', value: null as number | null },
+  ...cobradores.value.map((c) => ({ label: c.nombre, value: c.id_usuario as number | null })),
 ])
 
-const tituloCartera = computed(() => {
-  if (carteraFiltro.value == null) return 'TODAS LAS CARTERAS'
-  const c = carteras.value.find((x) => x.id_cartera === carteraFiltro.value)
-  return (c?.nombre ?? 'CARTERA').toUpperCase()
+const tituloCobrador = computed(() => {
+  if (reporte.value?.cobrador_etiqueta) {
+    return reporte.value.cobrador_etiqueta.toUpperCase()
+  }
+  if (cobradorFiltro.value == null) return 'TODOS LOS COBRADORES'
+  const c = cobradores.value.find((x) => x.id_usuario === cobradorFiltro.value)
+  return (c?.nombre ?? 'COBRADOR').toUpperCase()
 })
 
 const periodoLegible = computed(() => {
@@ -186,18 +189,18 @@ const anioOpciones = computed(() => {
   }))
 })
 
-async function cargarCarteras() {
+async function cargarCobradores() {
   try {
-    if (esCobrador.value && auth.profile?.carteras?.length) {
-      carteras.value = auth.profile.carteras as Cartera[]
-      return
-    }
-    const { data } = await api.get<Paginated<Cartera>>('/carteras/?page_size=100')
-    carteras.value = data.results
+    const { data } = await api.get<Paginated<UsuarioRow>>('/usuarios/?rol=cobrador&page_size=100&ordering=nombre')
+    cobradores.value = data.results.filter((u) => u.rol === 'cobrador')
   } catch {
-    carteras.value = []
+    cobradores.value = []
   }
-  carteraFiltro.value = null
+  if (esCobrador.value && auth.profile?.id_usuario) {
+    cobradorFiltro.value = auth.profile.id_usuario
+  } else {
+    cobradorFiltro.value = null
+  }
 }
 
 function buildHistorialQueryString(): string {
@@ -215,8 +218,8 @@ function buildHistorialQueryString(): string {
   } else {
     qs.set('anio', String(anio.value))
   }
-  if (carteraFiltro.value != null) {
-    qs.set('id_cartera', String(carteraFiltro.value))
+  if (cobradorFiltro.value != null) {
+    qs.set('registrado_por', String(cobradorFiltro.value))
   }
   return qs.toString()
 }
@@ -237,9 +240,9 @@ function nombreDesdeContentDisposition(header: string | undefined, fallback: str
 }
 
 function fallbackNombreExport(extension: 'xlsx' | 'pdf'): string {
-  const cartera = tituloCartera.value.replace(/\s+/g, '_').toLowerCase()
+  const cobrador = tituloCobrador.value.replace(/\s+/g, '_').toLowerCase()
   const periodo = periodoLegible.value.replace(/\s+/g, '_').replace('–', '-')
-  return `historial_pagos_${cartera}_${periodo}.${extension}`
+  return `historial_pagos_${cobrador}_${periodo}.${extension}`
 }
 
 async function consultarHistorial() {
@@ -408,11 +411,11 @@ onMounted(async () => {
   if (auth.isAuthenticated && !auth.profile) {
     await auth.fetchProfile()
   }
-  await cargarCarteras()
+  await cargarCobradores()
   await consultarHistorial()
 })
 
-watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFiltro], () => {
+watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFiltro], () => {
   void consultarHistorial()
 })
 </script>
@@ -499,15 +502,16 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFilt
         </div>
 
         <div class="filtro-field">
-          <label class="filtro-label" for="hist-cartera">Cartera</label>
+          <label class="filtro-label" for="hist-cobrador">Cobrador</label>
           <Select
-            id="hist-cartera"
-            v-model="carteraFiltro"
-            :options="carteraOpciones"
+            id="hist-cobrador"
+            v-model="cobradorFiltro"
+            :options="cobradorOpciones"
             option-label="label"
             option-value="value"
             class="filtro-select"
-            placeholder="Todas"
+            placeholder="Todos"
+            :disabled="esCobrador"
           />
         </div>
 
@@ -550,7 +554,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFilt
       <header class="historial-header">
         <img src="/findeco-logo.png" alt="FINDECO" class="historial-logo" />
         <h2 class="historial-marca">FINDECO</h2>
-        <p class="historial-cartera">CARTERA: {{ tituloCartera }}</p>
+        <p class="historial-cobrador">COBRADOR: {{ tituloCobrador }}</p>
         <p class="historial-periodo">PERIODO: {{ periodoLegible }}</p>
         <p v-if="reporte.generado_en" class="historial-generado">
           GENERADO: {{ formatDateTime(reporte.generado_en) }}
@@ -565,7 +569,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFilt
             id="hist-buscar"
             v-model="filtrosTabla.global.value"
             class="filtro-input historial-buscar-input"
-            placeholder="Cliente, DNI, préstamo, cartera, usuario…"
+            placeholder="Cliente, DNI, préstamo, cobrador…"
             @update:model-value="paginaPrimera = 0"
           />
           <Button
@@ -631,7 +635,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFilt
         </Column>
         <Column
           field="registrado_por_nombre"
-          header="Usuario"
+          header="Cobrador"
           sortable
           filter
           filter-placeholder="Filtrar"
@@ -857,7 +861,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, carteraFilt
   letter-spacing: 0.12em;
 }
 
-.historial-cartera,
+.historial-cobrador,
 .historial-periodo,
 .historial-generado,
 .historial-tipo {
