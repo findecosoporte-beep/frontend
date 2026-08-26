@@ -12,7 +12,6 @@ import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
-import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
@@ -35,7 +34,6 @@ import {
 } from '@/utils/telefonoHonduras'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
-  interesTotalPctMensual,
   interesTotalPctSemanal,
   periodosDesdePlazo,
   simularPrestamo,
@@ -105,10 +103,10 @@ const editForm = ref({
   id_asesor: null as number | null,
   id_cobrador: null as number | null,
   monto: null as number | null,
-  plazo: 12,
+  plazo: 8,
   tasa_interes: null as number | null,
   estado: 'activo',
-  forma_pago: 'mensual',
+  forma_pago: 'semanal',
   forma_desembolso: 'efectivo',
   comision: 0,
   fecha_entrega: '',
@@ -174,6 +172,11 @@ const estadoEditOpts = [
   { label: 'Mora', value: 'mora' },
   { label: 'Cancelado', value: 'cancelado' },
 ]
+const FORMA_PAGO_FIJA = 'semanal'
+/** Interés simple por semana (regla FINDECO). */
+const TASA_SEMANAL_FIJA = 2.5
+/** Semanas de cobro por cada mes ingresado en el wizard (préstamo semanal). */
+const SEMANAS_POR_MES_PLAZO = 4
 const formaPagoOpts = [
   { label: 'Semanal', value: 'semanal' },
   { label: 'Mensual', value: 'mensual' },
@@ -193,10 +196,10 @@ const form = ref({
   id_asesor: null as number | null,
   id_cobrador: null as number | null,
   monto: null as number | null,
-  plazo: 12,
-  tasa_interes: null as number | null,
+  plazo: 8,
+  tasa_interes: TASA_SEMANAL_FIJA,
   estado: 'activo',
-  forma_pago: 'mensual',
+  forma_pago: FORMA_PAGO_FIJA as string,
   forma_desembolso: 'efectivo',
   comision: 0,
   fecha_entrega: '',
@@ -238,51 +241,41 @@ const currentSimulationSignature = computed(() =>
   }),
 )
 
-const tasaPeriodoLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Tasa semanal % (automática)'
-  if (form.value.forma_pago === 'mensual') return 'Tasa mensual % (automática)'
-  return 'Tasa mensual %'
+const tasaSemanalResumen = computed(() => {
+  const semanas = Math.trunc(Number(form.value.plazo || 0))
+  if (semanas <= 0) {
+    return 'Interés fijo 2.5% por cada semana de plazo.'
+  }
+  return `Interés fijo 2.5% por semana · total del crédito ${interesTotalPctSemanal(semanas)}% (${semanas} semanas).`
 })
 
-const plazoFieldLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Plazo (semanas)'
-  return 'Plazo (meses)'
+function semanasDesdeMeses(meses: number): number {
+  const m = Number(meses)
+  if (!Number.isFinite(m) || m <= 0) return 1
+  return Math.max(1, Math.round(m * SEMANAS_POR_MES_PLAZO))
+}
+
+function mesesDesdeSemanas(semanas: number): number {
+  const s = Math.trunc(Number(semanas))
+  if (s <= 0) return 0.25
+  return Math.round((s / SEMANAS_POR_MES_PLAZO) * 100) / 100
+}
+
+/** Plazo en meses (UI, admite decimales ej. 1.5); en API semanal se guarda como semanas. */
+const plazoMeses = computed({
+  get(): number {
+    return mesesDesdeSemanas(Number(form.value.plazo || 0))
+  },
+  set(meses: number) {
+    form.value.plazo = semanasDesdeMeses(meses)
+    aplicarReglasSemanal()
+  },
 })
 
-const esSemanal = computed(() => form.value.forma_pago === 'semanal')
-const esMensual = computed(() => form.value.forma_pago === 'mensual')
-const esTasaAutomatica = computed(() => esSemanal.value || esMensual.value)
-
-const frecuenciaEfectoLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 1 semana por cuota (semanal).'
-  if (form.value.forma_pago === 'quincenal') return 'Efecto aplicado: 15 días por cuota (quincenal).'
-  return 'Efecto aplicado: 1 mes por cuota (mensual).'
-})
-
-const frecuenciaPlazoResumen = computed(() => {
-  const plazo = Number(form.value.plazo || 0)
-  if (plazo <= 0) return ''
-  if (form.value.forma_pago === 'semanal') {
-    return `${plazo} cuota${plazo === 1 ? '' : 's'} semanal${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctSemanal(plazo)}%.`
-  }
-  if (form.value.forma_pago === 'quincenal') {
-    return `Quincenas totales estimadas para el plazo actual: ${plazo * 2}.`
-  }
-  if (form.value.forma_pago === 'mensual') {
-    return `${plazo} cuota${plazo === 1 ? '' : 's'} mensual${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctMensual(plazo)}%.`
-  }
-  return `Meses del plazo: ${plazo}.`
-})
-
-const tasaConversionLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') {
-    return 'Tasa fija 2.5% semanal · interés total = semanas × 2.5%.'
-  }
-  if (form.value.forma_pago === 'mensual') {
-    return 'Tasa fija 10% mensual · interés total = meses × 10%.'
-  }
-  if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
-  return 'Tasa por periodo aplicada: tasa mensual.'
+/** Plazo en semanas (calculado desde meses); valor enviado al API. */
+const plazoSemanas = computed(() => {
+  const semanas = Math.trunc(Number(form.value.plazo || 0))
+  return semanas > 0 ? semanas : 1
 })
 
 const canSave = computed(() => {
@@ -1339,10 +1332,10 @@ async function prepararDialogoPrestamo(
     id_asesor: asesorOptions.value[0]?.id_usuario ?? null,
     id_cobrador: cobradorOptions.value[0]?.id_usuario ?? null,
     monto: null,
-    plazo: 12,
-    tasa_interes: null,
+    plazo: 8,
+    tasa_interes: TASA_SEMANAL_FIJA,
     estado: 'activo',
-    forma_pago: 'mensual',
+    forma_pago: FORMA_PAGO_FIJA as string,
     forma_desembolso: 'efectivo',
     comision: 0,
     fecha_entrega: getTodayISO(),
@@ -1442,22 +1435,11 @@ function totalCuotasEstimadas(): number {
 }
 
 function aplicarReglasSemanal() {
-  if (form.value.forma_pago !== 'semanal') return
-  const semanas = Math.trunc(Number(form.value.plazo || 0))
-  if (semanas <= 0) return
-  form.value.tasa_interes = tasaSemanalNegocio(semanas)
-}
-
-function aplicarReglasMensual() {
-  if (form.value.forma_pago !== 'mensual') return
-  const meses = Math.trunc(Number(form.value.plazo || 0))
-  if (meses <= 0) return
-  form.value.tasa_interes = tasaMensualNegocio(meses)
+  form.value.tasa_interes = TASA_SEMANAL_FIJA
 }
 
 function aplicarReglasTasaPeriodo() {
   aplicarReglasSemanal()
-  aplicarReglasMensual()
 }
 
 const fechaEntregaEnPasado = computed(() => {
@@ -1499,28 +1481,6 @@ watch(
     }
   },
 )
-
-function onFormaPagoToggle(targetValue: string, checked: boolean) {
-  // Mantenemos selección única obligatoria: si apaga el activo, lo volvemos a dejar activo.
-  if (!checked && form.value.forma_pago === targetValue) {
-    form.value.forma_pago = targetValue
-    return
-  }
-  if (checked) {
-    form.value.forma_pago = targetValue
-    if (targetValue === 'semanal') {
-      form.value.plazo = 6
-      aplicarReglasSemanal()
-    } else if (targetValue === 'mensual') {
-      if (form.value.plazo <= 0 || form.value.plazo === 6) {
-        form.value.plazo = 12
-      }
-      aplicarReglasMensual()
-    } else if (form.value.plazo <= 0 || form.value.plazo === 6) {
-      form.value.plazo = 12
-    }
-  }
-}
 
 watch(
   () => [form.value.forma_pago, form.value.plazo] as const,
@@ -1701,7 +1661,7 @@ function buildPayload() {
     plazo: form.value.plazo,
     tasa_interes: tasaInteres,
     estado: 'activo',
-    forma_pago: form.value.forma_pago,
+    forma_pago: FORMA_PAGO_FIJA as string,
     forma_desembolso: form.value.forma_desembolso,
     comision,
     fecha_entrega: form.value.fecha_entrega,
@@ -2257,42 +2217,34 @@ watch(
             <InputNumber id="p-monto" v-model="form.monto" mode="decimal" :min-fraction-digits="2" fluid />
           </div>
           <div class="field-block">
-            <label class="lbl" for="p-plazo">{{ plazoFieldLabel }}</label>
-            <InputNumber id="p-plazo" v-model="form.plazo" :min="1" fluid />
-          </div>
-          <div class="field-block">
-            <label class="lbl" for="p-tasa">{{ tasaPeriodoLabel }}</label>
+            <label class="lbl" for="p-plazo-meses">Plazo (meses)</label>
             <InputNumber
-              id="p-tasa"
-              v-model="form.tasa_interes"
+              id="p-plazo-meses"
+              v-model="plazoMeses"
               mode="decimal"
-              :min="0"
+              :min="0.25"
               :max-fraction-digits="2"
-              :min-fraction-digits="2"
-              :step="0.01"
-              :use-grouping="false"
-              :readonly="esTasaAutomatica"
+              :min-fraction-digits="0"
+              :step="0.5"
               fluid
             />
-            <small class="hint-text">{{ tasaConversionLabel }}</small>
+          </div>
+          <div class="field-block">
+            <label class="lbl" for="p-plazo-semanas">Plazo (semanas)</label>
+            <InputText id="p-plazo-semanas" :model-value="String(plazoSemanas)" readonly fluid />
+          </div>
+          <div class="field-block">
+            <label class="lbl" for="p-tasa">Tasa semanal % (fija)</label>
+            <InputText id="p-tasa" model-value="2.50" readonly fluid />
+            <small class="hint-text">{{ tasaSemanalResumen }}</small>
           </div>
           <div class="full">
             <label class="lbl">Estado</label>
             <Select v-model="form.estado" :options="estadoOpts" option-label="label" option-value="value" disabled fluid />
           </div>
           <div class="full">
-            <label class="lbl">Forma pago</label>
-            <div class="switch-list">
-              <div v-for="opt in formaPagoOpts" :key="opt.value" class="switch-item">
-                <span class="switch-item-label">{{ opt.label }}</span>
-                <ToggleSwitch
-                  :model-value="form.forma_pago === opt.value"
-                  @update:model-value="(value) => onFormaPagoToggle(opt.value, value)"
-                />
-              </div>
-            </div>
-            <small class="hint-text">{{ frecuenciaEfectoLabel }}</small>
-            <small v-if="frecuenciaPlazoResumen" class="hint-text">{{ frecuenciaPlazoResumen }}</small>
+            <label class="lbl" for="p-forma-pago">Forma pago</label>
+            <InputText id="p-forma-pago" model-value="Semanal" readonly fluid />
           </div>
           <div class="full">
             <label class="lbl">Desembolso</label>
@@ -2645,7 +2597,7 @@ watch(
             :options="formaPagoOpts"
             option-label="label"
             option-value="value"
-            :disabled="editPlanBloqueado"
+            disabled
             fluid
           />
         </div>
