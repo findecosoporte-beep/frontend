@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { FilterMatchMode } from '@primevue/core/api'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -16,6 +15,14 @@ import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
+import {
+  buildHistorialQueryString,
+  compararMontoHistorial,
+  filtrarFilasPorCobradorSeleccionado,
+  normalizarCobradorFiltroId,
+  sumarResumenFilas,
+  validarRangoSemana,
+} from '@/utils/historialPagosCobros'
 import type {
   AnularPagoResponse,
   HistorialPagosCobrosFila,
@@ -85,6 +92,13 @@ const fechaFinSemana = ref(semanaRangoInicial.fin)
 const mes = ref(new Date().getMonth() + 1)
 const anio = ref(new Date().getFullYear())
 const cobradorFiltro = ref<number | null>(null)
+
+const cobradorFiltroId = computed({
+  get: () => normalizarCobradorFiltroId(cobradorFiltro.value),
+  set: (value: unknown) => {
+    cobradorFiltro.value = normalizarCobradorFiltroId(value)
+  },
+})
 const cobradores = ref<UsuarioRow[]>([])
 
 const loading = ref(false)
@@ -98,45 +112,31 @@ const dialogAnularVisible = ref(false)
 const pagoSeleccionado = ref<{ id_pago: number; nombre_cliente: string; total: string } | null>(null)
 const motivoAnulacion = ref('')
 const paginaPrimera = ref(0)
+const filtrosInicializados = ref(false)
+const consultaSeq = ref(0)
+let debounceConsulta: ReturnType<typeof setTimeout> | undefined
+let abortConsulta: AbortController | null = null
 
-const CAMPOS_FILTRO_TABLA = [
-  'cartera_nombre',
-  'nombre_cliente',
-  'dni_cliente',
-  'numero_prestamo',
-  'documento',
-  'fecha_programada',
-  'fecha_pago',
-  'registrado_por_nombre',
-  'registrado_en',
-  'capital',
-  'total',
-] as const
-
-function crearFiltrosVacios() {
-  const filtros: Record<string, { value: string | null; matchMode: string }> = {
-    global: { value: null, matchMode: FilterMatchMode.CONTAINS },
-  }
-  for (const campo of CAMPOS_FILTRO_TABLA) {
-    filtros[campo] = { value: null, matchMode: FilterMatchMode.CONTAINS }
-  }
-  return filtros
-}
-
-const filtrosTabla = ref(crearFiltrosVacios())
-
-const globalFilterFields = [
-  ...CAMPOS_FILTRO_TABLA,
-  'registrado_por_etiqueta',
-  'registrado_por',
-  'id_pago',
-]
+const DEBOUNCE_MS = 320
 
 const esCobrador = computed(() => auth.profile?.rol === 'cobrador')
 
-function reiniciarFiltrosTabla() {
-  filtrosTabla.value = crearFiltrosVacios()
-  paginaPrimera.value = 0
+function buildQueryStringLocal(): string {
+  return buildHistorialQueryString({
+    modo: modo.value,
+    fechaDia: fechaDia.value,
+    fechaInicioSemana: fechaInicioSemana.value,
+    fechaFinSemana: fechaFinSemana.value,
+    mes: mes.value,
+    anio: anio.value,
+    cobradorFiltro: cobradorFiltroId.value,
+  })
+}
+
+function cobradorSeleccionado(): UsuarioRow | null {
+  const id = cobradorFiltroId.value
+  if (id == null) return null
+  return cobradores.value.find((c) => c.id_usuario === id) ?? null
 }
 
 function nombreUsuarioCobro(fila: HistorialPagosCobrosFila): string {
@@ -147,7 +147,27 @@ function fechaRegistroCobro(fila: HistorialPagosCobrosFila): string {
   return fila.registrado_en || formatDateTime(fila.cobrado_en) || '—'
 }
 
-const filasHistorial = computed(() => reporte.value?.filas ?? [])
+const filasHistorial = computed(() => {
+  const filas = reporte.value?.filas ?? []
+  const cobrador = cobradorSeleccionado()
+  return filtrarFilasPorCobradorSeleccionado(
+    filas,
+    cobradorFiltroId.value,
+    cobrador?.nombre ?? reporte.value?.cobrador_etiqueta,
+  )
+})
+
+const resumenVisible = computed(() => sumarResumenFilas(filasHistorial.value))
+
+const hayFiltroCobradorToolbar = computed(() => cobradorFiltroId.value != null)
+
+function sortMonto(
+  a: HistorialPagosCobrosFila,
+  b: HistorialPagosCobrosFila,
+  field: keyof HistorialPagosCobrosFila,
+) {
+  return compararMontoHistorial(a, b, field)
+}
 
 const cobradorOpciones = computed(() => [
   { label: 'Todos', value: null as number | null },
@@ -155,12 +175,15 @@ const cobradorOpciones = computed(() => [
 ])
 
 const tituloCobrador = computed(() => {
-  if (reporte.value?.cobrador_etiqueta) {
+  const cobrador = cobradorSeleccionado()
+  if (cobrador?.nombre) return cobrador.nombre.toUpperCase()
+  if (
+    reporte.value?.cobrador_etiqueta &&
+    reporte.value.cobrador_etiqueta.toLowerCase() !== 'todos los cobradores'
+  ) {
     return reporte.value.cobrador_etiqueta.toUpperCase()
   }
-  if (cobradorFiltro.value == null) return 'TODOS LOS COBRADORES'
-  const c = cobradores.value.find((x) => x.id_usuario === cobradorFiltro.value)
-  return (c?.nombre ?? 'COBRADOR').toUpperCase()
+  return 'TODOS LOS COBRADORES'
 })
 
 const periodoLegible = computed(() => {
@@ -189,6 +212,11 @@ const anioOpciones = computed(() => {
   }))
 })
 
+function onCobradorFiltroChange(_value: unknown) {
+  if (!filtrosInicializados.value) return
+  void consultarHistorial({ avisarSinRegistros: false })
+}
+
 async function cargarCobradores() {
   try {
     const { data } = await api.get<Paginated<UsuarioRow>>('/usuarios/?rol=cobrador&page_size=100&ordering=nombre')
@@ -203,25 +231,64 @@ async function cargarCobradores() {
   }
 }
 
-function buildHistorialQueryString(): string {
-  const qs = new URLSearchParams({ modo: modo.value })
-  if (modo.value === 'dia') {
-    qs.set('fecha', fechaDia.value)
-    qs.set('anio', String(new Date(`${fechaDia.value}T12:00:00`).getFullYear()))
-  } else if (modo.value === 'semana') {
-    qs.set('fecha_inicio', fechaInicioSemana.value)
-    qs.set('fecha_fin', fechaFinSemana.value)
-    qs.set('anio', String(new Date(`${fechaInicioSemana.value}T12:00:00`).getFullYear()))
-  } else if (modo.value === 'mes') {
-    qs.set('mes', String(mes.value))
-    qs.set('anio', String(anio.value))
-  } else {
-    qs.set('anio', String(anio.value))
+function programarConsultaHistorial() {
+  if (!filtrosInicializados.value) return
+  if (debounceConsulta) clearTimeout(debounceConsulta)
+  debounceConsulta = setTimeout(() => {
+    void consultarHistorial({ avisarSinRegistros: false })
+  }, DEBOUNCE_MS)
+}
+
+async function consultarHistorial(opciones: { avisarSinRegistros?: boolean } = {}) {
+  const { avisarSinRegistros = true } = opciones
+  error.value = ''
+  if (modo.value === 'semana') {
+    const msg = validarRangoSemana(fechaInicioSemana.value, fechaFinSemana.value)
+    if (msg) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Semana',
+        detail: msg,
+        life: 4000,
+      })
+      return
+    }
   }
-  if (cobradorFiltro.value != null) {
-    qs.set('registrado_por', String(cobradorFiltro.value))
+
+  if (abortConsulta) abortConsulta.abort()
+  const controller = new AbortController()
+  abortConsulta = controller
+  const seq = ++consultaSeq.value
+
+  loading.value = true
+  try {
+    const { data } = await api.get<HistorialPagosCobrosResponse>(
+      `/pagos/historial-cobros/?${buildQueryStringLocal()}`,
+      { signal: controller.signal },
+    )
+    if (seq !== consultaSeq.value) return
+    reporte.value = data
+    paginaPrimera.value = 0
+    if (avisarSinRegistros && !data.filas.length) {
+      toast.add({
+        severity: 'info',
+        summary: 'Sin registros',
+        detail: 'No hay pagos en el periodo seleccionado.',
+        life: 4000,
+      })
+    }
+  } catch (e) {
+    if (controller.signal.aborted) return
+    if (seq !== consultaSeq.value) return
+    error.value = getApiErrorMessage(e, 'No se pudo cargar el historial.')
+  } finally {
+    if (seq === consultaSeq.value) {
+      loading.value = false
+    }
+    if (abortConsulta === controller) {
+      abortConsulta = null
+    }
   }
-  return qs.toString()
 }
 
 function descargarBlob(blob: Blob, nombre: string) {
@@ -245,52 +312,6 @@ function fallbackNombreExport(extension: 'xlsx' | 'pdf'): string {
   return `historial_pagos_${cobrador}_${periodo}.${extension}`
 }
 
-async function consultarHistorial() {
-  error.value = ''
-  if (modo.value === 'semana') {
-    if (!fechaInicioSemana.value || !fechaFinSemana.value) {
-      toast.add({
-        severity: 'warn',
-        summary: 'Semana',
-        detail: 'Indique fecha de inicio y fecha final.',
-        life: 4000,
-      })
-      return
-    }
-    if (fechaFinSemana.value < fechaInicioSemana.value) {
-      toast.add({
-        severity: 'warn',
-        summary: 'Semana',
-        detail: 'La fecha final no puede ser anterior a la de inicio.',
-        life: 4000,
-      })
-      return
-    }
-  }
-  loading.value = true
-  reporte.value = null
-  reiniciarFiltrosTabla()
-  paginaPrimera.value = 0
-  try {
-    const { data } = await api.get<HistorialPagosCobrosResponse>(
-      `/pagos/historial-cobros/?${buildHistorialQueryString()}`,
-    )
-    reporte.value = data
-    if (!data.filas.length) {
-      toast.add({
-        severity: 'info',
-        summary: 'Sin registros',
-        detail: 'No hay pagos en el periodo seleccionado.',
-        life: 4000,
-      })
-    }
-  } catch (e) {
-    error.value = getApiErrorMessage(e, 'No se pudo cargar el historial.')
-  } finally {
-    loading.value = false
-  }
-}
-
 async function exportarHistorialExcel() {
   if (!reporte.value?.filas.length) {
     toast.add({
@@ -303,7 +324,7 @@ async function exportarHistorialExcel() {
   }
   exportandoExcel.value = true
   try {
-    const response = await api.get<Blob>(`/pagos/historial-cobros-excel/?${buildHistorialQueryString()}`, {
+    const response = await api.get<Blob>(`/pagos/historial-cobros-excel/?${buildQueryStringLocal()}`, {
       responseType: 'blob',
     })
     const nombre = nombreDesdeContentDisposition(
@@ -336,7 +357,7 @@ async function exportarHistorialPdf() {
   }
   exportandoPdf.value = true
   try {
-    const response = await api.get<Blob>(`/pagos/historial-cobros-pdf/?${buildHistorialQueryString()}`, {
+    const response = await api.get<Blob>(`/pagos/historial-cobros-pdf/?${buildQueryStringLocal()}`, {
       responseType: 'blob',
     })
     const nombre = nombreDesdeContentDisposition(
@@ -412,11 +433,17 @@ onMounted(async () => {
     await auth.fetchProfile()
   }
   await cargarCobradores()
-  await consultarHistorial()
+  filtrosInicializados.value = true
+  await consultarHistorial({ avisarSinRegistros: true })
 })
 
-watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFiltro], () => {
-  void consultarHistorial()
+watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio], () => {
+  programarConsultaHistorial()
+})
+
+onBeforeUnmount(() => {
+  if (debounceConsulta) clearTimeout(debounceConsulta)
+  if (abortConsulta) abortConsulta.abort()
 })
 </script>
 
@@ -505,13 +532,15 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
           <label class="filtro-label" for="hist-cobrador">Cobrador</label>
           <Select
             id="hist-cobrador"
-            v-model="cobradorFiltro"
+            v-model="cobradorFiltroId"
             :options="cobradorOpciones"
             option-label="label"
             option-value="value"
             class="filtro-select"
             placeholder="Todos"
+            show-clear
             :disabled="esCobrador"
+            @update:model-value="onCobradorFiltroChange"
           />
         </div>
 
@@ -522,7 +551,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
             type="button"
             :loading="loading"
             :disabled="loading"
-            @click="consultarHistorial"
+            @click="consultarHistorial({ avisarSinRegistros: true })"
           />
           <Button
             label="Excel"
@@ -562,36 +591,11 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
         <p class="historial-tipo">HISTORIAL DE PAGOS — PRÉSTAMOS</p>
       </header>
 
-      <div class="historial-buscar no-print">
-        <label class="filtro-label" for="hist-buscar">Buscar en todo</label>
-        <div class="historial-buscar-fila">
-          <InputText
-            id="hist-buscar"
-            v-model="filtrosTabla.global.value"
-            class="filtro-input historial-buscar-input"
-            placeholder="Cliente, DNI, préstamo, cobrador…"
-            @update:model-value="paginaPrimera = 0"
-          />
-          <Button
-            label="Limpiar filtros"
-            icon="pi pi-filter-slash"
-            severity="secondary"
-            outlined
-            size="small"
-            type="button"
-            @click="reiniciarFiltrosTabla"
-          />
-        </div>
-      </div>
-
       <DataTable
-        v-model:filters="filtrosTabla"
         v-model:first="paginaPrimera"
         :value="filasHistorial"
-        :global-filter-fields="globalFilterFields"
         :loading="loading"
         data-key="id_pago"
-        filter-display="row"
         paginator
         :rows="FILAS_POR_PAGINA"
         paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport"
@@ -604,55 +608,36 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
           field="cartera_nombre"
           header="Cartera"
           sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '8rem' }"
         />
         <Column
           field="nombre_cliente"
           header="Cliente"
           sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '10rem' }"
         />
-        <Column field="dni_cliente" header="DNI" sortable filter filter-placeholder="Filtrar" />
-        <Column field="numero_prestamo" header="Préstamo" sortable filter filter-placeholder="Filtrar" />
-        <Column field="documento" header="Documento" sortable filter filter-placeholder="Filtrar" />
-        <Column
-          field="fecha_programada"
-          header="Fecha programada"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
-        >
+        <Column field="dni_cliente" header="DNI" sortable />
+        <Column field="numero_prestamo" header="Préstamo" sortable />
+        <Column field="documento" header="Documento" sortable />
+        <Column field="fecha_programada" header="Fecha programada" sortable>
           <template #body="{ data }">
             {{ data.fecha_programada ? formatDate(data.fecha_programada) : '—' }}
           </template>
         </Column>
-        <Column field="fecha_pago" header="Fecha canceló" sortable filter filter-placeholder="Filtrar">
+        <Column field="fecha_pago" header="Fecha canceló" sortable>
           <template #body="{ data }">{{ formatDate(data.fecha_pago) }}</template>
         </Column>
         <Column
           field="registrado_por_nombre"
           header="Cobrador"
           sortable
-          filter
-          filter-placeholder="Filtrar"
           :style="{ minWidth: '10rem' }"
         >
           <template #body="{ data }">
             <span class="auditoria-nombre">{{ nombreUsuarioCobro(data) }}</span>
           </template>
         </Column>
-        <Column
-          field="registrado_en"
-          header="Fecha registro"
-          sortable
-          filter
-          filter-placeholder="Filtrar"
-          :style="{ minWidth: '10rem' }"
-        >
+        <Column field="registrado_en" header="Fecha registro" sortable :style="{ minWidth: '10rem' }">
           <template #body="{ data }">
             <span class="auditoria-celda">{{ fechaRegistroCobro(data) }}</span>
           </template>
@@ -661,8 +646,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
           field="capital"
           header="Capital"
           sortable
-          filter
-          filter-placeholder="Filtrar"
+          :sort-function="(a: HistorialPagosCobrosFila, b: HistorialPagosCobrosFila) => sortMonto(a, b, 'capital')"
           style="text-align: right"
         >
           <template #body="{ data }">{{ formatMoney(data.capital) }}</template>
@@ -671,8 +655,7 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
           field="total"
           header="Total"
           sortable
-          filter
-          filter-placeholder="Filtrar"
+          :sort-function="(a: HistorialPagosCobrosFila, b: HistorialPagosCobrosFila) => sortMonto(a, b, 'total')"
           style="text-align: right"
         >
           <template #body="{ data }">{{ formatMoney(data.total) }}</template>
@@ -731,9 +714,15 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
       </Dialog>
 
       <footer class="historial-totales">
-        <span><strong>Capital:</strong> {{ formatMoney(reporte.resumen.total_capital) }}</span>
+        <span v-if="hayFiltroCobradorToolbar" class="historial-totales-nota">
+          Totales del cobrador seleccionado ({{ resumenVisible.registros }} registros)
+        </span>
+        <span v-else class="historial-totales-nota">
+          Totales del periodo ({{ resumenVisible.registros }} registros)
+        </span>
+        <span><strong>Capital:</strong> {{ formatMoney(resumenVisible.totalCapital) }}</span>
         <span class="historial-total-grande"
-          ><strong>Total cobrado:</strong> {{ formatMoney(reporte.resumen.total_cobrado) }}</span
+          ><strong>Total cobrado:</strong> {{ formatMoney(resumenVisible.totalCobrado) }}</span
         >
       </footer>
     </article>
@@ -758,33 +747,6 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
   margin: 0 0 0.25rem;
   font-size: 1.35rem;
   font-weight: 700;
-}
-
-.historial-buscar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-bottom: 0.85rem;
-  max-width: 36rem;
-}
-
-.historial-buscar-fila {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.historial-buscar-input {
-  flex: 1;
-  min-width: 14rem;
-}
-
-.historial-table :deep(.p-datatable-filter-row .p-inputtext) {
-  font-size: 0.78rem;
-  padding: 0.3rem 0.45rem;
-  min-width: 0;
-  width: 100%;
 }
 
 .historial-table :deep(.p-datatable-thead > tr > th) {
@@ -878,6 +840,13 @@ watch([modo, fechaDia, fechaInicioSemana, fechaFinSemana, mes, anio, cobradorFil
   padding-top: 0.75rem;
   border-top: 1px solid var(--p-surface-300);
   font-size: 0.9rem;
+  align-items: baseline;
+}
+
+.historial-totales-nota {
+  flex: 1 1 100%;
+  font-size: 0.82rem;
+  color: var(--p-text-muted-color);
 }
 
 .historial-total-grande {
