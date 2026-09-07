@@ -1652,9 +1652,9 @@ function buildPayload() {
   const cobradorNombre = nombreUsuarioPorId(form.value.id_cobrador)
   const tasaInteres = form.value.tasa_interes == null ? null : Number(form.value.tasa_interes.toFixed(2))
   const comision = form.value.comision == null ? 0 : Number(form.value.comision.toFixed(2))
-  return {
-    codigo_prestamo: form.value.codigo_prestamo.trim(),
-    numero_prestamo: form.value.numero_prestamo.trim(),
+  const codigo = form.value.codigo_prestamo.trim()
+  const numero = form.value.numero_prestamo.trim()
+  const payload: Record<string, unknown> = {
     id_cliente: form.value.id_cliente,
     id_usuario: form.value.id_asesor,
     monto: form.value.monto,
@@ -1674,6 +1674,9 @@ function buildPayload() {
     dias_mora: form.value.dias_mora,
     ciclos: form.value.ciclos,
   }
+  if (codigo) payload.codigo_prestamo = codigo
+  if (numero) payload.numero_prestamo = numero
+  return payload
 }
 
 async function hasDuplicateNumeroPrestamoByCliente(): Promise<boolean> {
@@ -1762,6 +1765,22 @@ async function save() {
     }
 
     const payload = buildPayload()
+    if (!payload.codigo_prestamo || !payload.numero_prestamo) {
+      const numeracion = await generarNumeroPrestamo()
+      if (!numeracion) {
+        toast.add({
+          severity: 'warn',
+          summary: 'Número de préstamo',
+          detail: 'No se pudo obtener el consecutivo. Intente de nuevo.',
+          life: 5000,
+        })
+        return
+      }
+      payload.codigo_prestamo = numeracion.codigo_prestamo
+      payload.numero_prestamo = numeracion.numero_prestamo
+      form.value.codigo_prestamo = numeracion.codigo_prestamo
+      form.value.numero_prestamo = numeracion.numero_prestamo
+    }
     await api.post('/prestamos/', payload)
     if (form.value.id_cliente != null) {
       clientesConPrestamoActivoIds.value = new Set([

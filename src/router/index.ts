@@ -94,16 +94,13 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (to.meta.requiresAuth && !auth.isAuthenticated) {
-    return { name: 'login' }
-  }
-  if (to.meta.requiresAuth && auth.isAuthenticated && !auth.profile) {
-    void auth.fetchProfile().catch(() => {
-      auth.logout()
-      void router.replace({ name: 'login' })
-    })
+  if (to.meta.requiresAuth) {
+    const ok = await auth.ensureSession()
+    if (!ok) {
+      return { name: 'login' }
+    }
   }
   if (to.name === 'login' && auth.isAuthenticated) {
     return { name: 'dashboard' }
