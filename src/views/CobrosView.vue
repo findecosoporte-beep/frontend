@@ -499,10 +499,9 @@ async function cargarResumenCarterasHoja(forzar = false) {
     try {
       const qs = new URLSearchParams({
         estado: HOJA_COBROS_ESTADO,
-        resumen_por_cartera: '1',
       })
       const { data } = await api.get<ReporteIntegracionResponse>(
-        `/prestamos/reporte-integracion/?${qs.toString()}`,
+        `/prestamos/resumen-carteras/?${qs.toString()}`,
       )
       if (seq !== resumenCarterasSeq) return
 
