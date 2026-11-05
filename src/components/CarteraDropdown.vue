@@ -3,8 +3,14 @@ import { computed, ref, watch } from 'vue'
 
 import { DIAS_COBRO_CARTERA_OPTIONS } from '@/constants/diasCobroCartera'
 import type { Cartera } from '@/types/api'
+import { formatNumeroHoja } from '@/utils/hojaCobrosListadoDisplay'
+import type { CarteraResumenListado } from '@/utils/resumenCarterasReporte'
 
 const model = defineModel<number | ''>({ default: '' })
+
+const emit = defineEmits<{
+  refreshResumen: []
+}>()
 
 const props = withDefaults(
   defineProps<{
@@ -13,12 +19,16 @@ const props = withDefaults(
     autoOpen?: boolean
     label?: string
     placeholder?: string
+    resumenPorCartera?: Record<number, CarteraResumenListado>
+    resumenLoading?: boolean
   }>(),
   {
     disabled: false,
     autoOpen: false,
     label: undefined,
     placeholder: undefined,
+    resumenPorCartera: () => ({}),
+    resumenLoading: false,
   },
 )
 
@@ -51,9 +61,25 @@ function select(idCartera: number) {
   open.value = false
 }
 
+function resumenDe(idCartera: number): CarteraResumenListado | null {
+  return props.resumenPorCartera[idCartera] ?? null
+}
+
+function textoResumen(idCartera: number, campo: keyof CarteraResumenListado): string {
+  const r = resumenDe(idCartera)
+  if (!r) return props.resumenLoading ? '…' : '—'
+  if (campo === 'clientes') return String(r.clientes)
+  if (campo === 'saldoPendiente') return formatNumeroHoja(r.saldoPendiente) || '0.00'
+  return formatNumeroHoja(r.cuotaCobrar) || '0.00'
+}
+
 function openList() {
   if (!props.disabled && canOpen.value) open.value = true
 }
+
+watch(open, (isOpen) => {
+  if (isOpen) emit('refreshResumen')
+})
 
 watch(
   () => [props.autoOpen, props.carteras.length, model.value] as const,
@@ -118,6 +144,20 @@ watch(
                 <span class="cartera-dropdown-option-name">{{ item.nombre }}</span>
                 <span class="cartera-dropdown-option-meta">
                   Día de cobro: {{ labelDiaCobro(item.dia_cobro) }}
+                </span>
+              </span>
+              <span class="cartera-dropdown-option-stats" aria-label="Resumen de cartera">
+                <span class="cartera-stat">
+                  <span class="cartera-stat-label">Clientes</span>
+                  <span class="cartera-stat-value">{{ textoResumen(item.id_cartera, 'clientes') }}</span>
+                </span>
+                <span class="cartera-stat">
+                  <span class="cartera-stat-label">Saldo pend.</span>
+                  <span class="cartera-stat-value">{{ textoResumen(item.id_cartera, 'saldoPendiente') }}</span>
+                </span>
+                <span class="cartera-stat">
+                  <span class="cartera-stat-label">Cuotas</span>
+                  <span class="cartera-stat-value">{{ textoResumen(item.id_cartera, 'cuotaCobrar') }}</span>
                 </span>
               </span>
               <span v-if="item.id_cartera === model" class="cartera-dropdown-check" aria-hidden="true">✓</span>
@@ -215,7 +255,7 @@ watch(
 }
 
 .cartera-dropdown-sheet {
-  width: min(100%, 32rem);
+  width: min(100%, 42rem);
   max-height: 70vh;
   overflow: hidden;
   display: flex;
@@ -261,7 +301,7 @@ watch(
 
 .cartera-dropdown-option {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.65rem;
   width: 100%;
   padding: 0.9rem 1rem;
@@ -308,7 +348,47 @@ watch(
   color: #64748b;
 }
 
+.cartera-dropdown-option-stats {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(4.5rem, 1fr));
+  gap: 0.35rem 0.5rem;
+  text-align: right;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.cartera-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.cartera-stat-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.cartera-stat-value {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.cartera-dropdown-option--active .cartera-stat-label {
+  color: rgb(255 255 255 / 75%);
+}
+
+.cartera-dropdown-option--active .cartera-stat-value {
+  color: #fff;
+}
+
 .cartera-dropdown-check {
+  align-self: center;
   font-size: 1.1rem;
   font-weight: 700;
   color: #fff;
@@ -320,6 +400,24 @@ watch(
   text-align: center;
   color: #64748b;
   font-size: 0.9rem;
+}
+
+@media (max-width: 480px) {
+  .cartera-dropdown-option {
+    flex-wrap: wrap;
+  }
+
+  .cartera-dropdown-option-stats {
+    width: 100%;
+    margin-top: 0.35rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid #e2e8f0;
+    text-align: left;
+  }
+
+  .cartera-dropdown-option--active .cartera-dropdown-option-stats {
+    border-top-color: rgb(255 255 255 / 25%);
+  }
 }
 
 @media (min-width: 640px) {
