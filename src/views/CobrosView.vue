@@ -10,12 +10,29 @@ import CobroCajaDialog from '@/components/CobroCajaDialog.vue'
 import type { CobroCajaFormView } from '@/components/CobroCajaDialog.vue'
 import HojaCobroCard from '@/components/HojaCobroCard.vue'
 import { api } from '@/api/client'
-import { getApiErrorMessage, getApiErrorMessageAsync } from '@/api/errors'
+import { getApiErrorMessage } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { buscarClientes } from '@/utils/buscarClientes'
-import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
+import { formatDateTime, formatMoney } from '@/utils/format'
 import { abrirFacturaPago } from '@/utils/facturaPago'
+import {
+  formatFechaHojaLegible,
+  formatNumeroHoja,
+  hojaListadoTotalesDesdeFilas,
+  valorCuotaPendienteHoja,
+  valorFechaFinalHoja,
+  valorFechaInicialHoja,
+  valorMontoPrestamoHoja,
+  valorPlazoMesesHoja,
+  valorSaldoInicialHoja,
+  valorSaldoPendienteHoja,
+} from '@/utils/hojaCobrosListadoDisplay'
+import {
+  cargarLogoFindecoDataUrl,
+  generarHojaCobrosListadoPdfBlob,
+  nombreArchivoHojaCobrosListado,
+} from '@/utils/hojaCobrosListadoPdf'
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
 import type {
@@ -145,38 +162,6 @@ const hojaCobrosTituloCartera = computed(() => {
   return (c?.nombre ?? 'CARTERA').toUpperCase()
 })
 
-const MESES_HOJA = [
-  'ENERO',
-  'FEBRERO',
-  'MARZO',
-  'ABRIL',
-  'MAYO',
-  'JUNIO',
-  'JULIO',
-  'AGOSTO',
-  'SEPTIEMBRE',
-  'OCTUBRE',
-  'NOVIEMBRE',
-  'DICIEMBRE',
-] as const
-
-const DIAS_HOJA = [
-  'DOMINGO',
-  'LUNES',
-  'MARTES',
-  'MIÉRCOLES',
-  'JUEVES',
-  'VIERNES',
-  'SÁBADO',
-] as const
-
-function formatFechaHojaLegible(iso: string): string {
-  const d = new Date(`${iso}T12:00:00`)
-  if (Number.isNaN(d.getTime())) return iso.toUpperCase()
-  const dia = String(d.getDate()).padStart(2, '0')
-  return `${DIAS_HOJA[d.getDay()]} ${dia} DE ${MESES_HOJA[d.getMonth()]} ${d.getFullYear()}`
-}
-
 const hojaCobrosFechaLegible = computed(() =>
   hojaCobrosFechaReporte.value
     ? formatFechaHojaLegible(hojaCobrosFechaReporte.value)
@@ -189,61 +174,7 @@ const hojaCobrosGeneradoLegible = computed(() =>
     : formatDateTime(new Date().toISOString()),
 )
 
-function formatNumeroHoja(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '') return ''
-  const n = typeof value === 'string' ? Number.parseFloat(value) : value
-  if (Number.isNaN(n)) return String(value)
-  return new Intl.NumberFormat('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
-}
-
-const hojaListadoTotales = computed(() => {
-  let cuota = 0
-  let saldoPendiente = 0
-  for (const f of hojaCobrosFilas.value) {
-    const monto = f.cuota_siguiente_monto || f.cuota
-    cuota += Number.parseFloat(String(monto ?? '')) || 0
-    saldoPendiente += Number.parseFloat(String(f.saldo_actual ?? '')) || 0
-  }
-  return { cuota, saldoPendiente }
-})
-
-function valorMontoPrestamoHoja(fila: ReporteIntegracionFila): string {
-  const raw = fila.monto ?? fila.saldo_inicial
-  const texto = formatNumeroHoja(raw)
-  return texto || '—'
-}
-
-function valorPlazoMesesHoja(fila: ReporteIntegracionFila): string {
-  return plazoMesesDesdeReporte(fila)
-}
-
-function valorSaldoInicialHoja(fila: ReporteIntegracionFila): string {
-  const texto = formatNumeroHoja(fila.saldo_inicial)
-  return texto || '—'
-}
-
-function valorSaldoPendienteHoja(fila: ReporteIntegracionFila): string {
-  const texto = formatNumeroHoja(fila.saldo_actual)
-  return texto || '—'
-}
-
-function valorFechaInicialHoja(fila: ReporteIntegracionFila): string {
-  const raw = fila.fecha_entrega?.trim()
-  return raw ? formatDate(raw) : '—'
-}
-
-function valorFechaFinalHoja(fila: ReporteIntegracionFila): string {
-  const raw = fila.fecha_vencimiento?.trim()
-  return raw ? formatDate(raw) : '—'
-}
-
-function valorCuotaPendienteHoja(fila: ReporteIntegracionFila): string {
-  const n = fila.cuota_siguiente_numero
-  const monto = formatNumeroHoja(fila.cuota_siguiente_monto)
-  if (n == null) return monto || '—'
-  if (!monto) return `#${n}`
-  return `#${n}  ${monto}`
-}
+const hojaListadoTotales = computed(() => hojaListadoTotalesDesdeFilas(hojaCobrosFilas.value))
 
 function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
   const qs = new URLSearchParams()
@@ -316,12 +247,6 @@ function descargarBlob(blob: Blob, nombre: string) {
   URL.revokeObjectURL(url)
 }
 
-function nombreDesdeContentDisposition(header: string | undefined, fallback: string): string {
-  if (!header) return fallback
-  const match = /filename="?([^";]+)"?/.exec(header)
-  return match?.[1] ?? fallback
-}
-
 async function descargarHojaCobrosPdf() {
   if (!carteraHojaRequerida()) {
     toast.add({
@@ -332,32 +257,39 @@ async function descargarHojaCobrosPdf() {
     })
     return
   }
+  if (!hojaCobrosFilas.value.length) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Hoja de cobros',
+      detail: 'No hay filas en el listado para exportar.',
+      life: 4000,
+    })
+    return
+  }
   hojaDescargandoPdf.value = true
   try {
-    const qs = buildHojaCobrosQuery({ all: '1', vista: 'listado' })
-    const response = await api.get<Blob>(`/prestamos/hoja-cobros-pdf/?${qs.toString()}`, {
-      responseType: 'blob',
+    const logoDataUrl = await cargarLogoFindecoDataUrl()
+    const fechaReporte = hojaCobrosFechaReporte.value || getTodayISO()
+    const blob = generarHojaCobrosListadoPdfBlob({
+      carteraEtiqueta: String(hojaCobrosTituloCartera.value || ''),
+      fechaReporteIso: fechaReporte,
+      generadoEnIso: hojaCobrosGeneradoEn.value || new Date().toISOString(),
+      filas: hojaCobrosFilas.value,
+      logoDataUrl,
     })
-    const cartera = String(hojaCobrosTituloCartera.value || 'cartera')
-      .replace(/\s+/g, '_')
-      .toLowerCase()
-    const fecha = (hojaCobrosFechaReporte.value || getTodayISO()).replace(/-/g, '')
-    const nombre = nombreDesdeContentDisposition(
-      response.headers['content-disposition'],
-      `hoja_cobros_${cartera}_${fecha}.pdf`,
-    )
-    descargarBlob(response.data, nombre)
+    const nombre = nombreArchivoHojaCobrosListado(String(hojaCobrosTituloCartera.value || 'cartera'), fechaReporte)
+    descargarBlob(blob, nombre)
     toast.add({
       severity: 'success',
       summary: 'PDF descargado',
-      detail: 'Se descargó el listado completo de la cartera.',
+      detail: 'El PDF usa los mismos datos que la tabla en pantalla.',
       life: 3000,
     })
   } catch (e) {
     toast.add({
       severity: 'error',
       summary: 'Hoja de cobros',
-      detail: await getApiErrorMessageAsync(e, 'No se pudo descargar el PDF.'),
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF.'),
       life: 6000,
     })
   } finally {
@@ -1074,7 +1006,7 @@ onMounted(async () => {
           class="no-print"
           :loading="hojaDescargandoPdf"
           :disabled="!carteraHojaRequerida() || hojaDescargandoPdf || !hojaCobrosFilas.length"
-          title="Descarga el PDF del listado de la cartera seleccionada"
+          title="PDF con los mismos datos que la tabla visible (columna por columna)"
           @click="() => void descargarHojaCobrosPdf()"
         />
         <span v-if="hojaCobrosTotal && !busquedaActiva" class="hoja-findeco-contador no-print">
