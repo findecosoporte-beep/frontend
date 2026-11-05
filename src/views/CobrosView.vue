@@ -34,6 +34,7 @@ import {
 } from '@/utils/hojaCobrosListadoPdf'
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
 import {
+  resumenListadoDesdeApi,
   resumenPorCarteraDesdeFilas,
   resumenPorIdDesdeApiPayload,
   type CarteraResumenListado,
@@ -220,6 +221,13 @@ async function cargarHojaCobrosFindeco(options?: { silentEmpty?: boolean }): Pro
     hojaCobrosTotal.value = hojaCobrosFilas.value.length
     hojaCobrosFechaReporte.value = data.fecha_reporte ?? getTodayISO()
     hojaCobrosGeneradoEn.value = data.generado_en ?? ''
+    if (hojaCobrosCarteraFiltro.value !== '' && hojaCobrosCarteraFiltro.value != null && data.resumen) {
+      const idC = hojaCobrosCarteraFiltro.value
+      carteraResumenPorId.value = {
+        ...carteraResumenPorId.value,
+        [idC]: resumenListadoDesdeApi(data.resumen, hojaCobrosFilas.value.length),
+      }
+    }
     if (!hojaCobrosTotal.value && !options?.silentEmpty) {
       toast.add({
         severity: 'info',
@@ -459,7 +467,8 @@ async function cargarCatalogoCarterasHoja() {
 
 let resumenCarterasSeq = 0
 let resumenCarterasCargadoEn = 0
-const RESUMEN_CARTERAS_TTL_MS = 90_000
+let resumenCarterasInflight: Promise<void> | null = null
+const RESUMEN_CARTERAS_TTL_MS = 120_000
 
 async function cargarResumenCarterasHoja(forzar = false) {
   const carteras = hojaCarteras.value
@@ -477,47 +486,58 @@ async function cargarResumenCarterasHoja(forzar = false) {
   ) {
     return
   }
+  if (resumenCarterasInflight && !forzar) {
+    return resumenCarterasInflight
+  }
 
   const seq = ++resumenCarterasSeq
-  carteraResumenLoading.value = true
   const idsSet = new Set(ids)
+  const tieneCacheParcial = ids.some((id) => carteraResumenPorId.value[id] != null)
+  if (!tieneCacheParcial) {
+    carteraResumenLoading.value = true
+  }
 
-  try {
-    const qs = new URLSearchParams({
-      estado: HOJA_COBROS_ESTADO,
-      resumen_por_cartera: '1',
-    })
-    const { data } = await api.get<ReporteIntegracionResponse>(
-      `/prestamos/reporte-integracion/?${qs.toString()}`,
-    )
-    if (seq !== resumenCarterasSeq) return
-
-    if (data.resumen_por_cartera) {
-      carteraResumenPorId.value = resumenPorIdDesdeApiPayload(data.resumen_por_cartera, ids)
-    } else {
-      const qsAll = new URLSearchParams({
+  resumenCarterasInflight = (async () => {
+    try {
+      const qs = new URLSearchParams({
         estado: HOJA_COBROS_ESTADO,
-        all: '1',
+        resumen_por_cartera: '1',
       })
-      const { data: full } = await api.get<ReporteIntegracionResponse>(
-        `/prestamos/reporte-integracion/?${qsAll.toString()}`,
+      const { data } = await api.get<ReporteIntegracionResponse>(
+        `/prestamos/reporte-integracion/?${qs.toString()}`,
       )
       if (seq !== resumenCarterasSeq) return
-      carteraResumenPorId.value = resumenPorCarteraDesdeFilas(full.filas ?? [], idsSet)
-      for (const id of ids) {
-        if (!carteraResumenPorId.value[id]) {
-          carteraResumenPorId.value[id] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
+
+      if (data.resumen_por_cartera) {
+        carteraResumenPorId.value = resumenPorIdDesdeApiPayload(data.resumen_por_cartera, ids)
+      } else {
+        const qsAll = new URLSearchParams({
+          estado: HOJA_COBROS_ESTADO,
+          all: '1',
+        })
+        const { data: full } = await api.get<ReporteIntegracionResponse>(
+          `/prestamos/reporte-integracion/?${qsAll.toString()}`,
+        )
+        if (seq !== resumenCarterasSeq) return
+        carteraResumenPorId.value = resumenPorCarteraDesdeFilas(full.filas ?? [], idsSet)
+        for (const id of ids) {
+          if (!carteraResumenPorId.value[id]) {
+            carteraResumenPorId.value[id] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
+          }
         }
       }
+      resumenCarterasCargadoEn = Date.now()
+    } catch {
+      if (seq !== resumenCarterasSeq) return
+    } finally {
+      if (seq === resumenCarterasSeq) {
+        carteraResumenLoading.value = false
+        resumenCarterasInflight = null
+      }
     }
-    resumenCarterasCargadoEn = Date.now()
-  } catch {
-    if (seq !== resumenCarterasSeq) return
-  } finally {
-    if (seq === resumenCarterasSeq) {
-      carteraResumenLoading.value = false
-    }
-  }
+  })()
+
+  return resumenCarterasInflight
 }
 
 type CarteraCobroInfo = {
@@ -1085,7 +1105,6 @@ onMounted(async () => {
     await auth.fetchProfile()
   }
   await cargarCatalogoCarterasHoja()
-  void cargarResumenCarterasHoja()
   await consumirDeepLinkIntegracionEnQuery()
 })
 
