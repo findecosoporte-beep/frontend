@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from 'vue-router'
 
 import Button from 'primevue/button'
@@ -33,6 +33,10 @@ import {
   nombreArchivoHojaCobrosListado,
 } from '@/utils/hojaCobrosListadoPdf'
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
+import {
+  resumenListadoDesdeApi,
+  type CarteraResumenListado,
+} from '@/utils/resumenCarterasReporte'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
 import type {
   Cliente,
@@ -119,6 +123,8 @@ function getTodayISO(): string {
 
 const hojaCarteras = ref<Cartera[]>([])
 let carterasHojaCache: Cartera[] | null = null
+const carteraResumenPorId = ref<Record<number, CarteraResumenListado>>({})
+const carteraResumenLoading = ref(false)
 
 const busquedaQuery = ref('')
 const busquedaLoading = ref(false)
@@ -447,6 +453,49 @@ async function cargarCatalogoCarterasHoja() {
     hojaCarteras.value = carterasHojaCache
   } catch {
     hojaCarteras.value = []
+  }
+}
+
+let resumenCarterasSeq = 0
+
+async function cargarResumenCarterasHoja() {
+  const carteras = hojaCarteras.value
+  if (!carteras.length) {
+    carteraResumenPorId.value = {}
+    carteraResumenLoading.value = false
+    return
+  }
+  const seq = ++resumenCarterasSeq
+  carteraResumenLoading.value = true
+  const acumulado: Record<number, CarteraResumenListado> = { ...carteraResumenPorId.value }
+
+  await Promise.all(
+    carteras.map(async (cartera) => {
+      try {
+        const qs = new URLSearchParams({
+          estado: HOJA_COBROS_ESTADO,
+          all: '1',
+          id_cartera: String(cartera.id_cartera),
+        })
+        const { data } = await api.get<ReporteIntegracionResponse>(
+          `/prestamos/reporte-integracion/?${qs.toString()}`,
+        )
+        if (seq !== resumenCarterasSeq) return
+        acumulado[cartera.id_cartera] = resumenListadoDesdeApi(
+          data.resumen,
+          data.filas?.length ?? 0,
+        )
+        carteraResumenPorId.value = { ...acumulado }
+      } catch {
+        if (seq !== resumenCarterasSeq) return
+        acumulado[cartera.id_cartera] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
+        carteraResumenPorId.value = { ...acumulado }
+      }
+    }),
+  )
+
+  if (seq === resumenCarterasSeq) {
+    carteraResumenLoading.value = false
   }
 }
 
@@ -978,6 +1027,7 @@ async function confirmarPagoCuota() {
       await abrirFacturaPago(pagoCreado.id_pago)
     }
     await cargarHojaCobrosFindeco({ silentEmpty: true })
+    void cargarResumenCarterasHoja()
     cajaVisible.value = false
   } catch (e) {
     const message = getApiErrorMessage(e, 'No se pudo registrar el pago de la cuota.')
@@ -997,12 +1047,29 @@ async function confirmarPagoCuota() {
   }
 }
 
+function avisoImpresionSoloPdf(event: KeyboardEvent) {
+  if (event.key.toLowerCase() !== 'p' || !(event.ctrlKey || event.metaKey)) return
+  event.preventDefault()
+  toast.add({
+    severity: 'info',
+    summary: 'Hoja de cobros',
+    detail: 'Para imprimir en campo use el botón «Descargar PDF» (no Imprimir del navegador).',
+    life: 5000,
+  })
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', avisoImpresionSoloPdf)
   if (auth.isAuthenticated && !auth.profile) {
     await auth.fetchProfile()
   }
   await cargarCatalogoCarterasHoja()
+  void cargarResumenCarterasHoja()
   await consumirDeepLinkIntegracionEnQuery()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', avisoImpresionSoloPdf)
 })
 </script>
 
@@ -1015,7 +1082,10 @@ onMounted(async () => {
           :carteras="hojaCarteras"
           :disabled="hojaCobrosLoading"
           :auto-open="!carteraHojaRequerida() && hojaCarteras.length > 0"
+          :resumen-por-cartera="carteraResumenPorId"
+          :resumen-loading="carteraResumenLoading"
           class="hoja-cartera-dropdown filtro-hoja-select"
+          @refresh-resumen="() => void cargarResumenCarterasHoja()"
         />
         <Button
           label="Descargar PDF"
@@ -1752,13 +1822,6 @@ onMounted(async () => {
   padding-right: 0.55rem;
 }
 
-.hoja-preview-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  width: 100%;
-}
-
 .hoja-findeco-cartera,
 .hoja-findeco-fecha {
   margin: 0.15rem 0;
@@ -1919,23 +1982,9 @@ onMounted(async () => {
 }
 
 @media print {
-  .no-print {
-    display: none !important;
-  }
-
-  .hoja-findeco-datatable,
-  .hoja-findeco-totales-bar {
-    display: none !important;
-  }
-
-  .hoja-findeco-sheet {
-    border: none;
-    box-shadow: none;
-    padding: 0;
-  }
-
-  .hoja-findeco-section {
-    margin: 0;
+  /* Sin botón Imprimir: la hoja solo se exporta con «Descargar PDF». */
+  .cobros-page {
+    visibility: hidden !important;
   }
 }
 </style>
