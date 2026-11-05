@@ -35,7 +35,6 @@ import {
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
 import {
   resumenListadoDesdeApi,
-  resumenPorCarteraDesdeFilas,
   resumenPorIdDesdeApiPayload,
   type CarteraResumenListado,
 } from '@/utils/resumenCarterasReporte'
@@ -491,7 +490,6 @@ async function cargarResumenCarterasHoja(forzar = false) {
   }
 
   const seq = ++resumenCarterasSeq
-  const idsSet = new Set(ids)
   const tieneCacheParcial = ids.some((id) => carteraResumenPorId.value[id] != null)
   if (!tieneCacheParcial) {
     carteraResumenLoading.value = true
@@ -508,27 +506,26 @@ async function cargarResumenCarterasHoja(forzar = false) {
       )
       if (seq !== resumenCarterasSeq) return
 
-      if (data.resumen_por_cartera) {
-        carteraResumenPorId.value = resumenPorIdDesdeApiPayload(data.resumen_por_cartera, ids)
-      } else {
-        const qsAll = new URLSearchParams({
-          estado: HOJA_COBROS_ESTADO,
-          all: '1',
+      if (data.resumen_por_cartera == null) {
+        toast.add({
+          severity: 'warn',
+          summary: 'Resumen de carteras',
+          detail:
+            'El servidor no devolvió resumen por cartera. Actualice el backend o intente de nuevo.',
+          life: 5000,
         })
-        const { data: full } = await api.get<ReporteIntegracionResponse>(
-          `/prestamos/reporte-integracion/?${qsAll.toString()}`,
-        )
-        if (seq !== resumenCarterasSeq) return
-        carteraResumenPorId.value = resumenPorCarteraDesdeFilas(full.filas ?? [], idsSet)
-        for (const id of ids) {
-          if (!carteraResumenPorId.value[id]) {
-            carteraResumenPorId.value[id] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
-          }
-        }
+        return
       }
+      carteraResumenPorId.value = resumenPorIdDesdeApiPayload(data.resumen_por_cartera, ids)
       resumenCarterasCargadoEn = Date.now()
-    } catch {
+    } catch (e) {
       if (seq !== resumenCarterasSeq) return
+      toast.add({
+        severity: 'error',
+        summary: 'Resumen de carteras',
+        detail: getApiErrorMessage(e, 'No se pudo cargar el resumen por cartera.'),
+        life: 6000,
+      })
     } finally {
       if (seq === resumenCarterasSeq) {
         carteraResumenLoading.value = false
