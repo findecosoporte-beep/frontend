@@ -29,8 +29,7 @@ import {
   valorSaldoPendienteHoja,
 } from '@/utils/hojaCobrosListadoDisplay'
 import {
-  cargarLogoFindecoDataUrl,
-  generarHojaCobrosListadoPdfBlob,
+  generarHojaCobrosListadoPdfDesdeElemento,
   nombreArchivoHojaCobrosListado,
 } from '@/utils/hojaCobrosListadoPdf'
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
@@ -65,6 +64,9 @@ const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosFechaReporte = ref('')
 const hojaCobrosGeneradoEn = ref('')
 const hojaDescargandoPdf = ref(false)
+const hojaPreviewPrintRef = ref<HTMLElement | null>(null)
+/** Correlativo global de impresión/PDF (API registrar-impresion-hoja-cobros). */
+const hojaNumeroImpresion = ref<number | null>(null)
 
 const cajaVisible = ref(false)
 const cajaSaving = ref(false)
@@ -148,6 +150,7 @@ function limpiarResultadosHojaCobros() {
   hojaCobrosFilas.value = []
   hojaCobrosTotal.value = 0
   hojaCobrosLoading.value = false
+  hojaNumeroImpresion.value = null
 }
 
 function reiniciarHojaCobrosSinCartera() {
@@ -266,24 +269,41 @@ async function descargarHojaCobrosPdf() {
     })
     return
   }
+  const printRoot = hojaPreviewPrintRef.value
+  if (!printRoot) {
+    toast.add({
+      severity: 'error',
+      summary: 'Hoja de cobros',
+      detail: 'No se encontró la vista previa del listado.',
+      life: 4000,
+    })
+    return
+  }
   hojaDescargandoPdf.value = true
   try {
-    const logoDataUrl = await cargarLogoFindecoDataUrl()
     const fechaReporte = hojaCobrosFechaReporte.value || getTodayISO()
-    const blob = generarHojaCobrosListadoPdfBlob({
-      carteraEtiqueta: String(hojaCobrosTituloCartera.value || ''),
-      fechaReporteIso: fechaReporte,
-      generadoEnIso: hojaCobrosGeneradoEn.value || new Date().toISOString(),
-      filas: hojaCobrosFilas.value,
-      logoDataUrl,
-    })
+    const blob = await generarHojaCobrosListadoPdfDesdeElemento(printRoot)
     const nombre = nombreArchivoHojaCobrosListado(String(hojaCobrosTituloCartera.value || 'cartera'), fechaReporte)
     descargarBlob(blob, nombre)
+
+    try {
+      const { data } = await api.post<{ numero_impresion: number }>(
+        '/prestamos/registrar-impresion-hoja-cobros/',
+        { total_registros: hojaCobrosFilas.value.length },
+      )
+      hojaNumeroImpresion.value = Number(data.numero_impresion)
+    } catch {
+      // El PDF ya se descargó; la bitácora de impresión es secundaria.
+    }
+
     toast.add({
       severity: 'success',
       summary: 'PDF descargado',
-      detail: 'El PDF usa los mismos datos que la tabla en pantalla.',
-      life: 3000,
+      detail:
+        hojaNumeroImpresion.value != null
+          ? `Hoja igual a la tabla en pantalla. Impresión N.º ${hojaNumeroImpresion.value}.`
+          : 'Hoja igual a la tabla en pantalla.',
+      life: 4000,
     })
   } catch (e) {
     toast.add({
@@ -1116,7 +1136,7 @@ onMounted(async () => {
           <p>No hay préstamos en esta cartera.</p>
         </div>
 
-        <div v-else class="hoja-listado-sheet">
+        <div v-else ref="hojaPreviewPrintRef" class="hoja-listado-sheet">
           <div class="hoja-preview-print-area">
             <header class="hoja-findeco-header hoja-preview-header">
               <img
@@ -1676,7 +1696,7 @@ onMounted(async () => {
 }
 
 .hoja-preview-table-simple .col-nombre {
-  width: 20%;
+  width: 18%;
   text-align: left;
 }
 
@@ -1725,8 +1745,11 @@ onMounted(async () => {
 }
 
 .hoja-preview-table-simple .col-espacio {
-  width: 5%;
-  min-height: 1.4rem;
+  width: 11%;
+  min-width: 6.75rem;
+  min-height: 2rem;
+  padding-left: 0.55rem;
+  padding-right: 0.55rem;
 }
 
 .hoja-preview-dialog-actions {
@@ -1746,14 +1769,14 @@ onMounted(async () => {
 }
 
 .hoja-findeco-datatable {
-  min-width: 52rem;
+  min-width: 56rem;
   font-family: Arial, Helvetica, sans-serif;
   font-size: 0.82rem;
 }
 
 .hoja-findeco-datatable :deep(.p-datatable-table) {
   border-collapse: collapse;
-  min-width: 52rem;
+  min-width: 56rem;
 }
 
 .hoja-findeco-datatable :deep(.p-datatable-thead > tr > th) {
@@ -1816,7 +1839,7 @@ onMounted(async () => {
 
 .hoja-findeco-table {
   width: 100%;
-  min-width: 52rem;
+  min-width: 56rem;
   border-collapse: collapse;
   font-family: Arial, Helvetica, sans-serif;
   font-size: 0.82rem;
@@ -1880,8 +1903,9 @@ onMounted(async () => {
 }
 
 .col-espacio {
-  width: 8rem;
-  min-height: 1.6rem;
+  width: 10.5rem;
+  min-width: 6.75rem;
+  min-height: 2rem;
 }
 
 .hoja-findeco-totales td {

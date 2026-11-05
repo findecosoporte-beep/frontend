@@ -1,246 +1,205 @@
+import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 
-import {
-  filaListadoHojaCobrosCeldas,
-  filaTotalesListadoHojaCobros,
-  formatFechaHojaLegible,
-  formatDateTime,
-} from '@/utils/hojaCobrosListadoDisplay'
-import type { ReporteIntegracionFila } from '@/types/api'
+const PDF_MARGIN_MM = 5
+/** Ancho mínimo de la tabla en pantalla (56rem) → captura completa sin scroll horizontal. */
+const TABLA_MIN_WIDTH_PX = 896
+/** Filas de clientes por página (hoja carta horizontal con logo + encabezado). */
+const FILAS_POR_PAGINA_PDF = 22
 
-const MARGIN = 8
-const FONT_BODY = 7
-const ROW_H_MIN = 5.5
-const CELL_PAD = 1.2
-
-type Align = 'left' | 'center' | 'right'
-
-type TableColumn = { header: string; width: number; align?: Align }
-
-const LISTADO_COLUMNS: TableColumn[] = [
-  { header: 'N', width: 8, align: 'center' },
-  { header: 'Nº PRÉSTAMO', width: 22, align: 'center' },
-  { header: 'NOMBRE CLIENTE', width: 42, align: 'left' },
-  { header: 'MONTO', width: 22, align: 'right' },
-  { header: 'PLAZO EN MESES', width: 16, align: 'center' },
-  { header: 'SALDO INICIAL', width: 22, align: 'right' },
-  { header: 'SALDO PENDIENTE', width: 22, align: 'right' },
-  { header: 'FECHA INICIAL', width: 20, align: 'center' },
-  { header: 'FECHA FINAL', width: 20, align: 'center' },
-  { header: 'CUOTA PENDIENTE', width: 24, align: 'center' },
-  { header: 'ESPACIO', width: 14, align: 'left' },
-]
-
-export type HojaCobrosListadoPdfInput = {
-  carteraEtiqueta: string
-  fechaReporteIso: string
-  generadoEnIso: string
-  filas: ReporteIntegracionFila[]
-  logoDataUrl?: string | null
+function waitForImages(root: HTMLElement): Promise<void> {
+  const imgs = Array.from(root.querySelectorAll('img'))
+  if (!imgs.length) return Promise.resolve()
+  return Promise.all(
+    imgs.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete && img.naturalWidth > 0) resolve()
+          else {
+            img.onload = () => resolve()
+            img.onerror = () => resolve()
+          }
+        }),
+    ),
+  ).then(() => undefined)
 }
 
-function lineHeightForFont(fontSize: number): number {
-  return fontSize * 0.38 + 1.8
-}
+function prepararEstilosCaptura(clone: HTMLElement, captureWidth: number) {
+  clone.classList.add('hoja-exportando-pdf')
+  clone.style.boxShadow = 'none'
+  clone.style.width = `${captureWidth}px`
+  clone.style.minWidth = `${TABLA_MIN_WIDTH_PX}px`
 
-function wrapCellLines(doc: jsPDF, text: string, width: number, fontSize: number): string[] {
-  doc.setFontSize(fontSize)
-  const inner = Math.max(width - CELL_PAD * 2, 4)
-  return doc.splitTextToSize(text || ' ', inner) as string[]
-}
-
-function measureCellHeight(doc: jsPDF, text: string, width: number, fontSize: number): number {
-  const lines = wrapCellLines(doc, text, width, fontSize)
-  return Math.max(ROW_H_MIN, lines.length * lineHeightForFont(fontSize) + CELL_PAD * 2)
-}
-
-function scaledColumnWidths(doc: jsPDF, columns: TableColumn[]): number[] {
-  const pageW = doc.internal.pageSize.getWidth()
-  const tableW = pageW - MARGIN * 2
-  const totalDefined = columns.reduce((sum, col) => sum + col.width, 0)
-  const scale = tableW / totalDefined
-  return columns.map((col) => col.width * scale)
-}
-
-function drawTextCell(
-  doc: jsPDF,
-  text: string,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  align: Align,
-  bold = false,
-  fontSize = FONT_BODY,
-) {
-  doc.setFont('helvetica', bold ? 'bold' : 'normal')
-  doc.setFontSize(fontSize)
-  const lines = wrapCellLines(doc, text, width, fontSize)
-  const lineHeight = lineHeightForFont(fontSize)
-  const blockH = lines.length * lineHeight
-  let textY = y + (height - blockH) / 2 + lineHeight * 0.82
-  if (textY < y + CELL_PAD + lineHeight * 0.5) {
-    textY = y + CELL_PAD + lineHeight * 0.82
-  }
-  for (const line of lines) {
-    let textX = x + CELL_PAD
-    if (align === 'right') {
-      textX = x + width - CELL_PAD - doc.getTextWidth(line)
-    } else if (align === 'center') {
-      textX = x + (width - doc.getTextWidth(line)) / 2
-    }
-    doc.text(line, textX, textY)
-    textY += lineHeight
-  }
-}
-
-function drawCenteredText(doc: jsPDF, text: string, y: number, fontSize: number, bold = false): number {
-  const pageW = doc.internal.pageSize.getWidth()
-  doc.setFont('helvetica', bold ? 'bold' : 'normal')
-  doc.setFontSize(fontSize)
-  const tw = doc.getTextWidth(text)
-  doc.text(text, (pageW - tw) / 2, y)
-  return y + lineHeightForFont(fontSize) + 0.8
-}
-
-function drawTable(
-  doc: jsPDF,
-  y: number,
-  columns: TableColumn[],
-  rows: string[][],
-  options?: { boldLastRow?: boolean },
-): number {
-  const boldLastRow = options?.boldLastRow === true
-  const widths = scaledColumnWidths(doc, columns)
-
-  function drawHeaderRow(startY: number): number {
-    let headerH = ROW_H_MIN
-    for (let i = 0; i < columns.length; i += 1) {
-      headerH = Math.max(headerH, measureCellHeight(doc, columns[i].header, widths[i], FONT_BODY))
-    }
-    let x = MARGIN
-    for (let i = 0; i < columns.length; i += 1) {
-      doc.setFillColor(243, 244, 246)
-      doc.rect(x, startY, widths[i], headerH, 'FD')
-      drawTextCell(
-        doc,
-        columns[i].header,
-        x,
-        startY,
-        widths[i],
-        headerH,
-        columns[i].align ?? 'left',
-        true,
-        FONT_BODY,
-      )
-      x += widths[i]
-    }
-    return startY + headerH
+  const scroll = clone.querySelector('.hoja-preview-scroll') as HTMLElement | null
+  if (scroll) {
+    scroll.style.overflow = 'visible'
+    scroll.style.maxHeight = 'none'
   }
 
-  y = drawHeaderRow(y)
+  const table = clone.querySelector('.hoja-findeco-table') as HTMLElement | null
+  if (table) {
+    table.style.minWidth = `${TABLA_MIN_WIDTH_PX}px`
+    table.style.width = '100%'
+  }
 
-  rows.forEach((row, rowIndex) => {
-    const isLast = boldLastRow && rowIndex === rows.length - 1
-    let rowH = ROW_H_MIN
-    for (let i = 0; i < columns.length; i += 1) {
-      rowH = Math.max(rowH, measureCellHeight(doc, row[i] ?? '', widths[i], FONT_BODY))
-    }
-    const pageH = doc.internal.pageSize.getHeight()
-    if (y + rowH > pageH - MARGIN) {
-      doc.addPage()
-      y = MARGIN
-      y = drawHeaderRow(y)
-    }
-    if (isLast) {
-      doc.setFillColor(250, 250, 250)
-    } else if (rowIndex % 2 === 1) {
-      doc.setFillColor(250, 250, 250)
-    } else {
-      doc.setFillColor(255, 255, 255)
-    }
-    let x = MARGIN
-    for (let i = 0; i < columns.length; i += 1) {
-      doc.rect(x, y, widths[i], rowH, isLast ? 'FD' : 'S')
-      if (!isLast && rowIndex % 2 === 1) {
-        doc.rect(x, y, widths[i], rowH, 'F')
-        doc.rect(x, y, widths[i], rowH, 'S')
-      }
-      drawTextCell(
-        doc,
-        row[i] ?? '',
-        x,
-        y,
-        widths[i],
-        rowH,
-        columns[i].align ?? 'left',
-        isLast,
-        FONT_BODY,
-      )
-      x += widths[i]
-    }
-    y += rowH
+  clone.querySelectorAll('.hoja-listado-row--clickable').forEach((row) => {
+    row.classList.remove('hoja-listado-row--clickable')
   })
-
-  return y
 }
 
-export function generarHojaCobrosListadoPdfBlob(input: HojaCobrosListadoPdfInput): Blob {
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' })
-  doc.setTextColor(0, 0, 0)
-  doc.setDrawColor(0, 0, 0)
-  doc.setLineWidth(0.15)
+function montarHostCaptura(clone: HTMLElement): { host: HTMLElement; cleanup: () => void } {
+  const host = document.createElement('div')
+  host.setAttribute('aria-hidden', 'true')
+  host.style.cssText =
+    'position:fixed;left:-20000px;top:0;z-index:-9999;background:#fff;padding:0;margin:0;width:max-content;'
+  host.appendChild(clone)
+  document.body.appendChild(host)
+  return { host, cleanup: () => host.remove() }
+}
 
+async function capturarElemento(root: HTMLElement): Promise<HTMLCanvasElement> {
+  await waitForImages(root)
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+  return html2canvas(root, {
+    scale: 2,
+    backgroundColor: '#ffffff',
+    useCORS: true,
+    logging: false,
+    width: root.scrollWidth,
+    height: root.scrollHeight,
+    windowWidth: root.scrollWidth,
+    windowHeight: root.scrollHeight,
+  })
+}
+
+function agregarCanvasAPdf(doc: jsPDF, canvas: HTMLCanvasElement, nuevaPagina: boolean) {
   const pageW = doc.internal.pageSize.getWidth()
-  let y = MARGIN
+  const pageH = doc.internal.pageSize.getHeight()
+  const printableW = pageW - PDF_MARGIN_MM * 2
+  const printableH = pageH - PDF_MARGIN_MM * 2
 
-  if (input.logoDataUrl) {
-    try {
-      const format = input.logoDataUrl.includes('image/jpeg') ? 'JPEG' : 'PNG'
-      const maxW = 48
-      const maxH = 18
-      doc.addImage(input.logoDataUrl, format, (pageW - maxW) / 2, y, maxW, maxH, undefined, 'FAST')
-      y += maxH + 4
-    } catch {
-      // continuar sin logo
-    }
+  const imgW = printableW
+  let imgH = (canvas.height * imgW) / canvas.width
+  const imgData = canvas.toDataURL('image/png', 1.0)
+
+  if (nuevaPagina) doc.addPage()
+
+  if (imgH <= printableH) {
+    const x = PDF_MARGIN_MM + (printableW - imgW) / 2
+    doc.addImage(imgData, 'PNG', x, PDF_MARGIN_MM, imgW, imgH, undefined, 'SLOW')
+    return
   }
 
-  y = drawCenteredText(doc, `CARTERA: ${input.carteraEtiqueta || '—'}`, y, 10, true)
-  y = drawCenteredText(doc, `FECHA: ${formatFechaHojaLegible(input.fechaReporteIso)}`, y, 10, true)
-  y = drawCenteredText(
-    doc,
-    `GENERADO: ${formatDateTime(input.generadoEnIso || new Date().toISOString())}`,
-    y,
-    10,
-    true,
-  )
-  y += 4
-
-  const bodyRows: string[][] = input.filas.map((fila, index) => filaListadoHojaCobrosCeldas(fila, index))
-  if (!bodyRows.length) {
-    bodyRows.push(['', '', 'Sin préstamos en esta cartera.', '', '', '', '', '', '', '', ''])
+  let sliceTop = 0
+  let sliceIndex = 0
+  while (sliceTop < imgH - 0.5) {
+    if (sliceIndex > 0) doc.addPage()
+    doc.addImage(
+      imgData,
+      'PNG',
+      PDF_MARGIN_MM,
+      PDF_MARGIN_MM - sliceTop,
+      imgW,
+      imgH,
+      undefined,
+      'SLOW',
+    )
+    sliceTop += printableH
+    sliceIndex += 1
   }
-  bodyRows.push(filaTotalesListadoHojaCobros(input.filas))
-
-  drawTable(doc, y, LISTADO_COLUMNS, bodyRows, { boldLastRow: true })
-
-  return doc.output('blob')
 }
 
-export async function cargarLogoFindecoDataUrl(): Promise<string | null> {
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}findeco-logo.png`)
-    if (!response.ok) return null
-    const blob = await response.blob()
-    return await new Promise((resolve) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
-      reader.onerror = () => resolve(null)
-      reader.readAsDataURL(blob)
+function clonarFragmentoHoja(
+  root: HTMLElement,
+  captureWidth: number,
+  filaIndices: number[] | null,
+  incluirTotales: boolean,
+): HTMLElement {
+  const clone = root.cloneNode(true) as HTMLElement
+  prepararEstilosCaptura(clone, captureWidth)
+
+  const tbody = clone.querySelector('tbody')
+  if (tbody && filaIndices) {
+    const filas = Array.from(tbody.querySelectorAll('tr'))
+    const keep = new Set(filaIndices)
+    filas.forEach((tr, idx) => {
+      if (!keep.has(idx)) tr.remove()
     })
-  } catch {
-    return null
+    Array.from(tbody.querySelectorAll('tr')).forEach((tr, i) => {
+      const celdaN = tr.querySelector('.col-n')
+      if (celdaN) celdaN.textContent = String(filaIndices[i]! + 1)
+    })
+  }
+
+  const tfoot = clone.querySelector('tfoot')
+  if (tfoot && !incluirTotales) tfoot.remove()
+
+  return clone
+}
+
+function partirIndices(totalFilas: number, porPagina: number): number[][] {
+  const chunks: number[][] = []
+  for (let start = 0; start < totalFilas; start += porPagina) {
+    const end = Math.min(start + porPagina, totalFilas)
+    const indices: number[] = []
+    for (let i = start; i < end; i += 1) indices.push(i)
+    chunks.push(indices)
+  }
+  return chunks
+}
+
+/** PDF como la hoja en pantalla; listas largas van en varias páginas con encabezado repetido. */
+export async function generarHojaCobrosListadoPdfDesdeElemento(root: HTMLElement): Promise<Blob> {
+  const scrollHost = root.querySelector('.hoja-preview-scroll') as HTMLElement | null
+  const prevOverflow = scrollHost?.style.overflow
+  const prevMaxHeight = scrollHost?.style.maxHeight
+  if (scrollHost) {
+    scrollHost.style.overflow = 'visible'
+    scrollHost.style.maxHeight = 'none'
+  }
+
+  const captureWidth = Math.max(root.scrollWidth, root.offsetWidth, TABLA_MIN_WIDTH_PX)
+  const filas = root.querySelectorAll('tbody tr')
+  const totalFilas = filas.length
+
+  try {
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' })
+    let primeraPagina = true
+
+    if (totalFilas <= FILAS_POR_PAGINA_PDF) {
+      const clone = clonarFragmentoHoja(root, captureWidth, null, true)
+      const { cleanup } = montarHostCaptura(clone)
+      try {
+        const canvas = await capturarElemento(clone)
+        agregarCanvasAPdf(doc, canvas, false)
+      } finally {
+        cleanup()
+      }
+      return doc.output('blob')
+    }
+
+    const chunks = partirIndices(totalFilas, FILAS_POR_PAGINA_PDF)
+    for (let c = 0; c < chunks.length; c += 1) {
+      const esUltima = c === chunks.length - 1
+      const fragment = clonarFragmentoHoja(root, captureWidth, chunks[c]!, esUltima)
+      const { cleanup } = montarHostCaptura(fragment)
+      try {
+        const canvas = await capturarElemento(fragment)
+        agregarCanvasAPdf(doc, canvas, !primeraPagina)
+        primeraPagina = false
+      } finally {
+        cleanup()
+      }
+    }
+
+    return doc.output('blob')
+  } finally {
+    if (scrollHost) {
+      scrollHost.style.overflow = prevOverflow ?? ''
+      scrollHost.style.maxHeight = prevMaxHeight ?? ''
+    }
   }
 }
 
