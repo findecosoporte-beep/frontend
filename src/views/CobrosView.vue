@@ -34,7 +34,8 @@ import {
 } from '@/utils/hojaCobrosListadoPdf'
 import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
 import {
-  resumenListadoDesdeApi,
+  resumenPorCarteraDesdeFilas,
+  resumenPorIdDesdeApiPayload,
   type CarteraResumenListado,
 } from '@/utils/resumenCarterasReporte'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
@@ -457,45 +458,65 @@ async function cargarCatalogoCarterasHoja() {
 }
 
 let resumenCarterasSeq = 0
+let resumenCarterasCargadoEn = 0
+const RESUMEN_CARTERAS_TTL_MS = 90_000
 
-async function cargarResumenCarterasHoja() {
+async function cargarResumenCarterasHoja(forzar = false) {
   const carteras = hojaCarteras.value
   if (!carteras.length) {
     carteraResumenPorId.value = {}
     carteraResumenLoading.value = false
     return
   }
+  const ids = carteras.map((c) => c.id_cartera)
+  if (
+    !forzar &&
+    resumenCarterasCargadoEn > 0 &&
+    Date.now() - resumenCarterasCargadoEn < RESUMEN_CARTERAS_TTL_MS &&
+    ids.every((id) => carteraResumenPorId.value[id] != null)
+  ) {
+    return
+  }
+
   const seq = ++resumenCarterasSeq
   carteraResumenLoading.value = true
-  const acumulado: Record<number, CarteraResumenListado> = { ...carteraResumenPorId.value }
+  const idsSet = new Set(ids)
 
-  await Promise.all(
-    carteras.map(async (cartera) => {
-      try {
-        const qs = new URLSearchParams({
-          estado: HOJA_COBROS_ESTADO,
-          all: '1',
-          id_cartera: String(cartera.id_cartera),
-        })
-        const { data } = await api.get<ReporteIntegracionResponse>(
-          `/prestamos/reporte-integracion/?${qs.toString()}`,
-        )
-        if (seq !== resumenCarterasSeq) return
-        acumulado[cartera.id_cartera] = resumenListadoDesdeApi(
-          data.resumen,
-          data.filas?.length ?? 0,
-        )
-        carteraResumenPorId.value = { ...acumulado }
-      } catch {
-        if (seq !== resumenCarterasSeq) return
-        acumulado[cartera.id_cartera] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
-        carteraResumenPorId.value = { ...acumulado }
+  try {
+    const qs = new URLSearchParams({
+      estado: HOJA_COBROS_ESTADO,
+      resumen_por_cartera: '1',
+    })
+    const { data } = await api.get<ReporteIntegracionResponse>(
+      `/prestamos/reporte-integracion/?${qs.toString()}`,
+    )
+    if (seq !== resumenCarterasSeq) return
+
+    if (data.resumen_por_cartera) {
+      carteraResumenPorId.value = resumenPorIdDesdeApiPayload(data.resumen_por_cartera, ids)
+    } else {
+      const qsAll = new URLSearchParams({
+        estado: HOJA_COBROS_ESTADO,
+        all: '1',
+      })
+      const { data: full } = await api.get<ReporteIntegracionResponse>(
+        `/prestamos/reporte-integracion/?${qsAll.toString()}`,
+      )
+      if (seq !== resumenCarterasSeq) return
+      carteraResumenPorId.value = resumenPorCarteraDesdeFilas(full.filas ?? [], idsSet)
+      for (const id of ids) {
+        if (!carteraResumenPorId.value[id]) {
+          carteraResumenPorId.value[id] = { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
+        }
       }
-    }),
-  )
-
-  if (seq === resumenCarterasSeq) {
-    carteraResumenLoading.value = false
+    }
+    resumenCarterasCargadoEn = Date.now()
+  } catch {
+    if (seq !== resumenCarterasSeq) return
+  } finally {
+    if (seq === resumenCarterasSeq) {
+      carteraResumenLoading.value = false
+    }
   }
 }
 
@@ -1027,7 +1048,7 @@ async function confirmarPagoCuota() {
       await abrirFacturaPago(pagoCreado.id_pago)
     }
     await cargarHojaCobrosFindeco({ silentEmpty: true })
-    void cargarResumenCarterasHoja()
+    void cargarResumenCarterasHoja(true)
     cajaVisible.value = false
   } catch (e) {
     const message = getApiErrorMessage(e, 'No se pudo registrar el pago de la cuota.')
@@ -1085,7 +1106,7 @@ onUnmounted(() => {
           :resumen-por-cartera="carteraResumenPorId"
           :resumen-loading="carteraResumenLoading"
           class="hoja-cartera-dropdown filtro-hoja-select"
-          @refresh-resumen="() => void cargarResumenCarterasHoja()"
+          @refresh-resumen="() => void cargarResumenCarterasHoja(false)"
         />
         <Button
           label="Descargar PDF"

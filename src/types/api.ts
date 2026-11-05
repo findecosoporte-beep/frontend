@@ -224,6 +224,8 @@ export interface ReporteIntegracionResponse {
   generado_en?: string
   filas: ReporteIntegracionFila[]
   resumen: ReporteIntegracionResumen
+  /** GET ?resumen_por_cartera=1 — totales por id_cartera sin filas. */
+  resumen_por_cartera?: Record<string, ReporteIntegracionResumen>
   /** Paginación (GET reporte-integracion con page/page_size). */
   count?: number
   page?: number

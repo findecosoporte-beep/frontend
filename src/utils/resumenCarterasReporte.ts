@@ -25,6 +25,21 @@ export function resumenListadoDesdeApi(
 }
 
 /** Totales por cartera (misma lógica que la hoja de cobros / pie TOTALES). */
+/** Bloque por cartera en GET reporte-integracion?resumen_por_cartera=1 */
+export function resumenPorIdDesdeApiPayload(
+  payload: Record<string, ReporteIntegracionResumen> | undefined,
+  idsCarteras: number[],
+): Record<number, CarteraResumenListado> {
+  const out: Record<number, CarteraResumenListado> = {}
+  for (const id of idsCarteras) {
+    const block = payload?.[String(id)]
+    out[id] = block
+      ? resumenListadoDesdeApi(block, block.prestamos ?? 0)
+      : { clientes: 0, saldoPendiente: 0, cuotaCobrar: 0 }
+  }
+  return out
+}
+
 export function resumenPorCarteraDesdeFilas(
   filas: ReporteIntegracionFila[],
   idsCarteraPermitidos?: Set<number>,
