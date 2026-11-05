@@ -25,7 +25,7 @@ export function resumenListadoDesdeApi(
 }
 
 /** Totales por cartera (misma lógica que la hoja de cobros / pie TOTALES). */
-/** Bloque por cartera en GET reporte-integracion?resumen_por_cartera=1 */
+/** Bloque por cartera en GET /prestamos/resumen-carteras/ (o reporte-integracion resumido). */
 export function resumenPorIdDesdeApiPayload(
   payload: Record<string, ReporteIntegracionResumen> | undefined,
   idsCarteras: number[],
