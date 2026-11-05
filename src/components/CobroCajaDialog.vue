@@ -5,7 +5,6 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 
 import AccordionPanel from '@/components/AccordionPanel.vue'
-import { textoCuotaPendiente } from '@/utils/cobroResumen'
 import { formatDate, formatMoney } from '@/utils/format'
 import { textoCuotaDeTotal, textoTotalCuotas } from '@/utils/totalCuotasPrestamo'
 
@@ -21,6 +20,7 @@ export interface CobroCajaFormView {
   referencia_parentesco: string
   referencia_telefono: string
   monto_prestamo: number
+  plazo_meses: string
   cuota_programada: number
   total_cuotas: number
   fecha_entrega: string
@@ -56,25 +56,6 @@ const cuotasTexto = computed(() => textoTotalCuotas(props.form.total_cuotas))
 const cuotaActualTexto = computed(() =>
   textoCuotaDeTotal(props.form.cuota_numero, props.form.total_cuotas),
 )
-
-const cuotaPendienteTexto = computed(() =>
-  textoCuotaPendiente({
-    cuotaNumero: props.form.cuota_numero,
-    montoPendiente: String(props.form.cuota_pendiente_monto),
-    montoProgramado: String(props.form.cuota_pendiente_programada || props.form.cuota_programada),
-    abonado: props.form.cuota_pendiente_abonado,
-    cuotasAtrasadas: props.form.cuotas_atrasadas,
-    cuotasAtrasadasNumeros: props.form.cuotas_atrasadas_numeros,
-  }),
-)
-
-const ultimoPagoTexto = computed(() => {
-  if (!props.form.fecha_ultimo_pago?.trim()) return 'Sin pagos registrados'
-  const monto = props.form.monto_ultimo_pago?.trim()
-  return monto
-    ? `${formatDate(props.form.fecha_ultimo_pago)} · L ${formatMoney(monto)}`
-    : formatDate(props.form.fecha_ultimo_pago)
-})
 
 const tieneContactoCliente = computed(
   () =>
@@ -158,11 +139,11 @@ function fmtMonto(value: number): string {
           <strong>{{ fmtMonto(form.monto_prestamo) }}</strong>
         </div>
         <div class="cobro-detail-row">
-          <span>Cuotas</span>
-          <strong>{{ cuotasTexto }}</strong>
+          <span>Plazo en meses</span>
+          <strong>{{ form.plazo_meses }}</strong>
         </div>
         <div class="cobro-detail-row">
-          <span>Cuota</span>
+          <span>Cuota semanal</span>
           <strong>{{ fmtMonto(form.cuota_programada) }}</strong>
         </div>
         <div class="cobro-detail-row">
@@ -172,18 +153,6 @@ function fmtMonto(value: number): string {
         <div class="cobro-detail-row">
           <span>Fecha final</span>
           <strong>{{ formatDate(form.fecha_vencimiento) }}</strong>
-        </div>
-        <div class="cobro-detail-row">
-          <span>Último pago</span>
-          <strong>{{ ultimoPagoTexto }}</strong>
-        </div>
-        <div class="cobro-detail-row cobro-detail-row--highlight">
-          <span>Cuota pendiente</span>
-          <strong>{{ cuotaPendienteTexto }}</strong>
-        </div>
-        <div class="cobro-detail-row cobro-detail-row--highlight">
-          <span>Saldo pendiente</span>
-          <strong>{{ fmtMonto(form.saldo_actual) }}</strong>
         </div>
       </AccordionPanel>
 

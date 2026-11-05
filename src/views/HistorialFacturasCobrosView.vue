@@ -69,7 +69,7 @@ async function fetchAllPages<T>(initialPath: string): Promise<T[]> {
   const items: T[] = []
   let nextUrl: string | null = initialPath
   while (nextUrl) {
-    const response = await api.get<Paginated<T>>(nextUrl)
+    const response: { data: Paginated<T> } = await api.get<Paginated<T>>(nextUrl)
     items.push(...response.data.results)
     nextUrl = response.data.next
   }

@@ -14,8 +14,9 @@ import { getApiErrorMessage, getApiErrorMessageAsync } from '@/api/errors'
 import { usePermissions } from '@/composables/usePermissions'
 import { useAuthStore } from '@/stores/auth'
 import { buscarClientes } from '@/utils/buscarClientes'
-import { formatDateTime, formatMoney } from '@/utils/format'
+import { formatDate, formatDateTime, formatMoney } from '@/utils/format'
 import { abrirFacturaPago } from '@/utils/facturaPago'
+import { plazoMesesDesdeReporte } from '@/utils/plazoPrestamoDisplay'
 import { totalCuotasDesdeReporte } from '@/utils/totalCuotasPrestamo'
 import type {
   Cliente,
@@ -46,7 +47,6 @@ const hojaCobrosTotal = ref(0)
 const hojaCobrosFilas = ref<ReporteIntegracionFila[]>([])
 const hojaCobrosFechaReporte = ref('')
 const hojaCobrosGeneradoEn = ref('')
-const hojaImprimiendo = ref(false)
 const hojaDescargandoPdf = ref(false)
 
 const cajaVisible = ref(false)
@@ -81,6 +81,7 @@ const cajaForm = ref({
   referencia_parentesco: '',
   referencia_telefono: '',
   monto_prestamo: 0,
+  plazo_meses: '—',
   cuota_programada: 0,
   total_cuotas: 0,
   fecha_ultimo_pago: '',
@@ -197,32 +198,51 @@ function formatNumeroHoja(value: string | number | null | undefined): string {
 
 const hojaListadoTotales = computed(() => {
   let cuota = 0
+  let saldoPendiente = 0
   for (const f of hojaCobrosFilas.value) {
     const monto = f.cuota_siguiente_monto || f.cuota
     cuota += Number.parseFloat(String(monto ?? '')) || 0
+    saldoPendiente += Number.parseFloat(String(f.saldo_actual ?? '')) || 0
   }
-  return { registros: hojaCobrosFilas.value.length, cuota }
+  return { cuota, saldoPendiente }
 })
 
-function etiquetaEstadoHoja(estado: string | undefined | null): string {
-  const key = (estado || '').trim()
-  const map: Record<string, string> = {
-    activo: 'Activo',
-    pendiente_aprobacion: 'Pendiente',
-    pagado: 'Pagado',
-    mora: 'Mora',
-    cancelado: 'Cancelado',
-  }
-  return map[key] || key || '—'
+function valorMontoPrestamoHoja(fila: ReporteIntegracionFila): string {
+  const raw = fila.monto ?? fila.saldo_inicial
+  const texto = formatNumeroHoja(raw)
+  return texto || '—'
 }
 
-function valorCuotaHoja(fila: ReporteIntegracionFila): string {
-  const monto = fila.cuota_siguiente_monto ?? fila.cuota
-  const texto = formatNumeroHoja(monto)
-  if (fila.cuota_siguiente_numero != null) {
-    return `#${fila.cuota_siguiente_numero}  ${texto || '—'}`
-  }
+function valorPlazoMesesHoja(fila: ReporteIntegracionFila): string {
+  return plazoMesesDesdeReporte(fila)
+}
+
+function valorSaldoInicialHoja(fila: ReporteIntegracionFila): string {
+  const texto = formatNumeroHoja(fila.saldo_inicial)
   return texto || '—'
+}
+
+function valorSaldoPendienteHoja(fila: ReporteIntegracionFila): string {
+  const texto = formatNumeroHoja(fila.saldo_actual)
+  return texto || '—'
+}
+
+function valorFechaInicialHoja(fila: ReporteIntegracionFila): string {
+  const raw = fila.fecha_entrega?.trim()
+  return raw ? formatDate(raw) : '—'
+}
+
+function valorFechaFinalHoja(fila: ReporteIntegracionFila): string {
+  const raw = fila.fecha_vencimiento?.trim()
+  return raw ? formatDate(raw) : '—'
+}
+
+function valorCuotaPendienteHoja(fila: ReporteIntegracionFila): string {
+  const n = fila.cuota_siguiente_numero
+  const monto = formatNumeroHoja(fila.cuota_siguiente_monto)
+  if (n == null) return monto || '—'
+  if (!monto) return `#${n}`
+  return `#${n}  ${monto}`
 }
 
 function buildHojaCobrosQuery(extra?: Record<string, string>): URLSearchParams {
@@ -285,18 +305,6 @@ function onFilaCobroClick(fila: ReporteIntegracionFila) {
   if (!canWritePagos.value) return
   if (fila.cuota_siguiente_numero == null) return
   void abrirCobroDesdeHoja(fila)
-}
-
-function ejecutarImpresionListado() {
-  hojaImprimiendo.value = true
-  const cleanup = () => {
-    document.body.classList.remove('printing-hoja-cobros')
-    hojaImprimiendo.value = false
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  document.body.classList.add('printing-hoja-cobros')
-  window.print()
 }
 
 function descargarBlob(blob: Blob, nombre: string) {
@@ -541,6 +549,7 @@ const cajaFormView = computed((): CobroCajaFormView => ({
   referencia_parentesco: cajaForm.value.referencia_parentesco,
   referencia_telefono: cajaForm.value.referencia_telefono,
   monto_prestamo: cajaForm.value.monto_prestamo,
+  plazo_meses: cajaForm.value.plazo_meses,
   cuota_programada: cajaForm.value.cuota_programada,
   total_cuotas: cajaForm.value.total_cuotas,
   fecha_entrega: cajaForm.value.fecha_entrega,
@@ -640,6 +649,7 @@ function abrirDialogoCaja(payload: {
   referencia_parentesco?: string
   referencia_telefono?: string
   monto_prestamo?: number
+  plazo_meses?: string
   cuota_programada?: number
   total_cuotas?: number
   fecha_ultimo_pago?: string
@@ -709,6 +719,7 @@ function abrirDialogoCaja(payload: {
     referencia_parentesco: payload.referencia_parentesco ?? '',
     referencia_telefono: payload.referencia_telefono ?? '',
     monto_prestamo: payload.monto_prestamo ?? saldoInicial,
+    plazo_meses: payload.plazo_meses ?? '—',
     cuota_programada: payload.cuota_programada ?? montoPendienteCuota,
     total_cuotas: payload.total_cuotas ?? 0,
     fecha_ultimo_pago: payload.fecha_ultimo_pago ?? '',
@@ -798,6 +809,7 @@ async function abrirCobroDesdeHoja(
     referencia_telefono: contacto.referencia_telefono,
     monto_prestamo:
       Number.parseFloat(String(fila.monto ?? prestamo?.monto ?? fila.saldo_inicial)) || 0,
+    plazo_meses: plazoMesesDesdeReporte(fila),
     cuota_programada: Number.parseFloat(fila.cuota) || 0,
     total_cuotas: totalCuotas,
     cuota_pendiente_abonado: fila.cuota_siguiente_abonado ?? '',
@@ -918,6 +930,7 @@ async function aplicarDeepLinkIntegracionDesdeQuery(
     referencia_telefono: contacto.referencia_telefono,
     monto_prestamo:
       Number.parseFloat(String(filaReporte?.monto ?? reporte?.saldo_inicial ?? saldo ?? 0)) || 0,
+    plazo_meses: filaReporte ? plazoMesesDesdeReporte(filaReporte) : '—',
     cuota_programada: Number.parseFloat(filaReporte?.cuota ?? '') || montoPendiente || 0,
     total_cuotas: totalCuotas,
     fecha_ultimo_pago: filaReporte?.fecha_ultimo_pago ?? '',
@@ -1051,18 +1064,6 @@ onMounted(async () => {
           :disabled="hojaCobrosLoading"
           :auto-open="!carteraHojaRequerida() && hojaCarteras.length > 0"
           class="hoja-cartera-dropdown filtro-hoja-select"
-        />
-        <Button
-          label="Imprimir"
-          icon="pi pi-print"
-          type="button"
-          severity="secondary"
-          outlined
-          class="no-print"
-          :loading="hojaImprimiendo"
-          :disabled="!carteraHojaRequerida() || hojaImprimiendo || !hojaCobrosFilas.length"
-          title="Imprime el listado de la cartera seleccionada"
-          @click="ejecutarImpresionListado"
         />
         <Button
           label="Descargar PDF"
@@ -1205,8 +1206,13 @@ onMounted(async () => {
                     <th class="col-n">N</th>
                     <th class="col-prestamo">Nº PRÉSTAMO</th>
                     <th class="col-nombre">NOMBRE CLIENTE</th>
-                    <th class="col-estado">ESTADO</th>
-                    <th class="col-monto">CUOTA</th>
+                    <th class="col-monto-prestamo">MONTO</th>
+                    <th class="col-plazo">PLAZO EN MESES</th>
+                    <th class="col-saldo-inicial">SALDO INICIAL</th>
+                    <th class="col-saldo-pendiente">SALDO PENDIENTE</th>
+                    <th class="col-fecha-inicial">FECHA INICIAL</th>
+                    <th class="col-fecha-final">FECHA FINAL</th>
+                    <th class="col-cuota-pendiente">CUOTA PENDIENTE</th>
                     <th class="col-espacio">ESPACIO</th>
                   </tr>
                 </thead>
@@ -1224,18 +1230,30 @@ onMounted(async () => {
                     <td class="col-n">{{ index + 1 }}</td>
                     <td class="col-prestamo">{{ fila.numero_prestamo }}</td>
                     <td class="col-nombre">{{ fila.nombre_cliente }}</td>
-                    <td class="col-estado">{{ etiquetaEstadoHoja(fila.estado) }}</td>
-                    <td class="col-monto">{{ valorCuotaHoja(fila) }}</td>
+                    <td class="col-monto-prestamo">{{ valorMontoPrestamoHoja(fila) }}</td>
+                    <td class="col-plazo">{{ valorPlazoMesesHoja(fila) }}</td>
+                    <td class="col-saldo-inicial">{{ valorSaldoInicialHoja(fila) }}</td>
+                    <td class="col-saldo-pendiente">{{ valorSaldoPendienteHoja(fila) }}</td>
+                    <td class="col-fecha-inicial">{{ valorFechaInicialHoja(fila) }}</td>
+                    <td class="col-fecha-final">{{ valorFechaFinalHoja(fila) }}</td>
+                    <td class="col-cuota-pendiente">{{ valorCuotaPendienteHoja(fila) }}</td>
                     <td class="col-espacio"></td>
                   </tr>
                 </tbody>
                 <tfoot>
                   <tr class="hoja-findeco-totales">
-                    <td colspan="3" class="totales-label">
-                      TOTALES ({{ hojaListadoTotales.registros }}):
+                    <td colspan="3" class="totales-label">TOTALES:</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td class="col-saldo-pendiente">
+                      {{ formatNumeroHoja(hojaListadoTotales.saldoPendiente) }}
                     </td>
                     <td></td>
-                    <td class="col-monto">{{ formatNumeroHoja(hojaListadoTotales.cuota) }}</td>
+                    <td></td>
+                    <td class="col-cuota-pendiente">
+                      {{ formatNumeroHoja(hojaListadoTotales.cuota) }}
+                    </td>
                     <td></td>
                   </tr>
                 </tfoot>
@@ -1726,21 +1744,56 @@ onMounted(async () => {
 }
 
 .hoja-preview-table-simple .col-nombre {
-  width: 38%;
+  width: 20%;
   text-align: left;
 }
 
-.hoja-preview-table-simple .col-estado {
-  width: 14%;
-  text-align: center;
+.hoja-preview-table-simple .col-monto-prestamo {
+  width: 10%;
+  text-align: right;
 }
 
-.hoja-preview-table-simple .col-monto {
-  width: 16%;
+.hoja-preview-table-simple .col-plazo {
+  width: 8%;
+  text-align: center;
+  font-size: 0.7rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.hoja-preview-table-simple .col-saldo-inicial {
+  width: 10%;
+  text-align: right;
+  font-size: 0.7rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.hoja-preview-table-simple .col-saldo-pendiente {
+  width: 10%;
+  text-align: right;
+  font-size: 0.7rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.hoja-preview-table-simple .col-fecha-inicial,
+.hoja-preview-table-simple .col-fecha-final {
+  width: 8%;
+  text-align: center;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.hoja-preview-table-simple .col-cuota-pendiente {
+  width: 10%;
+  text-align: center;
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .hoja-preview-table-simple .col-espacio {
-  width: 16%;
+  width: 5%;
   min-height: 1.4rem;
 }
 
@@ -1917,29 +1970,6 @@ onMounted(async () => {
   .hoja-findeco-datatable,
   .hoja-findeco-totales-bar {
     display: none !important;
-  }
-
-  body.printing-hoja-cobros .hoja-buscar-cliente,
-  body.printing-hoja-cobros .hoja-findeco-toolbar,
-  body.printing-hoja-cobros .hoja-listado-hint,
-  body.printing-hoja-cobros .hoja-buscar-prestamos,
-  body.printing-hoja-cobros .hoja-buscar-resultados {
-    display: none !important;
-  }
-
-  body.printing-hoja-cobros .hoja-listado-sheet {
-    border: none;
-    box-shadow: none;
-    padding: 0;
-  }
-
-  body.printing-hoja-cobros .hoja-preview-print-area {
-    display: block !important;
-  }
-
-  body.printing-hoja-cobros .hoja-preview-scroll {
-    max-height: none !important;
-    overflow: visible !important;
   }
 
   .hoja-findeco-sheet {

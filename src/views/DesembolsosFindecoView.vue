@@ -17,6 +17,8 @@ import {
   generateDesembolsosFindecoPdf,
   type DesembolsosFindecoPdfData,
   type DesembolsosFindecoPdfEmisor,
+  type DesembolsosFindecoPdfNivelResumen,
+  type DesembolsosFindecoPdfResumenFila,
 } from '@/utils/desembolsosFindecoPdf'
 import { formatDate, formatMoney } from '@/utils/format'
 import { totalInteresDesdeCondiciones } from '@/utils/prestamoCalc'
@@ -32,6 +34,7 @@ const prestamos = ref<Prestamo[]>([])
 const carteraFiltroId = ref<number | null>(null)
 const anioFiltro = ref(new Date().getFullYear())
 const mesFiltro = ref<number | null>(null)
+const semanaFiltro = ref<number | null>(null)
 const diaFiltro = ref<number | null>(null)
 const carterasCatalogo = ref<Cartera[]>([])
 const consultaHecha = ref(false)
@@ -103,13 +106,63 @@ function parsePartesFecha(iso: string | null | undefined): { anio: number; mes: 
   }
 }
 
+function diasEnMes(anio: number, mes: number): number {
+  return new Date(anio, mes, 0).getDate()
+}
+
+function semanasEnMes(anio: number, mes: number): number {
+  return Math.ceil(diasEnMes(anio, mes) / 7)
+}
+
+function semanaDelMes(dia: number): number {
+  return Math.ceil(dia / 7)
+}
+
+function isoWeekAndYear(anio: number, mes: number, dia: number): { week: number; year: number } {
+  const date = new Date(anio, mes - 1, dia)
+  const dayNum = date.getDay() || 7
+  date.setDate(date.getDate() + 4 - dayNum)
+  const isoYear = date.getFullYear()
+  const yearStart = new Date(isoYear, 0, 1)
+  const week = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+  return { week, year: isoYear }
+}
+
+function isoWeeksInYear(anio: number): number {
+  return isoWeekAndYear(anio, 12, 28).week
+}
+
+function etiquetaSemanaMes(anio: number, mes: number, semana: number): string {
+  const inicio = (semana - 1) * 7 + 1
+  const fin = Math.min(semana * 7, diasEnMes(anio, mes))
+  const mesLabel = MESES.find((m) => m.value === mes)?.label ?? String(mes)
+  return `Semana ${semana} (${inicio}–${fin} ${mesLabel})`
+}
+
+function etiquetaSemana(semana: number): string {
+  if (mesFiltro.value != null) {
+    return etiquetaSemanaMes(anioFiltro.value, mesFiltro.value, semana)
+  }
+  return `Semana ${semana} · ${anioFiltro.value}`
+}
+
 function prestamoCoincideFiltroFecha(p: Prestamo): boolean {
   const partes = parsePartesFecha(p.fecha_entrega)
   if (!partes) return false
-  if (partes.anio !== anioFiltro.value) return false
-  if (mesFiltro.value != null && partes.mes !== mesFiltro.value) return false
-  if (diaFiltro.value != null && partes.dia !== diaFiltro.value) return false
-  return true
+
+  if (mesFiltro.value != null) {
+    if (partes.anio !== anioFiltro.value || partes.mes !== mesFiltro.value) return false
+    if (semanaFiltro.value != null && semanaDelMes(partes.dia) !== semanaFiltro.value) return false
+    if (diaFiltro.value != null && partes.dia !== diaFiltro.value) return false
+    return true
+  }
+
+  if (semanaFiltro.value != null) {
+    const { week, year } = isoWeekAndYear(partes.anio, partes.mes, partes.dia)
+    return year === anioFiltro.value && week === semanaFiltro.value
+  }
+
+  return partes.anio === anioFiltro.value
 }
 
 /** Solo préstamos efectivamente desembolsados (excluye pendientes de aprobación y cancelados). */
@@ -149,9 +202,29 @@ const opcionesDia = computed(() => {
   return items
 })
 
-function diasEnMes(anio: number, mes: number): number {
-  return new Date(anio, mes, 0).getDate()
-}
+/** Agrupa por semana del mes cuando hay mes seleccionado y no hay semana/día específico. */
+const usarAgrupacionSemanal = computed(
+  () => mesFiltro.value != null && semanaFiltro.value == null && diaFiltro.value == null,
+)
+
+const opcionesSemana = computed(() => {
+  const items: { label: string; value: number | null }[] = [{ label: 'Todas las semanas', value: null }]
+  if (mesFiltro.value != null) {
+    const total = semanasEnMes(anioFiltro.value, mesFiltro.value)
+    for (let s = 1; s <= total; s += 1) {
+      items.push({
+        label: etiquetaSemanaMes(anioFiltro.value, mesFiltro.value, s),
+        value: s,
+      })
+    }
+  } else {
+    const total = isoWeeksInYear(anioFiltro.value)
+    for (let s = 1; s <= total; s += 1) {
+      items.push({ label: `Semana ${s}`, value: s })
+    }
+  }
+  return items
+})
 
 const opcionesCarteraFiltro = computed(() => [
   { label: 'Todas las carteras', value: null as number | null },
@@ -170,14 +243,22 @@ const etiquetaPeriodo = computed(() => {
     const mesLabel = MESES.find((m) => m.value === mesFiltro.value)?.label ?? String(mesFiltro.value)
     partes.push(mesLabel)
   }
+  if (semanaFiltro.value != null) partes.push(etiquetaSemana(semanaFiltro.value))
   if (diaFiltro.value != null) partes.push(`día ${diaFiltro.value}`)
   return partes.join(' · ')
 })
 
+interface BloqueSemana {
+  clave: string
+  etiqueta: string
+  prestamos: Prestamo[]
+  totales: { cantidad: number; monto: string; interes: string }
+}
+
 interface BloqueCartera {
   clave: string
   nombreCartera: string
-  prestamos: Prestamo[]
+  semanas: BloqueSemana[]
   totales: { cantidad: number; monto: string; interes: string }
 }
 
@@ -195,38 +276,174 @@ function totalesBloque(prestamosBloque: Prestamo[]): { cantidad: number; monto: 
   }
 }
 
+function ordenarPrestamos(lista: Prestamo[]): Prestamo[] {
+  return lista.slice().sort((a, b) => {
+    const fa = (a.fecha_entrega ?? '').localeCompare(b.fecha_entrega ?? '')
+    if (fa !== 0) return fa
+    return a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true })
+  })
+}
+
+function claveSemanaPrestamo(p: Prestamo): number | null {
+  const partes = parsePartesFecha(p.fecha_entrega)
+  if (!partes) return null
+  if (mesFiltro.value != null) return semanaDelMes(partes.dia)
+  return isoWeekAndYear(partes.anio, partes.mes, partes.dia).week
+}
+
+function agruparPrestamosPorSemana(prestamosLista: Prestamo[]): BloqueSemana[] {
+  const map = new Map<number, Prestamo[]>()
+  for (const p of prestamosLista) {
+    const clave = claveSemanaPrestamo(p)
+    if (clave == null) continue
+    const lista = map.get(clave) ?? []
+    lista.push(p)
+    map.set(clave, lista)
+  }
+
+  return [...map.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([numSemana, lista]) => {
+      const ordenados = ordenarPrestamos(lista)
+      return {
+        clave: String(numSemana),
+        etiqueta: etiquetaSemana(numSemana),
+        prestamos: ordenados,
+        totales: totalesBloque(ordenados),
+      }
+    })
+}
+
 const prestamosFiltrados = computed(() =>
   prestamos.value.filter((p) => prestamoCoincideFiltroFecha(p) && prestamoCuentaComoDesembolso(p)),
 )
 
+const prestamosDesembolsadosEnAnio = computed(() =>
+  prestamos.value.filter((p) => {
+    if (!prestamoCuentaComoDesembolso(p)) return false
+    const partes = parsePartesFecha(p.fecha_entrega)
+    return partes?.anio === anioFiltro.value
+  }),
+)
+
+function agruparResumenPdf(
+  lista: Prestamo[],
+  claveFn: (p: Prestamo) => { key: string; etiqueta: string } | null,
+): DesembolsosFindecoPdfResumenFila[] {
+  const map = new Map<string, { etiqueta: string; prestamos: Prestamo[] }>()
+  for (const p of lista) {
+    const clave = claveFn(p)
+    if (!clave) continue
+    const entry = map.get(clave.key) ?? { etiqueta: clave.etiqueta, prestamos: [] }
+    entry.prestamos.push(p)
+    map.set(clave.key, entry)
+  }
+
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([, entry]) => ({
+      etiqueta: entry.etiqueta,
+      ...totalesBloque(entry.prestamos),
+    }))
+}
+
+function claveSemanaResumenPdf(p: Prestamo): { key: string; etiqueta: string } | null {
+  const partes = parsePartesFecha(p.fecha_entrega)
+  if (!partes) return null
+  if (mesFiltro.value != null) {
+    const semana = semanaDelMes(partes.dia)
+    return {
+      key: `m${mesFiltro.value}-w${semana}`,
+      etiqueta: etiquetaSemanaMes(anioFiltro.value, mesFiltro.value, semana),
+    }
+  }
+  const { week, year } = isoWeekAndYear(partes.anio, partes.mes, partes.dia)
+  if (year !== anioFiltro.value) return null
+  return { key: `iso-${week}`, etiqueta: `Semana ${week}` }
+}
+
+const nivelResumenPdf = computed((): DesembolsosFindecoPdfNivelResumen => {
+  if (semanaFiltro.value != null || diaFiltro.value != null) return 'semanal'
+  if (mesFiltro.value != null) return 'mensual'
+  return 'anual'
+})
+
+const resumenesPdf = computed(() => {
+  const nivel = nivelResumenPdf.value
+  const totalPeriodo: DesembolsosFindecoPdfResumenFila = {
+    etiqueta: etiquetaPeriodo.value,
+    ...totalesBloque(prestamosFiltrados.value),
+  }
+
+  let semanal: DesembolsosFindecoPdfResumenFila[] = []
+  let mensual: DesembolsosFindecoPdfResumenFila[] = []
+  let anual: DesembolsosFindecoPdfResumenFila[] = []
+
+  if (nivel === 'semanal') {
+    if (diaFiltro.value != null) {
+      semanal = totalPeriodo.cantidad > 0 ? [totalPeriodo] : []
+    } else {
+      semanal = agruparResumenPdf(prestamosFiltrados.value, claveSemanaResumenPdf)
+      if (semanal.length === 0 && totalPeriodo.cantidad > 0) semanal = [totalPeriodo]
+    }
+  } else if (nivel === 'mensual') {
+    const mesLabel = MESES.find((m) => m.value === mesFiltro.value)?.label ?? String(mesFiltro.value)
+    mensual =
+      totalPeriodo.cantidad > 0
+        ? [{ etiqueta: mesLabel, ...totalesBloque(prestamosFiltrados.value) }]
+        : []
+  } else {
+    const totalesAnio = totalesBloque(prestamosDesembolsadosEnAnio.value)
+    anual =
+      totalesAnio.cantidad > 0 ? [{ etiqueta: String(anioFiltro.value), ...totalesAnio }] : []
+  }
+
+  return {
+    nivel,
+    semanal,
+    mensual,
+    anual,
+    totalPeriodo,
+  }
+})
+
 const bloquesPorCartera = computed((): BloqueCartera[] => {
-  const map = new Map<string, BloqueCartera>()
+  const map = new Map<string, Prestamo[]>()
 
   for (const p of prestamosFiltrados.value) {
     const clave = claveCartera(p)
-    let bloque = map.get(clave)
-    if (!bloque) {
-      bloque = {
-        clave,
-        nombreCartera: nombreCarteraPrestamo(p),
-        prestamos: [],
-        totales: { cantidad: 0, monto: formatMoney(0), interes: formatMoney(0) },
-      }
-      map.set(clave, bloque)
-    }
-    bloque.prestamos.push(p)
+    const lista = map.get(clave) ?? []
+    lista.push(p)
+    map.set(clave, lista)
   }
 
-  const bloques = [...map.values()].sort((a, b) => a.nombreCartera.localeCompare(b.nombreCartera, 'es'))
-
-  for (const bloque of bloques) {
-    bloque.prestamos.sort((a, b) => {
-      const fa = (a.fecha_entrega ?? '').localeCompare(b.fecha_entrega ?? '')
-      if (fa !== 0) return fa
-      return a.numero_prestamo.localeCompare(b.numero_prestamo, 'es', { numeric: true })
+  const bloques = [...map.entries()]
+    .sort(([, listaA], [, listaB]) => {
+      const nombreA = nombreCarteraPrestamo(listaA[0]!)
+      const nombreB = nombreCarteraPrestamo(listaB[0]!)
+      return nombreA.localeCompare(nombreB, 'es')
     })
-    bloque.totales = totalesBloque(bloque.prestamos)
-  }
+    .map(([clave, listaPrestamos]) => {
+      const ordenados = ordenarPrestamos(listaPrestamos)
+      const semanas =
+        usarAgrupacionSemanal.value && ordenados.length > 0
+          ? agruparPrestamosPorSemana(ordenados)
+          : [
+              {
+                clave: 'unica',
+                etiqueta: semanaFiltro.value != null ? etiquetaSemana(semanaFiltro.value) : '',
+                prestamos: ordenados,
+                totales: totalesBloque(ordenados),
+              },
+            ]
+
+      return {
+        clave,
+        nombreCartera: nombreCarteraPrestamo(ordenados[0]!),
+        semanas,
+        totales: totalesBloque(ordenados),
+      }
+    })
 
   return bloques
 })
@@ -238,13 +455,16 @@ watch(carteraFiltroId, () => {
 })
 
 watch(mesFiltro, () => {
-  if (mesFiltro.value == null) diaFiltro.value = null
-  else if (diaFiltro.value != null && diaFiltro.value > diasEnMes(anioFiltro.value, mesFiltro.value)) {
-    diaFiltro.value = null
-  }
+  semanaFiltro.value = null
+  diaFiltro.value = null
+})
+
+watch(semanaFiltro, () => {
+  if (semanaFiltro.value != null) diaFiltro.value = null
 })
 
 watch(anioFiltro, () => {
+  semanaFiltro.value = null
   if (mesFiltro.value != null && diaFiltro.value != null) {
     if (diaFiltro.value > diasEnMes(anioFiltro.value, mesFiltro.value)) diaFiltro.value = null
   }
@@ -380,6 +600,18 @@ async function cargarLogoFindecoDataUrl(): Promise<string | null> {
   }
 }
 
+function filaPdfDesdePrestamo(p: Prestamo, index: number) {
+  return {
+    numero: index + 1,
+    cliente: nombreCliente(p.id_cliente),
+    fechaEntrega: formatDate(p.fecha_entrega),
+    monto: formatMoney(p.monto),
+    tasa: formatTasaPct(p.tasa_interes),
+    plazo: String(p.plazo),
+    interes: formatMoney(totalInteresDesdePrestamo(p)),
+  }
+}
+
 function construirDatosPdf(
   emisor: DesembolsosFindecoPdfEmisor,
   logoDataUrl: string | null,
@@ -393,17 +625,15 @@ function construirDatosPdf(
     etiquetaPeriodo: etiquetaPeriodo.value,
     emisor,
     logoDataUrl,
+    resumenes: resumenesPdf.value,
     bloques: bloquesPorCartera.value.map((bloque) => ({
       nombreCartera: bloque.nombreCartera,
       totales: bloque.totales,
-      prestamos: bloque.prestamos.map((p, i) => ({
-        numero: i + 1,
-        cliente: nombreCliente(p.id_cliente),
-        fechaEntrega: formatDate(p.fecha_entrega),
-        monto: formatMoney(p.monto),
-        tasa: formatTasaPct(p.tasa_interes),
-        plazo: String(p.plazo),
-        interes: formatMoney(totalInteresDesdePrestamo(p)),
+      prestamos: [],
+      semanas: bloque.semanas.map((semana) => ({
+        etiqueta: semana.etiqueta,
+        totales: semana.totales,
+        prestamos: semana.prestamos.map((p, i) => filaPdfDesdePrestamo(p, i)),
       })),
     })),
   }
@@ -530,6 +760,17 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="filtro-campo filtro-campo-corto">
+        <label class="filtro-label" for="semana-findeco">Semana</label>
+        <Select
+          id="semana-findeco"
+          v-model="semanaFiltro"
+          :options="opcionesSemana"
+          option-label="label"
+          option-value="value"
+          fluid
+        />
+      </div>
+      <div class="filtro-campo filtro-campo-corto">
         <label class="filtro-label" for="dia-findeco">Día</label>
         <Select
           id="dia-findeco"
@@ -537,7 +778,7 @@ onBeforeUnmount(() => {
           :options="opcionesDia"
           option-label="label"
           option-value="value"
-          :disabled="mesFiltro == null"
+          :disabled="mesFiltro == null || semanaFiltro != null"
           fluid
         />
       </div>
@@ -578,49 +819,57 @@ onBeforeUnmount(() => {
       <div v-for="bloque in bloquesPorCartera" :key="bloque.clave" class="span-full panel-tabla">
         <h2 class="subtitulo">{{ bloque.nombreCartera }}</h2>
 
-        <div class="bloque-cartera-tabla">
-          <DataTable
-            class="datatable-reporte datatable-desembolso"
-            :value="bloque.prestamos"
-            responsive-layout="scroll"
-            striped-rows
-            size="small"
-            show-gridlines
-            data-key="id_prestamo"
-          >
-            <Column header="N" :style="{ width: '2.75rem' }" footer-style="font-weight: 700">
-              <template #body="{ index }: { index: number }">{{ (index ?? 0) + 1 }}</template>
-              <template #footer>{{ bloque.totales.cantidad }}</template>
-            </Column>
-            <Column header="Nombre" :style="{ minWidth: '16rem', maxWidth: '22rem' }" footer-style="font-weight: 700">
-              <template #body="{ data }: { data: Prestamo }">
-                <span class="celda-nombre-cliente">{{ nombreCliente(data.id_cliente) }}</span>
-              </template>
-              <template #footer>TOTAL</template>
-            </Column>
-            <Column header="Entrega" :style="{ minWidth: '9rem' }">
-              <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
-              <template #footer></template>
-            </Column>
-            <Column header="Monto" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
-              <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
-              <template #footer>{{ bloque.totales.monto }}</template>
-            </Column>
-            <Column header="Tasa" :style="{ minWidth: '6.5rem' }">
-              <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
-              <template #footer></template>
-            </Column>
-            <Column header="Plazo" :style="{ width: '4.5rem' }">
-              <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
-              <template #footer></template>
-            </Column>
-            <Column header="Interés" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
-              <template #body="{ data }: { data: Prestamo }">
-                {{ formatMoney(totalInteresDesdePrestamo(data)) }}
-              </template>
-              <template #footer>{{ bloque.totales.interes }}</template>
-            </Column>
-          </DataTable>
+        <div
+          v-for="semana in bloque.semanas"
+          :key="`${bloque.clave}-${semana.clave}`"
+          class="bloque-semana"
+        >
+          <h3 v-if="semana.etiqueta" class="subtitulo-semana">{{ semana.etiqueta }}</h3>
+
+          <div class="bloque-cartera-tabla">
+            <DataTable
+              class="datatable-reporte datatable-desembolso"
+              :value="semana.prestamos"
+              responsive-layout="scroll"
+              striped-rows
+              size="small"
+              show-gridlines
+              data-key="id_prestamo"
+            >
+              <Column header="N" :style="{ width: '2.75rem' }" footer-style="font-weight: 700">
+                <template #body="{ index }: { index: number }">{{ (index ?? 0) + 1 }}</template>
+                <template #footer>{{ semana.totales.cantidad }}</template>
+              </Column>
+              <Column header="Nombre" :style="{ minWidth: '16rem', maxWidth: '22rem' }" footer-style="font-weight: 700">
+                <template #body="{ data }: { data: Prestamo }">
+                  <span class="celda-nombre-cliente">{{ nombreCliente(data.id_cliente) }}</span>
+                </template>
+                <template #footer>TOTAL</template>
+              </Column>
+              <Column header="Entrega" :style="{ minWidth: '9rem' }">
+                <template #body="{ data }: { data: Prestamo }">{{ formatDate(data.fecha_entrega) }}</template>
+                <template #footer></template>
+              </Column>
+              <Column header="Monto" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
+                <template #body="{ data }: { data: Prestamo }">{{ formatMoney(data.monto) }}</template>
+                <template #footer>{{ semana.totales.monto }}</template>
+              </Column>
+              <Column header="Tasa" :style="{ minWidth: '6.5rem' }">
+                <template #body="{ data }: { data: Prestamo }">{{ formatTasaPct(data.tasa_interes) }}</template>
+                <template #footer></template>
+              </Column>
+              <Column header="Plazo" :style="{ width: '4.5rem' }">
+                <template #body="{ data }: { data: Prestamo }">{{ data.plazo }}</template>
+                <template #footer></template>
+              </Column>
+              <Column header="Interés" :style="{ minWidth: '8rem' }" footer-style="font-weight: 700">
+                <template #body="{ data }: { data: Prestamo }">
+                  {{ formatMoney(totalInteresDesdePrestamo(data)) }}
+                </template>
+                <template #footer>{{ semana.totales.interes }}</template>
+              </Column>
+            </DataTable>
+          </div>
         </div>
       </div>
     </template>
@@ -777,6 +1026,17 @@ onBeforeUnmount(() => {
   font-size: 1rem;
   font-weight: 600;
   color: #334155;
+}
+
+.subtitulo-semana {
+  margin: 0.85rem 0 0.5rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.bloque-semana:first-child .subtitulo-semana {
+  margin-top: 0;
 }
 
 .panel-tabla {

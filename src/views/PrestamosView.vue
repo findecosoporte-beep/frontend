@@ -12,7 +12,6 @@ import MultiSelect from 'primevue/multiselect'
 import Password from 'primevue/password'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
-import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
@@ -35,7 +34,6 @@ import {
 } from '@/utils/telefonoHonduras'
 import { calculateFechaPrimeraCuota, calculateFechaVencimiento } from '@/utils/prestamoFechas'
 import {
-  interesTotalPctMensual,
   interesTotalPctSemanal,
   periodosDesdePlazo,
   simularPrestamo,
@@ -99,15 +97,16 @@ const editAuditoria = ref<{
   modificado_por_nombre: string | null
 } | null>(null)
 const editForm = ref({
+  codigo_prestamo: '',
   numero_prestamo: '',
   id_cliente: null as number | null,
   id_asesor: null as number | null,
   id_cobrador: null as number | null,
   monto: null as number | null,
-  plazo: 12,
+  plazo: 8,
   tasa_interes: null as number | null,
   estado: 'activo',
-  forma_pago: 'mensual',
+  forma_pago: 'semanal',
   forma_desembolso: 'efectivo',
   comision: 0,
   fecha_entrega: '',
@@ -173,6 +172,11 @@ const estadoEditOpts = [
   { label: 'Mora', value: 'mora' },
   { label: 'Cancelado', value: 'cancelado' },
 ]
+const FORMA_PAGO_FIJA = 'semanal'
+/** Interés simple por semana (regla FINDECO). */
+const TASA_SEMANAL_FIJA = 2.5
+/** Semanas de cobro por cada mes ingresado en el wizard (préstamo semanal). */
+const SEMANAS_POR_MES_PLAZO = 4
 const formaPagoOpts = [
   { label: 'Semanal', value: 'semanal' },
   { label: 'Mensual', value: 'mensual' },
@@ -185,16 +189,17 @@ const formaDesOpts = [
 ]
 
 const form = ref({
+  codigo_prestamo: '',
   numero_prestamo: '',
   id_cliente: null as number | null,
   id_usuario: null as number | null,
   id_asesor: null as number | null,
   id_cobrador: null as number | null,
   monto: null as number | null,
-  plazo: 12,
-  tasa_interes: null as number | null,
+  plazo: 8,
+  tasa_interes: TASA_SEMANAL_FIJA,
   estado: 'activo',
-  forma_pago: 'mensual',
+  forma_pago: FORMA_PAGO_FIJA as string,
   forma_desembolso: 'efectivo',
   comision: 0,
   fecha_entrega: '',
@@ -236,51 +241,41 @@ const currentSimulationSignature = computed(() =>
   }),
 )
 
-const tasaPeriodoLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Tasa semanal % (automática)'
-  if (form.value.forma_pago === 'mensual') return 'Tasa mensual % (automática)'
-  return 'Tasa mensual %'
+const tasaSemanalResumen = computed(() => {
+  const semanas = Math.trunc(Number(form.value.plazo || 0))
+  if (semanas <= 0) {
+    return 'Interés fijo 2.5% por cada semana de plazo.'
+  }
+  return `Interés fijo 2.5% por semana · total del crédito ${interesTotalPctSemanal(semanas)}% (${semanas} semanas).`
 })
 
-const plazoFieldLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Plazo (semanas)'
-  return 'Plazo (meses)'
+function semanasDesdeMeses(meses: number): number {
+  const m = Number(meses)
+  if (!Number.isFinite(m) || m <= 0) return 1
+  return Math.max(1, Math.round(m * SEMANAS_POR_MES_PLAZO))
+}
+
+function mesesDesdeSemanas(semanas: number): number {
+  const s = Math.trunc(Number(semanas))
+  if (s <= 0) return 0.25
+  return Math.round((s / SEMANAS_POR_MES_PLAZO) * 100) / 100
+}
+
+/** Plazo en meses (UI, admite decimales ej. 1.5); en API semanal se guarda como semanas. */
+const plazoMeses = computed({
+  get(): number {
+    return mesesDesdeSemanas(Number(form.value.plazo || 0))
+  },
+  set(meses: number) {
+    form.value.plazo = semanasDesdeMeses(meses)
+    aplicarReglasSemanal()
+  },
 })
 
-const esSemanal = computed(() => form.value.forma_pago === 'semanal')
-const esMensual = computed(() => form.value.forma_pago === 'mensual')
-const esTasaAutomatica = computed(() => esSemanal.value || esMensual.value)
-
-const frecuenciaEfectoLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') return 'Efecto aplicado: 1 semana por cuota (semanal).'
-  if (form.value.forma_pago === 'quincenal') return 'Efecto aplicado: 15 días por cuota (quincenal).'
-  return 'Efecto aplicado: 1 mes por cuota (mensual).'
-})
-
-const frecuenciaPlazoResumen = computed(() => {
-  const plazo = Number(form.value.plazo || 0)
-  if (plazo <= 0) return ''
-  if (form.value.forma_pago === 'semanal') {
-    return `${plazo} cuota${plazo === 1 ? '' : 's'} semanal${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctSemanal(plazo)}%.`
-  }
-  if (form.value.forma_pago === 'quincenal') {
-    return `Quincenas totales estimadas para el plazo actual: ${plazo * 2}.`
-  }
-  if (form.value.forma_pago === 'mensual') {
-    return `${plazo} cuota${plazo === 1 ? '' : 's'} mensual${plazo === 1 ? '' : 'es'} · interés total ${interesTotalPctMensual(plazo)}%.`
-  }
-  return `Meses del plazo: ${plazo}.`
-})
-
-const tasaConversionLabel = computed(() => {
-  if (form.value.forma_pago === 'semanal') {
-    return 'Tasa fija 2.5% semanal · interés total = semanas × 2.5%.'
-  }
-  if (form.value.forma_pago === 'mensual') {
-    return 'Tasa fija 10% mensual · interés total = meses × 10%.'
-  }
-  if (form.value.forma_pago === 'quincenal') return 'Tasa por periodo aplicada: tasa mensual / 2.'
-  return 'Tasa por periodo aplicada: tasa mensual.'
+/** Plazo en semanas (calculado desde meses); valor enviado al API. */
+const plazoSemanas = computed(() => {
+  const semanas = Math.trunc(Number(form.value.plazo || 0))
+  return semanas > 0 ? semanas : 1
 })
 
 const canSave = computed(() => {
@@ -557,7 +552,15 @@ async function loadPrestamosList() {
       ordering: '-id_prestamo',
     })
     const term = listSearch.value.trim()
-    if (term) params.set('search', term)
+    if (term) {
+      if (/^PR-\d+$/i.test(term)) {
+        params.set('codigo_prestamo', term.toUpperCase())
+      } else if (/^\d+$/.test(term) && term.length <= 4) {
+        params.set('codigo_prestamo', `PR-${term.padStart(4, '0')}`)
+      } else {
+        params.set('search', term)
+      }
+    }
     const { data } = await api.get<Paginated<Prestamo>>(`/prestamos/?${params.toString()}`)
     listTotal.value = data.count
     if (typeof data.page === 'number') listPage.value = data.page
@@ -613,6 +616,7 @@ async function openEditPrestamo(row: Prestamo) {
     modificado_por_nombre: row.modificado_por_nombre ?? null,
   }
   editForm.value = {
+    codigo_prestamo: row.codigo_prestamo?.trim() ?? row.numero_prestamo?.trim() ?? '',
     numero_prestamo: row.numero_prestamo?.trim() ?? '',
     id_cliente: row.id_cliente,
     id_asesor: row.id_usuario,
@@ -653,6 +657,7 @@ function buildEditPayload() {
     cartera?.dia_cobro ?? null,
   )
   return {
+    codigo_prestamo: editForm.value.codigo_prestamo.trim(),
     numero_prestamo: editForm.value.numero_prestamo.trim(),
     id_cliente: editForm.value.id_cliente,
     id_usuario: editForm.value.id_asesor,
@@ -1242,23 +1247,38 @@ async function ensureCatalogosFormulario() {
 }
 
 /**
- * Genera el siguiente número de préstamo vía API (sin descargar el catálogo completo).
+ * Genera el siguiente código y número vía API (PR-0001, PR-0002…).
  */
-async function generarNumeroPrestamo(): Promise<string> {
+async function generarNumeroPrestamo(): Promise<{ codigo_prestamo: string; numero_prestamo: string } | null> {
   try {
-    const { data } = await api.get<{ numero_prestamo: string }>('/prestamos/siguiente-numero/')
-    const numero = data.numero_prestamo?.trim()
-    if (numero) return numero
-    return `PR-${Date.now()}`
+    const { data } = await api.get<{ codigo_prestamo?: string; numero_prestamo?: string }>(
+      '/prestamos/siguiente-numero/',
+    )
+    const numero = (data.numero_prestamo ?? '').trim()
+    const codigo = (data.codigo_prestamo ?? numero).trim()
+    const valor = numero || codigo
+    if (!valor) return null
+    return { codigo_prestamo: codigo || valor, numero_prestamo: valor }
   } catch {
-    return `PR-${Date.now()}`
+    return null
   }
 }
 
 async function asignarNumeroPrestamoGenerado() {
   generandoNumero.value = true
   try {
-    form.value.numero_prestamo = await generarNumeroPrestamo()
+    const numeracion = await generarNumeroPrestamo()
+    if (!numeracion) {
+      toast.add({
+        severity: 'error',
+        summary: 'Numeración',
+        detail: 'No se pudo obtener el siguiente código. Revisa la conexión e intenta de nuevo.',
+        life: 5000,
+      })
+      return
+    }
+    form.value.codigo_prestamo = numeracion.codigo_prestamo
+    form.value.numero_prestamo = numeracion.numero_prestamo
   } finally {
     generandoNumero.value = false
   }
@@ -1267,7 +1287,18 @@ async function asignarNumeroPrestamoGenerado() {
 async function asignarNumeroPrestamoEditado() {
   generandoNumeroEdit.value = true
   try {
-    editForm.value.numero_prestamo = await generarNumeroPrestamo()
+    const numeracion = await generarNumeroPrestamo()
+    if (!numeracion) {
+      toast.add({
+        severity: 'error',
+        summary: 'Numeración',
+        detail: 'No se pudo obtener el siguiente código. Revisa la conexión e intenta de nuevo.',
+        life: 5000,
+      })
+      return
+    }
+    editForm.value.codigo_prestamo = numeracion.codigo_prestamo
+    editForm.value.numero_prestamo = numeracion.numero_prestamo
   } finally {
     generandoNumeroEdit.value = false
   }
@@ -1294,16 +1325,17 @@ async function prepararDialogoPrestamo(
     await cargarPrestamosParaRenovacion()
   }
   form.value = {
+    codigo_prestamo: '',
     numero_prestamo: '',
     id_cliente: idCliente,
     id_usuario: asesorOptions.value[0]?.id_usuario ?? null,
     id_asesor: asesorOptions.value[0]?.id_usuario ?? null,
     id_cobrador: cobradorOptions.value[0]?.id_usuario ?? null,
     monto: null,
-    plazo: 12,
-    tasa_interes: null,
+    plazo: 8,
+    tasa_interes: TASA_SEMANAL_FIJA,
     estado: 'activo',
-    forma_pago: 'mensual',
+    forma_pago: FORMA_PAGO_FIJA as string,
     forma_desembolso: 'efectivo',
     comision: 0,
     fecha_entrega: getTodayISO(),
@@ -1403,22 +1435,11 @@ function totalCuotasEstimadas(): number {
 }
 
 function aplicarReglasSemanal() {
-  if (form.value.forma_pago !== 'semanal') return
-  const semanas = Math.trunc(Number(form.value.plazo || 0))
-  if (semanas <= 0) return
-  form.value.tasa_interes = tasaSemanalNegocio(semanas)
-}
-
-function aplicarReglasMensual() {
-  if (form.value.forma_pago !== 'mensual') return
-  const meses = Math.trunc(Number(form.value.plazo || 0))
-  if (meses <= 0) return
-  form.value.tasa_interes = tasaMensualNegocio(meses)
+  form.value.tasa_interes = TASA_SEMANAL_FIJA
 }
 
 function aplicarReglasTasaPeriodo() {
   aplicarReglasSemanal()
-  aplicarReglasMensual()
 }
 
 const fechaEntregaEnPasado = computed(() => {
@@ -1460,28 +1481,6 @@ watch(
     }
   },
 )
-
-function onFormaPagoToggle(targetValue: string, checked: boolean) {
-  // Mantenemos selección única obligatoria: si apaga el activo, lo volvemos a dejar activo.
-  if (!checked && form.value.forma_pago === targetValue) {
-    form.value.forma_pago = targetValue
-    return
-  }
-  if (checked) {
-    form.value.forma_pago = targetValue
-    if (targetValue === 'semanal') {
-      form.value.plazo = 6
-      aplicarReglasSemanal()
-    } else if (targetValue === 'mensual') {
-      if (form.value.plazo <= 0 || form.value.plazo === 6) {
-        form.value.plazo = 12
-      }
-      aplicarReglasMensual()
-    } else if (form.value.plazo <= 0 || form.value.plazo === 6) {
-      form.value.plazo = 12
-    }
-  }
-}
 
 watch(
   () => [form.value.forma_pago, form.value.plazo] as const,
@@ -1653,15 +1652,16 @@ function buildPayload() {
   const cobradorNombre = nombreUsuarioPorId(form.value.id_cobrador)
   const tasaInteres = form.value.tasa_interes == null ? null : Number(form.value.tasa_interes.toFixed(2))
   const comision = form.value.comision == null ? 0 : Number(form.value.comision.toFixed(2))
-  return {
-    numero_prestamo: form.value.numero_prestamo.trim(),
+  const codigo = form.value.codigo_prestamo.trim()
+  const numero = form.value.numero_prestamo.trim()
+  const payload: Record<string, unknown> = {
     id_cliente: form.value.id_cliente,
     id_usuario: form.value.id_asesor,
     monto: form.value.monto,
     plazo: form.value.plazo,
     tasa_interes: tasaInteres,
     estado: 'activo',
-    forma_pago: form.value.forma_pago,
+    forma_pago: FORMA_PAGO_FIJA as string,
     forma_desembolso: form.value.forma_desembolso,
     comision,
     fecha_entrega: form.value.fecha_entrega,
@@ -1674,6 +1674,9 @@ function buildPayload() {
     dias_mora: form.value.dias_mora,
     ciclos: form.value.ciclos,
   }
+  if (codigo) payload.codigo_prestamo = codigo
+  if (numero) payload.numero_prestamo = numero
+  return payload
 }
 
 async function hasDuplicateNumeroPrestamoByCliente(): Promise<boolean> {
@@ -1696,7 +1699,10 @@ async function save() {
   try {
     let intentos = 0
     while ((await hasDuplicateNumeroPrestamoByCliente()) && intentos < 5) {
-      form.value.numero_prestamo = await generarNumeroPrestamo()
+      const numeracion = await generarNumeroPrestamo()
+      if (!numeracion) break
+      form.value.codigo_prestamo = numeracion.codigo_prestamo
+      form.value.numero_prestamo = numeracion.numero_prestamo
       intentos += 1
     }
     if (await hasDuplicateNumeroPrestamoByCliente()) {
@@ -1759,6 +1765,22 @@ async function save() {
     }
 
     const payload = buildPayload()
+    if (!payload.codigo_prestamo || !payload.numero_prestamo) {
+      const numeracion = await generarNumeroPrestamo()
+      if (!numeracion) {
+        toast.add({
+          severity: 'warn',
+          summary: 'Número de préstamo',
+          detail: 'No se pudo obtener el consecutivo. Intente de nuevo.',
+          life: 5000,
+        })
+        return
+      }
+      payload.codigo_prestamo = numeracion.codigo_prestamo
+      payload.numero_prestamo = numeracion.numero_prestamo
+      form.value.codigo_prestamo = numeracion.codigo_prestamo
+      form.value.numero_prestamo = numeracion.numero_prestamo
+    }
     await api.post('/prestamos/', payload)
     if (form.value.id_cliente != null) {
       clientesConPrestamoActivoIds.value = new Set([
@@ -1837,7 +1859,7 @@ watch(
       <div class="listado-toolbar">
         <InputText
           v-model="listSearch"
-          placeholder="Buscar por número, cliente o producto…"
+          placeholder="Buscar por número (PR-0001), cliente o producto…"
           class="listado-search"
           @keyup.enter="onListSearch"
         />
@@ -1886,6 +1908,15 @@ watch(
         current-page-report-template="Mostrando {first} a {last} de {totalRecords}"
         @page="onListadoPage"
       >
+        <Column
+          field="codigo_prestamo"
+          header="Código"
+          :style="{ minWidth: '7rem' }"
+        >
+          <template #body="{ data }: { data: PrestamoFilaListado }">
+            {{ data.codigo_prestamo || data.numero_prestamo || data.id_prestamo }}
+          </template>
+        </Column>
         <Column
           field="numero_prestamo"
           header="Nº préstamo"
@@ -2043,6 +2074,18 @@ watch(
       <div class="form-grid">
         <template v-if="wizardStep === 1">
           <div class="full numero-prestamo-wrap">
+            <label class="lbl" for="p-cod">Código préstamo</label>
+            <div class="cliente-select-row">
+              <InputText
+                id="p-cod"
+                :model-value="generandoNumero ? 'Generando…' : form.codigo_prestamo"
+                readonly
+                fluid
+                class="cliente-select"
+              />
+            </div>
+          </div>
+          <div class="full numero-prestamo-wrap">
             <label class="lbl" for="p-num">Número préstamo</label>
             <div class="cliente-select-row">
               <InputText
@@ -2060,11 +2103,11 @@ watch(
                 outlined
                 class="cliente-add-btn"
                 :loading="generandoNumero"
-                aria-label="Regenerar número de préstamo"
+                aria-label="Regenerar código y número de préstamo"
                 @click="regenerarNumeroPrestamo"
               />
             </div>
-            <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+            <small class="hint-text">Formato PR-0001, PR-0002… (misma secuencia en código y número).</small>
           </div>
           <div class="full cliente-select-wrap">
             <label class="lbl" for="p-cliente">Cliente</label>
@@ -2193,42 +2236,34 @@ watch(
             <InputNumber id="p-monto" v-model="form.monto" mode="decimal" :min-fraction-digits="2" fluid />
           </div>
           <div class="field-block">
-            <label class="lbl" for="p-plazo">{{ plazoFieldLabel }}</label>
-            <InputNumber id="p-plazo" v-model="form.plazo" :min="1" fluid />
-          </div>
-          <div class="field-block">
-            <label class="lbl" for="p-tasa">{{ tasaPeriodoLabel }}</label>
+            <label class="lbl" for="p-plazo-meses">Plazo (meses)</label>
             <InputNumber
-              id="p-tasa"
-              v-model="form.tasa_interes"
+              id="p-plazo-meses"
+              v-model="plazoMeses"
               mode="decimal"
-              :min="0"
+              :min="0.25"
               :max-fraction-digits="2"
-              :min-fraction-digits="2"
-              :step="0.01"
-              :use-grouping="false"
-              :readonly="esTasaAutomatica"
+              :min-fraction-digits="0"
+              :step="0.5"
               fluid
             />
-            <small class="hint-text">{{ tasaConversionLabel }}</small>
+          </div>
+          <div class="field-block">
+            <label class="lbl" for="p-plazo-semanas">Plazo (semanas)</label>
+            <InputText id="p-plazo-semanas" :model-value="String(plazoSemanas)" readonly fluid />
+          </div>
+          <div class="field-block">
+            <label class="lbl" for="p-tasa">Tasa semanal % (fija)</label>
+            <InputText id="p-tasa" model-value="2.50" readonly fluid />
+            <small class="hint-text">{{ tasaSemanalResumen }}</small>
           </div>
           <div class="full">
             <label class="lbl">Estado</label>
             <Select v-model="form.estado" :options="estadoOpts" option-label="label" option-value="value" disabled fluid />
           </div>
           <div class="full">
-            <label class="lbl">Forma pago</label>
-            <div class="switch-list">
-              <div v-for="opt in formaPagoOpts" :key="opt.value" class="switch-item">
-                <span class="switch-item-label">{{ opt.label }}</span>
-                <ToggleSwitch
-                  :model-value="form.forma_pago === opt.value"
-                  @update:model-value="(value) => onFormaPagoToggle(opt.value, value)"
-                />
-              </div>
-            </div>
-            <small class="hint-text">{{ frecuenciaEfectoLabel }}</small>
-            <small v-if="frecuenciaPlazoResumen" class="hint-text">{{ frecuenciaPlazoResumen }}</small>
+            <label class="lbl" for="p-forma-pago">Forma pago</label>
+            <InputText id="p-forma-pago" model-value="Semanal" readonly fluid />
           </div>
           <div class="full">
             <label class="lbl">Desembolso</label>
@@ -2426,6 +2461,15 @@ watch(
     >
       <div class="form-grid">
         <div class="full numero-prestamo-wrap">
+          <label class="lbl" for="ep-cod">Código préstamo</label>
+          <InputText
+            id="ep-cod"
+            :model-value="generandoNumeroEdit ? 'Generando…' : editForm.codigo_prestamo"
+            readonly
+            fluid
+          />
+        </div>
+        <div class="full numero-prestamo-wrap">
           <label class="lbl" for="ep-num">Número préstamo</label>
           <div class="cliente-select-row">
             <InputText
@@ -2443,11 +2487,11 @@ watch(
               outlined
               class="cliente-add-btn"
               :loading="generandoNumeroEdit"
-              aria-label="Regenerar número de préstamo"
+              aria-label="Regenerar código y número de préstamo"
               @click="regenerarNumeroPrestamoEdit"
             />
           </div>
-          <small class="hint-text">Número asignado automáticamente por el sistema.</small>
+          <small class="hint-text">Código y número comparten la misma secuencia automática.</small>
         </div>
         <div class="full prestamo-auditoria-panel">
           <p class="auditoria-titulo">Trazabilidad</p>
@@ -2572,7 +2616,7 @@ watch(
             :options="formaPagoOpts"
             option-label="label"
             option-value="value"
-            :disabled="editPlanBloqueado"
+            disabled
             fluid
           />
         </div>

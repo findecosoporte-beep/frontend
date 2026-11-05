@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { ACCESS_KEY, REFRESH_KEY, api } from '@/api/client'
+import { ACCESS_KEY, REFRESH_KEY, api, refreshAccessToken } from '@/api/client'
 import type { MeProfile } from '@/types/api'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -45,6 +45,30 @@ export const useAuthStore = defineStore('auth', () => {
     clearTokens()
   }
 
+  /** Al abrir la app: renueva JWT vencido antes de llamar a /dashboard/, /prestamos/, etc. */
+  async function ensureSession(): Promise<boolean> {
+    if (!accessToken.value && !refreshToken.value) {
+      return false
+    }
+    if (refreshToken.value) {
+      const access = await refreshAccessToken()
+      if (!access) {
+        clearTokens()
+        return false
+      }
+      accessToken.value = access
+    }
+    if (!profile.value) {
+      try {
+        await fetchProfile()
+      } catch {
+        clearTokens()
+        return false
+      }
+    }
+    return true
+  }
+
   return {
     accessToken,
     refreshToken,
@@ -53,5 +77,6 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     fetchProfile,
+    ensureSession,
   }
 })

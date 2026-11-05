@@ -127,6 +127,7 @@ export interface Cartera {
 
 export interface Prestamo {
   id_prestamo: number
+  codigo_prestamo: string
   numero_prestamo: string
   sucursal: string | null
   id_zona?: number | null
@@ -330,6 +331,7 @@ export interface HistorialPagosCobrosResponse {
   fecha_fin: string
   generado_en?: string
   cartera_etiqueta: string
+  cobrador_etiqueta?: string
   filas: HistorialPagosCobrosFila[]
   resumen: {
     registros: number

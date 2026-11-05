@@ -29,6 +29,28 @@ export function registerAuthFailureHandler(fn: () => void) {
   authFailureHandler = fn
 }
 
+/** Renueva el access token con el refresh guardado (sin pasar por interceptores). */
+export async function refreshAccessToken(): Promise<string | null> {
+  const refresh = localStorage.getItem(REFRESH_KEY)
+  if (!refresh) return null
+
+  try {
+    const { data } = await axios.post<{ access: string; refresh?: string }>(
+      `${baseURL}/token/refresh/`,
+      { refresh },
+    )
+    localStorage.setItem(ACCESS_KEY, data.access)
+    if (data.refresh) {
+      localStorage.setItem(REFRESH_KEY, data.refresh)
+    }
+    return data.access
+  } catch {
+    localStorage.removeItem(ACCESS_KEY)
+    localStorage.removeItem(REFRESH_KEY)
+    return null
+  }
+}
+
 function isAuthPath(url: string) {
   return url.includes('/token/') || url.endsWith('/token') || url.includes('/token/refresh')
 }

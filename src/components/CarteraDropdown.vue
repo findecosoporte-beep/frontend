@@ -73,13 +73,14 @@ watch(
 </script>
 
 <template>
-  <button
-    type="button"
-    class="cartera-dropdown-trigger"
-    :class="{ 'cartera-dropdown-trigger--disabled': disabled || !canOpen }"
-    :disabled="disabled || !canOpen"
-    @click="openList"
-  >
+  <div class="cartera-dropdown">
+    <button
+      type="button"
+      class="cartera-dropdown-trigger"
+      :class="{ 'cartera-dropdown-trigger--disabled': disabled || !canOpen }"
+      :disabled="disabled || !canOpen"
+      @click="openList"
+    >
     <span class="cartera-dropdown-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 7h18M3 12h18M3 17h18" />
@@ -127,9 +128,15 @@ watch(
       </div>
     </div>
   </Teleport>
+  </div>
 </template>
 
 <style scoped>
+.cartera-dropdown {
+  width: 100%;
+  min-width: 0;
+}
+
 .cartera-dropdown-trigger {
   display: flex;
   align-items: center;
