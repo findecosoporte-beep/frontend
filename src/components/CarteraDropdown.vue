@@ -73,6 +73,36 @@ function textoResumen(idCartera: number, campo: keyof CarteraResumenListado): st
   return formatNumeroHoja(r.cuotaCobrar) || '0.00'
 }
 
+const resumenGeneral = computed(() => {
+  let carterasConDatos = 0
+  let clientes = 0
+  let saldoPendiente = 0
+  let cuotaCobrar = 0
+  for (const c of props.carteras) {
+    const r = props.resumenPorCartera[c.id_cartera]
+    if (!r) continue
+    carterasConDatos += 1
+    clientes += r.clientes
+    saldoPendiente += r.saldoPendiente
+    cuotaCobrar += r.cuotaCobrar
+  }
+  return {
+    completo: carterasConDatos === props.carteras.length,
+    vacio: carterasConDatos === 0,
+    clientes,
+    saldoPendiente,
+    cuotaCobrar,
+  }
+})
+
+function textoResumenGeneral(campo: keyof CarteraResumenListado): string {
+  const g = resumenGeneral.value
+  if (g.vacio) return props.resumenLoading ? '…' : '—'
+  if (campo === 'clientes') return String(g.clientes)
+  if (campo === 'saldoPendiente') return formatNumeroHoja(g.saldoPendiente) || '0.00'
+  return formatNumeroHoja(g.cuotaCobrar) || '0.00'
+}
+
 function openList() {
   if (!props.disabled && canOpen.value) open.value = true
 }
@@ -131,6 +161,29 @@ watch(
             ×
           </button>
         </header>
+
+        <section v-if="carteras.length" class="cartera-resumen-general" aria-label="Resumen de todas las carteras">
+          <p class="cartera-resumen-general-title">
+            Total en campo · {{ carteras.length }} carteras
+            <span v-if="!resumenGeneral.completo && !resumenGeneral.vacio" class="cartera-resumen-general-parcial">
+              (calculando…)
+            </span>
+          </p>
+          <div class="cartera-resumen-general-grid">
+            <div class="cartera-resumen-general-item">
+              <span class="cartera-resumen-general-label">Clientes</span>
+              <span class="cartera-resumen-general-value">{{ textoResumenGeneral('clientes') }}</span>
+            </div>
+            <div class="cartera-resumen-general-item">
+              <span class="cartera-resumen-general-label">Saldo pendiente por Cuotas </span>
+              <span class="cartera-resumen-general-value">L {{ textoResumenGeneral('saldoPendiente') }}</span>
+            </div>
+            <div class="cartera-resumen-general-item cartera-resumen-general-item--destacado">
+              <span class="cartera-resumen-general-label">Cuotas a recoger</span>
+              <span class="cartera-resumen-general-value">L {{ textoResumenGeneral('cuotaCobrar') }}</span>
+            </div>
+          </div>
+        </section>
 
         <ul v-if="carteras.length" class="cartera-dropdown-list">
           <li v-for="item in carteras" :key="item.id_cartera">
@@ -292,6 +345,73 @@ watch(
   padding: 0.15rem 0.35rem;
 }
 
+.cartera-resumen-general {
+  flex-shrink: 0;
+  padding: 0.85rem 1rem;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.cartera-resumen-general-title {
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.cartera-resumen-general-parcial {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #64748b;
+}
+
+.cartera-resumen-general-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.cartera-resumen-general-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.6rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+}
+
+.cartera-resumen-general-item--destacado {
+  background: #0f172a;
+  border-color: #0f172a;
+}
+
+.cartera-resumen-general-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.cartera-resumen-general-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.cartera-resumen-general-item--destacado .cartera-resumen-general-label {
+  color: rgb(255 255 255 / 75%);
+}
+
+.cartera-resumen-general-item--destacado .cartera-resumen-general-value {
+  color: #fff;
+}
+
 .cartera-dropdown-list {
   list-style: none;
   margin: 0;
@@ -403,6 +523,10 @@ watch(
 }
 
 @media (max-width: 480px) {
+  .cartera-resumen-general-grid {
+    grid-template-columns: 1fr;
+  }
+
   .cartera-dropdown-option {
     flex-wrap: wrap;
   }
