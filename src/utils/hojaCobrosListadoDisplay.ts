@@ -80,17 +80,20 @@ export function valorCuotaPendienteHoja(fila: ReporteIntegracionFila): string {
 }
 
 export function hojaListadoTotalesDesdeFilas(filas: ReporteIntegracionFila[]): {
+  monto: number
   cuota: number
   saldoPendiente: number
 } {
+  let montoPrestado = 0
   let cuota = 0
   let saldoPendiente = 0
   for (const f of filas) {
+    montoPrestado += Number.parseFloat(String(f.monto ?? f.saldo_inicial ?? '')) || 0
     const monto = f.cuota_siguiente_monto || f.cuota
     cuota += Number.parseFloat(String(monto ?? '')) || 0
     saldoPendiente += Number.parseFloat(String(f.saldo_actual ?? '')) || 0
   }
-  return { cuota, saldoPendiente }
+  return { monto: montoPrestado, cuota, saldoPendiente }
 }
 
 /** Celdas de una fila en el mismo orden que la tabla HTML de CobrosView. */
@@ -111,12 +114,12 @@ export function filaListadoHojaCobrosCeldas(fila: ReporteIntegracionFila, index:
 }
 
 export function filaTotalesListadoHojaCobros(filas: ReporteIntegracionFila[]): string[] {
-  const { cuota, saldoPendiente } = hojaListadoTotalesDesdeFilas(filas)
+  const { monto, cuota, saldoPendiente } = hojaListadoTotalesDesdeFilas(filas)
   return [
     '',
     '',
     'TOTALES:',
-    '',
+    formatNumeroHoja(monto),
     '',
     '',
     formatNumeroHoja(saldoPendiente),
