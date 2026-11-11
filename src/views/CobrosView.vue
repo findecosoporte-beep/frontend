@@ -1301,7 +1301,9 @@ onUnmounted(() => {
                 <tfoot>
                   <tr class="hoja-findeco-totales">
                     <td colspan="3" class="totales-label">TOTALES:</td>
-                    <td></td>
+                    <td class="col-monto-prestamo">
+                      {{ formatNumeroHoja(hojaListadoTotales.monto) }}
+                    </td>
                     <td></td>
                     <td></td>
                     <td class="col-saldo-pendiente">
