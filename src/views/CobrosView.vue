@@ -1295,7 +1295,9 @@ onUnmounted(() => {
                     <td class="col-fecha-inicial">{{ valorFechaInicialHoja(fila) }}</td>
                     <td class="col-fecha-final">{{ valorFechaFinalHoja(fila) }}</td>
                     <td class="col-cuota-pendiente">{{ valorCuotaPendienteHoja(fila) }}</td>
-                    <td class="col-espacio"></td>
+                    <td class="col-espacio">
+                      <span class="col-espacio-linea" aria-hidden="true"></span>
+                    </td>
                   </tr>
                 </tbody>
                 <tfoot>
@@ -1795,69 +1797,50 @@ onUnmounted(() => {
 
 .hoja-preview-table {
   display: table;
-  width: 100%;
+  width: auto;
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.hoja-preview-table-simple th,
+.hoja-preview-table-simple td {
+  white-space: nowrap;
+  width: auto;
+  min-width: 0;
 }
 
 .hoja-preview-table-simple .col-prestamo {
-  width: 12%;
-  text-align: center;
-}
-
-.hoja-preview-table-simple .col-nombre {
-  width: 18%;
   text-align: left;
 }
 
-.hoja-preview-table-simple .col-monto-prestamo {
-  width: 10%;
-  text-align: right;
+.hoja-preview-table-simple .col-nombre {
+  text-align: left;
 }
 
-.hoja-preview-table-simple .col-plazo {
-  width: 8%;
-  text-align: center;
-  font-size: 0.7rem;
-  line-height: 1.15;
-  white-space: normal;
-}
-
-.hoja-preview-table-simple .col-saldo-inicial {
-  width: 10%;
-  text-align: right;
-  font-size: 0.7rem;
-  line-height: 1.15;
-  white-space: normal;
-}
-
+.hoja-preview-table-simple .col-monto-prestamo,
+.hoja-preview-table-simple .col-saldo-inicial,
 .hoja-preview-table-simple .col-saldo-pendiente {
-  width: 10%;
   text-align: right;
-  font-size: 0.7rem;
-  line-height: 1.15;
-  white-space: normal;
 }
 
+.hoja-preview-table-simple .col-plazo,
 .hoja-preview-table-simple .col-fecha-inicial,
-.hoja-preview-table-simple .col-fecha-final {
-  width: 8%;
-  text-align: center;
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-
+.hoja-preview-table-simple .col-fecha-final,
 .hoja-preview-table-simple .col-cuota-pendiente {
-  width: 10%;
   text-align: center;
-  font-size: 0.82rem;
-  white-space: nowrap;
 }
 
 .hoja-preview-table-simple .col-espacio {
-  width: 11%;
-  min-width: 6.75rem;
-  min-height: 2rem;
-  padding-left: 0.55rem;
-  padding-right: 0.55rem;
+  width: 7.5rem;
+  min-width: 7.5rem;
+  vertical-align: bottom;
+}
+
+.hoja-preview-table-simple .col-espacio-linea {
+  display: block;
+  width: 100%;
+  min-height: 1.1rem;
+  border-bottom: 1px solid #111827;
 }
 
 .hoja-findeco-cartera,
@@ -1939,8 +1922,8 @@ onUnmounted(() => {
 }
 
 .hoja-findeco-table {
-  width: 100%;
-  min-width: 56rem;
+  width: auto;
+  margin: 0 auto;
   border-collapse: collapse;
   font-family: Arial, Helvetica, sans-serif;
   font-size: 0.82rem;
@@ -1949,13 +1932,13 @@ onUnmounted(() => {
 
 .hoja-findeco-table th,
 .hoja-findeco-table td {
-  border: 1px solid #111827;
-  padding: 0.35rem 0.45rem;
+  border: none;
+  padding: 0.15rem 0.3rem;
   vertical-align: middle;
 }
 
 .hoja-findeco-table thead th {
-  background: #f3f4f6;
+  background: transparent;
   font-weight: 700;
   text-align: center;
   font-size: 0.74rem;
@@ -2004,14 +1987,22 @@ onUnmounted(() => {
 }
 
 .col-espacio {
-  width: 10.5rem;
-  min-width: 6.75rem;
-  min-height: 2rem;
+  width: 7.5rem;
+  min-width: 7.5rem;
+  min-height: 1.4rem;
+  vertical-align: bottom;
+}
+
+.col-espacio-linea {
+  display: block;
+  width: 100%;
+  min-height: 1.1rem;
+  border-bottom: 1px solid #111827;
 }
 
 .hoja-findeco-totales td {
   font-weight: 700;
-  background: #fafafa;
+  background: transparent;
 }
 
 .totales-label {
