@@ -20,6 +20,7 @@ import {
   formatFechaHojaLegible,
   formatNumeroHoja,
   hojaListadoTotalesDesdeFilas,
+  valorCuotaFijaSemanalHoja,
   valorCuotaPendienteHoja,
   valorFechaFinalHoja,
   valorFechaInicialHoja,
@@ -264,15 +265,46 @@ function descargarBlob(blob: Blob, nombre: string) {
   URL.revokeObjectURL(url)
 }
 
-async function descargarHojaCobrosPdf() {
+function imprimirBlobPdf(blob: Blob) {
+  const pdfUrl = URL.createObjectURL(blob)
+  const pdfWindow = window.open(pdfUrl, '_blank')
+  if (pdfWindow) {
+    setTimeout(() => {
+      pdfWindow.focus()
+      pdfWindow.print()
+    }, 700)
+  } else {
+    toast.add({
+      severity: 'warn',
+      summary: 'Impresión',
+      detail: 'Permita ventanas emergentes para imprimir la hoja.',
+      life: 5000,
+    })
+  }
+  setTimeout(() => URL.revokeObjectURL(pdfUrl), 15000)
+}
+
+async function registrarImpresionHojaCobros() {
+  try {
+    const { data } = await api.post<{ numero_impresion: number }>(
+      '/prestamos/registrar-impresion-hoja-cobros/',
+      { total_registros: hojaCobrosFilas.value.length },
+    )
+    hojaNumeroImpresion.value = Number(data.numero_impresion)
+  } catch {
+    // La bitácora de impresión es secundaria.
+  }
+}
+
+async function generarBlobHojaCobrosPdf(): Promise<Blob | null> {
   if (!carteraHojaRequerida()) {
     toast.add({
       severity: 'warn',
       summary: 'Hoja de cobros',
-      detail: 'Seleccione una cartera para descargar el listado.',
+      detail: 'Seleccione una cartera para generar el listado.',
       life: 4000,
     })
-    return
+    return null
   }
   if (!hojaCobrosFilas.value.length) {
     toast.add({
@@ -281,7 +313,7 @@ async function descargarHojaCobrosPdf() {
       detail: 'No hay filas en el listado para exportar.',
       life: 4000,
     })
-    return
+    return null
   }
   const printRoot = hojaPreviewPrintRef.value
   if (!printRoot) {
@@ -291,25 +323,23 @@ async function descargarHojaCobrosPdf() {
       detail: 'No se encontró la vista previa del listado.',
       life: 4000,
     })
-    return
+    return null
   }
+  return generarHojaCobrosListadoPdfDesdeElemento(printRoot)
+}
+
+async function descargarHojaCobrosPdf() {
   hojaDescargandoPdf.value = true
   try {
+    const blob = await generarBlobHojaCobrosPdf()
+    if (!blob) return
     const fechaReporte = hojaCobrosFechaReporte.value || getTodayISO()
-    const blob = await generarHojaCobrosListadoPdfDesdeElemento(printRoot)
-    const nombre = nombreArchivoHojaCobrosListado(String(hojaCobrosTituloCartera.value || 'cartera'), fechaReporte)
+    const nombre = nombreArchivoHojaCobrosListado(
+      String(hojaCobrosTituloCartera.value || 'cartera'),
+      fechaReporte,
+    )
     descargarBlob(blob, nombre)
-
-    try {
-      const { data } = await api.post<{ numero_impresion: number }>(
-        '/prestamos/registrar-impresion-hoja-cobros/',
-        { total_registros: hojaCobrosFilas.value.length },
-      )
-      hojaNumeroImpresion.value = Number(data.numero_impresion)
-    } catch {
-      // El PDF ya se descargó; la bitácora de impresión es secundaria.
-    }
-
+    await registrarImpresionHojaCobros()
     toast.add({
       severity: 'success',
       summary: 'PDF descargado',
@@ -324,6 +354,34 @@ async function descargarHojaCobrosPdf() {
       severity: 'error',
       summary: 'Hoja de cobros',
       detail: getApiErrorMessage(e, 'No se pudo generar el PDF.'),
+      life: 6000,
+    })
+  } finally {
+    hojaDescargandoPdf.value = false
+  }
+}
+
+async function imprimirHojaCobrosPdf() {
+  hojaDescargandoPdf.value = true
+  try {
+    const blob = await generarBlobHojaCobrosPdf()
+    if (!blob) return
+    imprimirBlobPdf(blob)
+    await registrarImpresionHojaCobros()
+    toast.add({
+      severity: 'success',
+      summary: 'Listo para imprimir',
+      detail:
+        hojaNumeroImpresion.value != null
+          ? `Se abrió el PDF con jsPDF. Impresión N.º ${hojaNumeroImpresion.value}.`
+          : 'Se abrió el PDF generado con jsPDF para imprimir.',
+      life: 4000,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Hoja de cobros',
+      detail: getApiErrorMessage(e, 'No se pudo generar el PDF para imprimir.'),
       life: 6000,
     })
   } finally {
@@ -1135,9 +1193,18 @@ onUnmounted(() => {
           title="PDF con los mismos datos que la tabla visible (columna por columna)"
           @click="() => void descargarHojaCobrosPdf()"
         />
-        <span v-if="hojaCobrosTotal && !busquedaActiva" class="hoja-findeco-contador no-print">
-          {{ hojaCobrosTotal }} cliente{{ hojaCobrosTotal === 1 ? '' : 's' }}
-        </span>
+        <Button
+          label="Imprimir"
+          icon="pi pi-print"
+          type="button"
+          severity="secondary"
+          outlined
+          class="no-print"
+          :loading="hojaDescargandoPdf"
+          :disabled="!carteraHojaRequerida() || hojaDescargandoPdf || !hojaCobrosFilas.length"
+          title="Genera el PDF con jsPDF y abre el diálogo de impresión"
+          @click="() => void imprimirHojaCobrosPdf()"
+        />
       </div>
 
       <div class="hoja-buscar-cliente no-print">
@@ -1270,6 +1337,7 @@ onUnmounted(() => {
                     <th class="col-saldo-pendiente">SALDO PENDIENTE</th>
                     <th class="col-fecha-inicial">FECHA INICIAL</th>
                     <th class="col-fecha-final">FECHA FINAL</th>
+                    <th class="col-cuota-fija">CUOTA FIJA</th>
                     <th class="col-cuota-pendiente">CUOTA PENDIENTE</th>
                     <th class="col-espacio">NOTA DE COBRO</th>
                   </tr>
@@ -1294,6 +1362,7 @@ onUnmounted(() => {
                     <td class="col-saldo-pendiente">{{ valorSaldoPendienteHoja(fila) }}</td>
                     <td class="col-fecha-inicial">{{ valorFechaInicialHoja(fila) }}</td>
                     <td class="col-fecha-final">{{ valorFechaFinalHoja(fila) }}</td>
+                    <td class="col-cuota-fija">{{ valorCuotaFijaSemanalHoja(fila) }}</td>
                     <td class="col-cuota-pendiente">{{ valorCuotaPendienteHoja(fila) }}</td>
                     <td class="col-espacio">
                       <span class="col-espacio-linea" aria-hidden="true"></span>
@@ -1313,6 +1382,9 @@ onUnmounted(() => {
                     </td>
                     <td></td>
                     <td></td>
+                    <td class="col-cuota-fija">
+                      {{ formatNumeroHoja(hojaListadoTotales.cuotaFija) }}
+                    </td>
                     <td class="col-cuota-pendiente">
                       {{ formatNumeroHoja(hojaListadoTotales.cuota) }}
                     </td>
@@ -1828,6 +1900,10 @@ onUnmounted(() => {
 .hoja-preview-table-simple .col-fecha-final,
 .hoja-preview-table-simple .col-cuota-pendiente {
   text-align: center;
+}
+
+.hoja-preview-table-simple .col-cuota-fija {
+  text-align: right;
 }
 
 .hoja-preview-table-simple .col-espacio {
