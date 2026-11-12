@@ -123,9 +123,7 @@ export interface ResumenWhatsAppEstadoCuenta {
   cartera: string
   pendientes: CuotaResumenWhatsApp[]
   totalPendientes: number
-  /** Compromiso total del plan (capital + intereses). */
-  saldoTotal: string
-  /** Suma de abonos registrados. */
+  cuotasPagadas: number
   totalAbonado: string
 }
 
@@ -138,8 +136,8 @@ export function mensajeEstadoCuentaFindeco(params: ResumenWhatsAppEstadoCuenta):
   ]
   if (params.numeroPrestamo) lineas.push(`Préstamo: ${params.numeroPrestamo}`)
   if (params.cartera) lineas.push(`Cartera: ${params.cartera}`)
-  lineas.push('', `Saldo total: ${params.saldoTotal}`)
-  lineas.push(`Abonos: ${params.totalAbonado}`)
+  lineas.push('', `Cuotas pagadas: ${params.cuotasPagadas}`)
+  lineas.push(`Total abonado: ${params.totalAbonado}`)
   if (params.totalPendientes > 0) {
     lineas.push('', `Cuotas pendientes: ${params.totalPendientes}`)
     for (const c of params.pendientes) {
