@@ -1271,7 +1271,7 @@ onUnmounted(() => {
                     <th class="col-fecha-inicial">FECHA INICIAL</th>
                     <th class="col-fecha-final">FECHA FINAL</th>
                     <th class="col-cuota-pendiente">CUOTA PENDIENTE</th>
-                    <th class="col-espacio">ESPACIO</th>
+                    <th class="col-espacio">NOTA DE COBRO</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1831,8 +1831,8 @@ onUnmounted(() => {
 }
 
 .hoja-preview-table-simple .col-espacio {
-  width: 9rem;
-  min-width: 9rem;
+  width: 10rem;
+  min-width: 10rem;
   vertical-align: bottom;
 }
 
@@ -1987,8 +1987,8 @@ onUnmounted(() => {
 }
 
 .col-espacio {
-  width: 9rem;
-  min-width: 9rem;
+  width: 10rem;
+  min-width: 10rem;
   min-height: 1.5rem;
   vertical-align: bottom;
 }
