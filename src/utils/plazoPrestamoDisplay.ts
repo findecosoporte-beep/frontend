@@ -13,5 +13,5 @@ export function plazoMesesDesdeReporte(input: {
       ? Math.round((plazo / SEMANAS_POR_MES_PLAZO) * 100) / 100
       : plazo
   if (Number.isInteger(meses)) return String(meses)
-  return meses.toFixed(2)
+  return String(Number(meses.toFixed(2)))
 }

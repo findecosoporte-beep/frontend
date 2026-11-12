@@ -1831,16 +1831,16 @@ onUnmounted(() => {
 }
 
 .hoja-preview-table-simple .col-espacio {
-  width: 7.5rem;
-  min-width: 7.5rem;
+  width: 9rem;
+  min-width: 9rem;
   vertical-align: bottom;
 }
 
 .hoja-preview-table-simple .col-espacio-linea {
   display: block;
   width: 100%;
-  min-height: 1.1rem;
-  border-bottom: 1px solid #111827;
+  min-height: 1.25rem;
+  border-bottom: 1.5px solid #111827;
 }
 
 .hoja-findeco-cartera,
@@ -1926,14 +1926,14 @@ onUnmounted(() => {
   margin: 0 auto;
   border-collapse: collapse;
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 0.82rem;
+  font-size: 0.95rem;
   color: #111827;
 }
 
 .hoja-findeco-table th,
 .hoja-findeco-table td {
   border: none;
-  padding: 0.15rem 0.3rem;
+  padding: 0.22rem 0.38rem;
   vertical-align: middle;
 }
 
@@ -1941,7 +1941,7 @@ onUnmounted(() => {
   background: transparent;
   font-weight: 700;
   text-align: center;
-  font-size: 0.74rem;
+  font-size: 0.84rem;
   line-height: 1.2;
 }
 
@@ -1987,17 +1987,17 @@ onUnmounted(() => {
 }
 
 .col-espacio {
-  width: 7.5rem;
-  min-width: 7.5rem;
-  min-height: 1.4rem;
+  width: 9rem;
+  min-width: 9rem;
+  min-height: 1.5rem;
   vertical-align: bottom;
 }
 
 .col-espacio-linea {
   display: block;
   width: 100%;
-  min-height: 1.1rem;
-  border-bottom: 1px solid #111827;
+  min-height: 1.25rem;
+  border-bottom: 1.5px solid #111827;
 }
 
 .hoja-findeco-totales td {

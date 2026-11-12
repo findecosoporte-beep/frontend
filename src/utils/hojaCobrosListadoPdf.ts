@@ -1,11 +1,11 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 
-const PDF_MARGIN_MM = 5
-/** Ancho mínimo de la tabla en pantalla (56rem) → captura completa sin scroll horizontal. */
-const TABLA_MIN_WIDTH_PX = 896
-/** Filas de clientes por página (hoja carta vertical con logo + encabezado). */
-const FILAS_POR_PAGINA_PDF = 34
+const PDF_MARGIN_MM = 6
+/** Filas de clientes por página (hoja carta vertical, letra más grande). */
+const FILAS_POR_PAGINA_PDF = 28
+/** Escala de captura: más alta = impresión más nítida. */
+const CAPTURA_SCALE = 3
 
 function waitForImages(root: HTMLElement): Promise<void> {
   const imgs = Array.from(root.querySelectorAll('img'))
@@ -24,21 +24,44 @@ function waitForImages(root: HTMLElement): Promise<void> {
   ).then(() => undefined)
 }
 
-function prepararEstilosCaptura(clone: HTMLElement, captureWidth: number) {
+function filaTieneCliente(tr: HTMLElement): boolean {
+  const prestamo = (tr.querySelector('.col-prestamo')?.textContent || '').trim()
+  const nombre = (tr.querySelector('.col-nombre')?.textContent || '').trim()
+  return Boolean(prestamo || nombre)
+}
+
+function prepararEstilosCaptura(clone: HTMLElement) {
   clone.classList.add('hoja-exportando-pdf')
   clone.style.boxShadow = 'none'
-  clone.style.width = `${captureWidth}px`
-  clone.style.minWidth = `${TABLA_MIN_WIDTH_PX}px`
+  clone.style.border = 'none'
+  clone.style.borderRadius = '0'
+  clone.style.padding = '0'
+  clone.style.background = '#ffffff'
+  clone.style.width = 'max-content'
+  clone.style.minWidth = '0'
+  clone.style.maxWidth = 'none'
 
   const scroll = clone.querySelector('.hoja-preview-scroll') as HTMLElement | null
   if (scroll) {
     scroll.style.overflow = 'visible'
     scroll.style.maxHeight = 'none'
+    scroll.style.border = 'none'
   }
+
+  clone.querySelectorAll('.no-print').forEach((el) => {
+    ;(el as HTMLElement).style.display = 'none'
+  })
 
   clone.querySelectorAll('.hoja-listado-row--clickable').forEach((row) => {
     row.classList.remove('hoja-listado-row--clickable')
   })
+
+  const tbody = clone.querySelector('tbody')
+  if (tbody) {
+    Array.from(tbody.querySelectorAll('tr')).forEach((tr) => {
+      if (!filaTieneCliente(tr as HTMLElement)) tr.remove()
+    })
+  }
 }
 
 function montarHostCaptura(clone: HTMLElement): { host: HTMLElement; cleanup: () => void } {
@@ -57,7 +80,7 @@ async function capturarElemento(root: HTMLElement): Promise<HTMLCanvasElement> {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
   })
   return html2canvas(root, {
-    scale: 2,
+    scale: CAPTURA_SCALE,
     backgroundColor: '#ffffff',
     useCORS: true,
     logging: false,
@@ -107,12 +130,11 @@ function agregarCanvasAPdf(doc: jsPDF, canvas: HTMLCanvasElement, nuevaPagina: b
 
 function clonarFragmentoHoja(
   root: HTMLElement,
-  captureWidth: number,
   filaIndices: number[] | null,
   incluirTotales: boolean,
 ): HTMLElement {
   const clone = root.cloneNode(true) as HTMLElement
-  prepararEstilosCaptura(clone, captureWidth)
+  prepararEstilosCaptura(clone)
 
   const tbody = clone.querySelector('tbody')
   if (tbody && filaIndices) {
@@ -154,8 +176,9 @@ export async function generarHojaCobrosListadoPdfDesdeElemento(root: HTMLElement
     scrollHost.style.maxHeight = 'none'
   }
 
-  const captureWidth = Math.max(root.scrollWidth, root.offsetWidth, TABLA_MIN_WIDTH_PX)
-  const filas = root.querySelectorAll('tbody tr')
+  const filas = Array.from(root.querySelectorAll('tbody tr')).filter((tr) =>
+    filaTieneCliente(tr as HTMLElement),
+  )
   const totalFilas = filas.length
 
   try {
@@ -163,7 +186,7 @@ export async function generarHojaCobrosListadoPdfDesdeElemento(root: HTMLElement
     let primeraPagina = true
 
     if (totalFilas <= FILAS_POR_PAGINA_PDF) {
-      const clone = clonarFragmentoHoja(root, captureWidth, null, true)
+      const clone = clonarFragmentoHoja(root, null, true)
       const { cleanup } = montarHostCaptura(clone)
       try {
         const canvas = await capturarElemento(clone)
@@ -177,7 +200,7 @@ export async function generarHojaCobrosListadoPdfDesdeElemento(root: HTMLElement
     const chunks = partirIndices(totalFilas, FILAS_POR_PAGINA_PDF)
     for (let c = 0; c < chunks.length; c += 1) {
       const esUltima = c === chunks.length - 1
-      const fragment = clonarFragmentoHoja(root, captureWidth, chunks[c]!, esUltima)
+      const fragment = clonarFragmentoHoja(root, chunks[c]!, esUltima)
       const { cleanup } = montarHostCaptura(fragment)
       try {
         const canvas = await capturarElemento(fragment)
