@@ -4,8 +4,8 @@ import { jsPDF } from 'jspdf'
 const PDF_MARGIN_MM = 5
 /** Ancho mínimo de la tabla en pantalla (56rem) → captura completa sin scroll horizontal. */
 const TABLA_MIN_WIDTH_PX = 896
-/** Filas de clientes por página (hoja carta horizontal con logo + encabezado). */
-const FILAS_POR_PAGINA_PDF = 22
+/** Filas de clientes por página (hoja carta vertical con logo + encabezado). */
+const FILAS_POR_PAGINA_PDF = 34
 
 function waitForImages(root: HTMLElement): Promise<void> {
   const imgs = Array.from(root.querySelectorAll('img'))
@@ -34,12 +34,6 @@ function prepararEstilosCaptura(clone: HTMLElement, captureWidth: number) {
   if (scroll) {
     scroll.style.overflow = 'visible'
     scroll.style.maxHeight = 'none'
-  }
-
-  const table = clone.querySelector('.hoja-findeco-table') as HTMLElement | null
-  if (table) {
-    table.style.minWidth = `${TABLA_MIN_WIDTH_PX}px`
-    table.style.width = '100%'
   }
 
   clone.querySelectorAll('.hoja-listado-row--clickable').forEach((row) => {
@@ -165,7 +159,7 @@ export async function generarHojaCobrosListadoPdfDesdeElemento(root: HTMLElement
   const totalFilas = filas.length
 
   try {
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' })
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' })
     let primeraPagina = true
 
     if (totalFilas <= FILAS_POR_PAGINA_PDF) {
