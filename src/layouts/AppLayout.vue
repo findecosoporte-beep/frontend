@@ -263,13 +263,18 @@ async function onLogout() {
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
   width: 16rem;
+  height: 100vh;
   flex-shrink: 0;
   border-right: 1px solid #dbe2f0;
   padding: 0.9rem 0.65rem;
   background: #edf1fa;
   color: #37456b;
   overflow: hidden;
+  z-index: 30;
 }
 
 .brand {
@@ -395,12 +400,16 @@ async function onLogout() {
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--p-content-border-color, rgba(255, 255, 255, 0.08));
+  background: #ffffff;
 }
 
 .user-block {
